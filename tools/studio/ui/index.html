@@ -89,22 +89,61 @@
 </header>
 
 <main id="main" tabindex="-1">
-  <section class="hero" aria-labelledby="hero-title">
-    <div class="hero-copy">
-      <p class="eyebrow">Sovereign, not super · pure seeded Omega · zero telemetry</p>
-      <h1 id="hero-title">Forge your own <span class="grad">4-strand Helix</span> model chain</h1>
-      <p class="lede">Pick verified OpenWALDO data, design a frozen-trunk Merkle chain of specialist strands, forge it on your own hardware, then play with it and check every SHA-256 yourself.</p>
-      <ol class="flow-mini" aria-label="Studio flow">
-        <li><span class="n c1">1</span>Discover</li>
-        <li><span class="n c2">2</span>Design</li>
-        <li><span class="n c3">3</span>Forge</li>
-        <li><span class="n c4">4</span>Play &amp; Export</li>
-      </ol>
+  <section class="glass quick-train" aria-labelledby="qt-title">
+    <div class="qt-head">
+      <div>
+        <p class="eyebrow">1-Click Quick Train · Sovereign Intelligence™ · Zero Telemetry</p>
+        <h1 id="qt-title">Pick what you want to train — <span class="grad">Helix handles the rest</span></h1>
+        <p class="lede qt-lede">Click any goal below (or paste your own folder) to automatically verify data, train a model on your hardware, and open it in the Playground. Want full control over datasets, layers, or distillation? Use the advanced tabs below anytime.</p>
+      </div>
+      <details class="qt-guide">
+        <summary>How does this work? (Plain-English Guide)</summary>
+        <div class="qt-guide-body">
+          <p><b>1. Pick a goal:</b> Choose one of the 4 cards below, or paste a path to your own text/code folder and click <b>Train My Data</b>.</p>
+          <p><b>2. Automatic training:</b> Helix builds a small frozen <b>Base Trunk</b>, then grows modular <b>DNA Strands</b> (<code>.sp</code> patches) on top without overwriting the base — every file is SHA-256 verified.</p>
+          <p><b>3. Try it immediately:</b> When training finishes, click <b>Try Your Model →</b> to chat/generate with standard text, <b>OMG-Masked</b> (100% compiler-valid code), or <b>Arboris-Guided</b> (fast associative bypass).</p>
+          <p class="muted small"><b>Glossary:</b> <b>Base Trunk</b> = frozen foundation model · <b>DNA Strand (<code>.sp</code>)</b> = portable skill patch · <b><code>spclip</code></b> = blends strands at runtime · <b>OMG-Masked</b> = grammar wall guaranteeing valid <code>.om</code> code · <b>Arboris-Guided</b> = skips neural layers on known patterns.</p>
+        </div>
+      </details>
     </div>
-    <div class="hero-helix" aria-hidden="true">
-      <svg id="helix-svg" viewBox="0 0 640 200" preserveAspectRatio="xMidYMid meet"></svg>
+
+    <div class="qt-grid" role="group" aria-label="One-click training goals">
+      <button type="button" class="qt-card" data-qt="starter">
+        <span class="qt-tag c1">Recommended First Run · ~10s</span>
+        <b>All-in-One Starter Helix</b>
+        <small>Trains a Base Trunk + Code &amp; Reasoning DNA strands on the built-in repo corpus.</small>
+        <span class="qt-cta">Train Now →</span>
+      </button>
+      <button type="button" class="qt-card" data-qt="code">
+        <span class="qt-tag c2">Pure-Omega Code</span>
+        <b>Code &amp; OMG Specialist</b>
+        <small>Trains on pure <code>.om</code> engine sources; ready for OMG-Masked &amp; Arboris-Guided code generation.</small>
+        <span class="qt-cta">Train Now →</span>
+      </button>
+      <button type="button" class="qt-card" data-qt="docs">
+        <span class="qt-tag c3">Technical Docs</span>
+        <b>Docs &amp; Architecture Assistant</b>
+        <small>Trains on architecture specs &amp; READMEs with a frozen trunk and specialist Q&amp;A strand.</small>
+        <span class="qt-cta">Train Now →</span>
+      </button>
+      <button type="button" class="qt-card" data-qt="qwen3">
+        <span class="qt-tag c4">HF + GGUF Export</span>
+        <b>Qwen3 Universal Model</b>
+        <small>Trains a Qwen3-architecture model (<code>OLLMCK04</code>) and exports Safetensors + GGUF v3.</small>
+        <span class="qt-cta">Train Now →</span>
+      </button>
+    </div>
+
+    <div class="qt-custom">
+      <label for="qt-local-path" class="small muted"><b>Or train on your own files:</b></label>
+      <input id="qt-local-path" type="text" placeholder="/path/to/your/notes-or-code-folder" autocomplete="off" spellcheck="false">
+      <button type="button" class="btn btn-forge" id="btn-qt-local"><svg class="ic"><use href="#i-bolt"/></svg>Train My Data</button>
     </div>
   </section>
+
+  <div class="adv-bar">
+    <span class="adv-label">Advanced Workspace <small class="muted">— customize datasets, architecture, telemetry, playground, or distillation</small></span>
+  </div>
 
   <div class="tabs" role="tablist" aria-label="Studio stages" focusgroup="tablist nomemory">
     <button type="button" role="tab" id="tab-discover" aria-controls="panel-discover" aria-selected="true" data-accent="c1"><span class="tab-n">1</span>Discover Data</button>
@@ -253,6 +292,14 @@
       <span class="muted small" id="locks-status"></span>
     </div>
 
+    <div class="glass done-banner" id="forge-done-banner" hidden>
+      <div>
+        <b>Training complete!</b>
+        <span class="muted small" id="forge-done-summary">Your model and verified DNA packs are ready to test.</span>
+      </div>
+      <button type="button" class="btn btn-forge" id="btn-goto-play"><svg class="ic"><use href="#i-play"/></svg>Try Your Model in Playground →</button>
+    </div>
+
     <ol class="stepper" id="stepper" aria-label="Forge pipeline"></ol>
 
     <div class="kpis">
@@ -286,7 +333,8 @@
   <section class="panel" role="tabpanel" id="panel-play" aria-labelledby="tab-play" tabindex="0" hidden>
     <div class="grid-play">
       <div class="glass block">
-        <h2>Strand mixer</h2>
+        <h2>Playground &amp; decode engine</h2>
+        <p class="muted small" style="margin:0 0 10px">Pick a trained model and click <b>Generate</b>. <b>Standard</b> generates normal text; <b>OMG-Masked</b> guarantees 100% compiler-valid <code>.om</code> code; <b>Arboris-Guided</b> skips neural layers on known patterns for speed.</p>
         <div class="field">
           <label for="play-run">Forged chain</label>
           <select id="play-run"><option value="">— forge a chain first —</option></select>

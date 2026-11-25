@@ -241,6 +241,7 @@
   /* ---------------- Animated 4-Strand DNA Header ---------------- */
   function initHelixAnimation() {
     const svg = $("helix-svg");
+    if (!svg) return;
     const W = 640, H = 200;
     const layers = [];
     for (let i = 0; i < 4; i++) {
@@ -999,6 +1000,17 @@
     renderDag("forge-dag", run.dag, run.stage, run);
     renderArtifacts(run.artifacts || []);
     renderMixerForRun(run);
+    const doneBanner = $("forge-done-banner");
+    if (doneBanner) {
+      if (run.status === "done") {
+        doneBanner.hidden = false;
+        const lossTxt = typeof last.loss === "number" ? `final loss ${last.loss.toFixed(4)} nats` : "ready";
+        const pkTxt = packs ? ` · ${packs} verified .sp pack${packs === 1 ? "" : "s"}` : "";
+        $("forge-done-summary").textContent = `${run.run_id} finished (${lossTxt}${pkTxt}). Click to test or export it.`;
+      } else {
+        doneBanner.hidden = true;
+      }
+    }
   }
 
   function subscribeEvents(runId) {
@@ -1091,6 +1103,58 @@
     if (chosen && (!state.activeRun || state.activeRun.run_id !== chosen)) {
       await loadRunDetail(chosen);
     }
+  }
+
+  async function quickTrain(goal, customPath = "") {
+    const baseDs = customPath
+      ? { kind: "local", value: customPath, label: customPath }
+      : (goal === "code"
+        ? { kind: "preset", value: "omega-native", label: "omega-native (.om sources)" }
+        : goal === "docs"
+          ? { kind: "preset", value: "omega-docs", label: "omega-docs (architecture docs)" }
+          : { kind: "preset", value: "omega-starter", label: "omega-starter (repo corpus)" });
+
+    state.spec.base_dataset = baseDs;
+    state.spec.use_gpu = false;
+    if (goal === "qwen3") {
+      state.spec.name = "quick-qwen3";
+      state.spec.mode = "universal";
+      state.spec.arch = "qwen3";
+      state.spec.tokenizer = "bpe";
+      state.spec.V = 256; state.spec.T = 16; state.spec.D = 32; state.spec.H = 2; state.spec.H_KV = 2; state.spec.F = 64; state.spec.L = 2; state.spec.B = 2;
+      state.spec.base_steps = 12;
+      state.spec.export_hf = true;
+      state.spec.export_gguf = true;
+    } else {
+      state.spec.name = customPath ? "my-custom-helix" : `quick-${goal}`;
+      state.spec.mode = "dna";
+      state.spec.arch = "custom";
+      state.spec.tokenizer = "bpe";
+      state.spec.V = 256; state.spec.T = 16; state.spec.D = 32; state.spec.H = 2; state.spec.H_KV = 2; state.spec.F = 64; state.spec.L = 2; state.spec.B = 2;
+      state.spec.base_steps = 12;
+      state.spec.export_hf = false;
+      state.spec.export_gguf = false;
+      const strandName = goal === "code" ? "OMG-Code" : goal === "docs" ? "Docs-QA" : "Code";
+      state.spec.strands = [
+        {
+          id: "strand-a",
+          name: strandName,
+          color: STRAND_COLORS[0],
+          add_layers: 1,
+          growth: "growpro",
+          use_fcachem: true,
+          steps: 10,
+          lr_micro: 2000,
+          weight: 500,
+          dataset: { ...baseDs },
+        },
+      ];
+    }
+    syncDesignControlsFromSpec();
+    renderDataSlots();
+    renderStrands();
+    activateTab("tab-forge", false);
+    await startForge();
   }
 
   async function startForge() {
@@ -1441,6 +1505,32 @@
     });
     $("btn-sample").addEventListener("click", runSample);
     if ($("btn-verify-locks")) $("btn-verify-locks").addEventListener("click", runVerifyLocks);
+    document.querySelectorAll(".qt-card[data-qt]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        sfx.milestone();
+        quickTrain(btn.dataset.qt);
+      });
+    });
+    if ($("btn-qt-local")) {
+      $("btn-qt-local").addEventListener("click", () => {
+        const p = ($("qt-local-path").value || "").trim();
+        if (!p) {
+          toast("Paste a local folder or file path first.", "err");
+          sfx.err();
+          return;
+        }
+        sfx.milestone();
+        quickTrain("custom", p);
+      });
+    }
+    if ($("btn-goto-play")) {
+      $("btn-goto-play").addEventListener("click", async () => {
+        sfx.tap();
+        await refreshRuns(true);
+        if (state.activeRunId) $("play-run").value = state.activeRunId;
+        activateTab("tab-play", true);
+      });
+    }
 
     /* ---------------- Tab 5: Distillation Pipeline Network ---------------- */
     $("btn-distill-probe").addEventListener("click", probeDistillTeachers);
