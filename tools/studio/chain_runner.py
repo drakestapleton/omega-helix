@@ -512,16 +512,16 @@ def estimate_chain(raw_spec: dict[str, Any]) -> dict[str, Any]:
             errors.append(f"DNA/Hybrid pure-Omega ollm engine requires 256 <= V <= 4096 (got V={V})")
         if T > 256:
             errors.append(f"DNA/Hybrid pure-Omega ollm engine requires T <= 256 (got T={T})")
-        if D > 384:
-            errors.append(f"DNA/Hybrid pure-Omega ollm engine requires D <= 384 (got D={D})")
-        if H > 16:
-            errors.append(f"DNA/Hybrid pure-Omega ollm engine requires H <= 16 (got H={H})")
-        if F > 1536:
-            errors.append(f"DNA/Hybrid pure-Omega ollm engine requires F <= 1536 (got F={F})")
+        if D > 1024:
+            errors.append(f"DNA/Hybrid pure-Omega ollm engine requires D <= 1024 (got D={D})")
+        if H > 32:
+            errors.append(f"DNA/Hybrid pure-Omega ollm engine requires H <= 32 (got H={H})")
+        if F > 4096:
+            errors.append(f"DNA/Hybrid pure-Omega ollm engine requires F <= 4096 (got F={F})")
         if B > 64:
             errors.append(f"DNA/Hybrid pure-Omega ollm engine requires B <= 64 (got B={B})")
-        if max_total_L > 16:
-            errors.append(f"DNA/Hybrid max layer depth (base L + added strand layers) <= 16 (got {max_total_L})")
+        if max_total_L > 24:
+            errors.append(f"DNA/Hybrid max layer depth (base L + added strand layers) <= 24 (got {max_total_L})")
         if NP > 1 and strands:
             errors.append("Looped core (NP > 1) cannot be combined with DNA grow/spext strands (engine exit 17)")
         if spec["tokenizer"] == "u32":
@@ -710,11 +710,13 @@ def estimate_chain(raw_spec: dict[str, Any]) -> dict[str, Any]:
         for s in strands:
             pl = strand_depth.get(s["parent_id"], L) if s["parent_id"] else L
             nl = pl + s["add_layers"]
+            s_ev_cmd = min(s["steps"], spec["save_every"]) if spec.get("save_every", 0) > 0 else max(1, s["steps"] // 3)
             cmds.append(f"ollm {s['growth']} parent.ck {s['id']}.ck {nl} {s['steps']} {s['lr_micro']}")
             if s["use_fcachem"] and not spec["use_gpu"]:
-                cmds.append(f"ollm fcache parent.ck {s['id']}.tok W {s['id']}.hc && ollm trainfc {s['id']}.ck {s['id']}.hc {s['steps']} {max(1, s['steps']//3)} {pl}")
+                cmds.append(f"ollm fcache parent.ck {s['id']}.tok W {s['id']}.hc && ollm trainfc {s['id']}.ck {s['id']}.hc {s['steps']} {s_ev_cmd} {pl}")
             else:
-                cmds.append(f"ollm {'gtrainf' if spec['use_gpu'] else 'trainf'} {s['id']}.ck {s['id']}.tok {s['steps']} {max(1, s['steps']//3)} {pl}")
+                strand_gpu_op = "gtrainb" if spec.get("gpu_precision", "bf16") == "bf16" else "gtrainf"
+                cmds.append(f"ollm {strand_gpu_op if spec['use_gpu'] else 'trainf'} {s['id']}.ck {s['id']}.tok {s['steps']} {s_ev_cmd} {pl}")
             cmds.append(f"ollm spext parent.ck {s['id']}.ck {s['id']}.sp")
         if spec["mode"] == "hybrid" or spec["export_hf"] or spec["export_gguf"]:
             cmds.append("ollm-interchange upgrade merged.ck model_v4.ck")
@@ -1372,7 +1374,10 @@ class ChainManager:
                 f"strand:{sid}",
             )
 
-            s_every = max(1, min(s["steps"], max(1, s["steps"] // 3)))
+            if spec.get("save_every", 0) > 0:
+                s_every = max(1, min(s["steps"], int(spec["save_every"])))
+            else:
+                s_every = max(1, min(s["steps"], max(1, s["steps"] // 3)))
             st_t0 = time.time()
 
             def _on_strand_line(line: str, _sid: str = sid, _off: int = global_step_offset, _t0: float = st_t0) -> None:
@@ -1413,9 +1418,10 @@ class ChainManager:
                         pass
 
             if use_gb10:
+                strand_gpu_op = "gtrainb" if spec.get("gpu_precision", "bf16") == "bf16" else "gtrainf"
                 self._run_stream(
                     run,
-                    [str(ollm_bin), "gtrainf", str(strand_ck), str(s_train), str(s["steps"]), str(s_every), str(parent_L)],
+                    [str(ollm_bin), strand_gpu_op, str(strand_ck), str(s_train), str(s["steps"]), str(s_every), str(parent_L)],
                     f"strand:{sid}",
                     line_cb=_on_strand_line,
                 )

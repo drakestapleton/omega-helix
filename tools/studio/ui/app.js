@@ -49,6 +49,21 @@
       },
     },
     {
+      id: "dna-120m",
+      label: "120M DNA (GB10 BF16)",
+      patch: {
+        name: "helix-120m-dna",
+        mode: "dna",
+        arch: "custom",
+        tokenizer: "bpe",
+        V: 4096, T: 256, D: 768, H: 12, H_KV: 12, F: 3072, L: 16, B: 16,
+        LP: 0, LC: 0, NP: 1, adapt_thresh_micro: 0, msg_gain_micro: 0,
+        use_gpu: true, gpu_precision: "bf16", save_every: 250,
+        base_steps: 2000, lr_micro: 1500, spclip_mode: 1,
+        export_hf: false, export_gguf: false,
+      },
+    },
+    {
       id: "loop-adapt",
       label: "Looped Core + Adaptive Exit",
       patch: {
@@ -722,7 +737,7 @@
       grid.append(
         mkNum("Added layers", "add_layers", 1, 8, 1),
         mkSel("Growth", "growth", [["growpro", "growpro (projector)"], ["grow", "grow (zero-init)"]]),
-        mkNum("Steps", "steps", 1, 200, 1),
+        mkNum("Steps", "steps", 1, 50000, 1),
         mkNum("LR (micro)", "lr_micro", 100, 20000, 100),
         mkSel("Frozen cache", "use_fcachem", [["true", "fcachem + trainfc"], ["false", "trainf direct"]]),
         mkNum("Prior weight", "weight", 0, 1000, 50)
@@ -1127,10 +1142,11 @@
           : { kind: "preset", value: "omega-starter", label: "omega-starter (repo corpus)" });
 
     const scaleCfgs = {
-      nano:     { tok: "byte", V: 256,  T: 16,  D: 32,  H: 2,  H_KV: 2, F: 64,   L: 2,  B: 2,  steps: 12,    ssteps: 10,  save: 0,    gpu: false },
-      medium:   { tok: "bpe",  V: 4096, T: 128, D: 192, H: 6,  H_KV: 6, F: 768,  L: 4,  B: 32, steps: 1000,  ssteps: 200, save: 100,  gpu: hasGpu },
-      full15m:  { tok: "bpe",  V: 4096, T: 256, D: 384, H: 12, H_KV: 12, F: 1536, L: 8,  B: 64, steps: 10000, ssteps: 500, save: 500,  gpu: hasGpu },
-      large30m: { tok: "bpe",  V: 4096, T: 256, D: 384, H: 12, H_KV: 12, F: 1536, L: 16, B: 64, steps: 30000, ssteps: 1000, save: 1000, gpu: hasGpu },
+      nano:     { tok: "byte", V: 256,  T: 16,  D: 32,  H: 2,  H_KV: 2,  F: 64,   L: 2,  B: 2,  steps: 12,    ssteps: 10,   save: 0,    gpu: false,  lr: 3000 },
+      medium:   { tok: "bpe",  V: 4096, T: 128, D: 192, H: 6,  H_KV: 6,  F: 768,  L: 4,  B: 32, steps: 1000,  ssteps: 200,  save: 100,  gpu: hasGpu, lr: 3000 },
+      full15m:  { tok: "bpe",  V: 4096, T: 256, D: 384, H: 12, H_KV: 12, F: 1536, L: 8,  B: 64, steps: 10000, ssteps: 500,  save: 500,  gpu: hasGpu, lr: 2000 },
+      large30m: { tok: "bpe",  V: 4096, T: 256, D: 384, H: 12, H_KV: 12, F: 1536, L: 16, B: 64, steps: 30000, ssteps: 1000, save: 1000, gpu: hasGpu, lr: 2000 },
+      dna120m:  { tok: "bpe",  V: 4096, T: 256, D: 768, H: 12, H_KV: 12, F: 3072, L: 16, B: 16, steps: 2000,  ssteps: 500,  save: 250,  gpu: hasGpu, lr: 1500 },
     };
     const sc = scaleCfgs[scale] || scaleCfgs.nano;
 
@@ -1142,6 +1158,7 @@
     state.spec.V = sc.V; state.spec.T = sc.T; state.spec.D = sc.D; state.spec.H = sc.H; state.spec.H_KV = sc.H_KV;
     state.spec.F = sc.F; state.spec.L = sc.L; state.spec.B = sc.B;
     state.spec.base_steps = sc.steps;
+    state.spec.lr_micro = sc.lr;
 
     if (goal === "qwen3") {
       state.spec.name = `qwen3-${scale}`;
@@ -1156,21 +1173,56 @@
       state.spec.arch = "custom";
       state.spec.export_hf = false;
       state.spec.export_gguf = false;
-      const strandName = goal === "code" ? "OMG-Code" : goal === "docs" ? "Docs-QA" : "Code";
-      state.spec.strands = [
-        {
-          id: "strand-a",
-          name: strandName,
-          color: STRAND_COLORS[0],
-          add_layers: scale === "nano" ? 1 : 2,
-          growth: "growpro",
-          use_fcachem: true,
-          steps: sc.ssteps,
-          lr_micro: 2000,
-          weight: 500,
-          dataset: { ...baseDs },
-        },
-      ];
+      if (goal === "code" || scale === "dna120m") {
+        const codeDs = customPath
+          ? { ...baseDs }
+          : { kind: "preset", value: "omega-native", label: "omega-native (.om sources)" };
+        const agenticDs = customPath
+          ? { ...baseDs }
+          : { kind: "preset", value: "omega-docs", label: "omega-docs (coordination & architecture)" };
+        state.spec.strands = [
+          {
+            id: "strand-code",
+            name: "Code",
+            color: STRAND_COLORS[0],
+            add_layers: 1,
+            growth: "growpro",
+            use_fcachem: !sc.gpu,
+            steps: sc.ssteps,
+            lr_micro: 2000,
+            weight: 500,
+            dataset: codeDs,
+          },
+          {
+            id: "strand-agentic",
+            name: "Agentic Coordination",
+            color: STRAND_COLORS[1],
+            add_layers: 1,
+            growth: "growpro",
+            use_fcachem: !sc.gpu,
+            steps: sc.ssteps,
+            lr_micro: 2000,
+            weight: 500,
+            dataset: agenticDs,
+          },
+        ];
+      } else {
+        const strandName = goal === "docs" ? "Docs-QA" : "Code";
+        state.spec.strands = [
+          {
+            id: "strand-a",
+            name: strandName,
+            color: STRAND_COLORS[0],
+            add_layers: scale === "nano" ? 1 : 2,
+            growth: "growpro",
+            use_fcachem: !sc.gpu,
+            steps: sc.ssteps,
+            lr_micro: 2000,
+            weight: 500,
+            dataset: { ...baseDs },
+          },
+        ];
+      }
     }
     syncDesignControlsFromSpec();
     renderDataSlots();
