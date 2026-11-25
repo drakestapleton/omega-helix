@@ -1,0 +1,976 @@
+note SPDX-License-Identifier: Apache-2.0
+note native/univ/umodel.om: Universal Transformer analytic forward, analytic backward, KV-cached
+note incremental decode. Clean un-nested dynamic-global loads/stores for omc register budget.
+
+fn ua_put i ulong v f64 to void
+put ua i v
+end
+
+fn ua_add i ulong v f64 to void
+x = get ua i
+put ua i add x v
+end
+
+fn ug_add i ulong v f64 to void
+x = get ugd i
+put ugd i add x v
+end
+
+fn umm_axpy_p yb ulong wb ulong xv f64 n ulong to void
+for j ulong n
+pv = get up add wb j
+ua_add add yb j mul xv pv
+end
+end
+
+fn umm_axpy_g dwb ulong dyb ulong xv f64 n ulong to void
+for j ulong n
+dv = get ua add dyb j
+ug_add add dwb j mul xv dv
+end
+end
+
+fn ua_zero off ulong n ulong to void
+for q ulong ucn n
+i = mul q UCH
+ie = uce q n
+while lt i ie bound 500001
+put ua add off i 0.0
+i = add i 1
+end
+end
+end
+
+fn ug_zero to void
+p = get ug 10
+for q ulong ucn p
+i = mul q UCH
+ie = uce q p
+while lt i ie bound 500001
+put ugd i 0.0
+i = add i 1
+end
+end
+end
+
+fn umm_fwd x0 ulong w0 ulong y0 ulong m ulong k ulong n ulong to void
+ua_zero y0 mul m n
+umm_add x0 w0 y0 m k n
+end
+
+fn umm_add x0 ulong w0 ulong y0 ulong m ulong k ulong n ulong to void
+for i ulong m
+xb = add x0 mul i k
+yb = add y0 mul i n
+for p ulong k
+xv = get ua add xb p
+umm_axpy_p yb add w0 mul p n xv n
+end
+end
+end
+
+fn umm_dx_row dyb ulong w0 ulong dxb ulong k ulong n ulong to void
+for p ulong k
+wb = add w0 mul p n
+acc = 0.0f64
+for j ulong n
+dv = get ua add dyb j
+wv = get up add wb j
+acc = add acc mul dv wv
+end
+ua_add add dxb p acc
+end
+end
+
+fn umm_dx dy0 ulong w0 ulong dx0 ulong m ulong k ulong n ulong to void
+for i ulong m
+umm_dx_row add dy0 mul i n w0 add dx0 mul i k k n
+end
+end
+
+fn umm_dw x0 ulong dy0 ulong dw0 ulong m ulong k ulong n ulong to void
+for i ulong m
+xb = add x0 mul i k
+dyb = add dy0 mul i n
+for p ulong k
+xv = get ua add xb p
+umm_axpy_g add dw0 mul p n dyb xv n
+end
+end
+end
+
+fn urms_vec x0 ulong g0 ulong y0 ulong n ulong to f64
+s2 = 0.0f64
+for j ulong n
+v = get ua add x0 j
+s2 = add s2 mul v v
+end
+s = fsqrt add div s2 f64 n bitcast f64 get ug 14
+inv = div 1.0 s
+for j2 ulong n
+xv = get ua add x0 j2
+gv = get up add g0 j2
+put ua add y0 j2 mul mul xv inv gv
+end
+ret s
+end
+
+fn urms_dot x0 ulong g0 ulong dy0 ulong n ulong to f64
+dot = 0.0f64
+for j ulong n
+dy = get ua add dy0 j
+gv = get up add g0 j
+xv = get ua add x0 j
+dot = add dot mul mul dy gv xv
+end
+ret dot
+end
+
+global urms_c f64 2
+
+fn urms_bwd_j xj ulong gj ulong dyj ulong dxj ulong to void
+xv = get ua xj
+dy = get ua dyj
+ug_add gj mul dy mul xv get urms_c 0
+gv = get up gj
+t1 = sub mul dy gv mul xv get urms_c 1
+ua_add dxj mul t1 get urms_c 0
+end
+
+fn urms_vec_b x0 ulong g0 ulong dy0 ulong dx0 ulong s f64 n ulong to void
+dot = urms_dot x0 g0 dy0 n
+put urms_c 0 div 1.0 s
+put urms_c 1 div dot mul f64 n mul s s
+for j ulong n
+urms_bwd_j add x0 j add g0 j add dy0 j add dx0 j
+end
+end
+
+fn urms_fwd x0 ulong g0 ulong y0 ulong s0 ulong ct ulong d ulong to void
+for t ulong ct
+s = urms_vec add x0 mul t d g0 add y0 mul t d d
+put ua add s0 t s
+end
+end
+
+fn urms_bwd x0 ulong g0 ulong dy0 ulong dx0 ulong s0 ulong ct ulong to void
+d = get ug 2
+for t ulong ct
+s = get ua add s0 t
+urms_vec_b add x0 mul t d g0 add dy0 mul t d add dx0 mul t d s d
+end
+end
+
+fn urope_pair p0 ulong p1 ulong c f64 s f64 inv bool to void
+x0 = get ua p0
+x1 = get ua p1
+if inv
+ua_put p0 add mul x0 c mul x1 s
+ua_put p1 sub mul x1 c mul x0 s
+else
+ua_put p0 sub mul x0 c mul x1 s
+ua_put p1 add mul x0 s mul x1 c
+end
+end
+
+fn urope_vec v0 ulong pos ulong inv bool to void
+he = div get ug 8 2
+rb = mul pos he
+for i ulong he
+c = get ucos add rb i
+s = get usin add rb i
+urope_pair add v0 i add v0 add i he c s inv
+end
+end
+
+fn uqkn_fwd_one src ulong dst ulong g0 ulong sslot ulong to void
+e = get ug 8
+for j ulong e
+v = get ua add src j
+put ua add dst j v
+end
+put ua sslot urms_vec dst g0 src e
+end
+
+fn uqkn_dot pre ulong g0 ulong e ulong to f64
+dot = 0.0f64
+for j ulong e
+dv = get utmp j
+gv = get up add g0 j
+xv = get ua add pre j
+dot = add dot mul mul dv gv xv
+end
+ret dot
+end
+
+fn uqkn_bwd_one pre ulong g0 ulong d0 ulong s f64 to void
+e = get ug 8
+for j ulong e
+v = get ua add d0 j
+put utmp j v
+put ua add d0 j 0.0
+end
+dot = uqkn_dot pre g0 e
+put urms_c 0 div 1.0 s
+put urms_c 1 div dot mul f64 e mul s s
+for j3 ulong e
+xv = get ua add pre j3
+dv = get utmp j3
+ug_add add g0 j3 mul dv mul xv get urms_c 0
+gv = get up add g0 j3
+t1 = sub mul dv gv mul xv get urms_c 1
+ua_put add d0 j3 mul t1 get urms_c 0
+end
+end
+
+fn uqkn_fwd_row l ulong pl ulong t ulong to void
+e = get ug 8
+for hi ulong get ug 3
+off = add mul t get ug 2 mul hi e
+s0 = add ua_qns l add mul t get ug 3 hi
+uqkn_fwd_one add ua_q l off add ua_qpre l off up_qn pl s0
+end
+for kh ulong get ug 4
+off2 = add mul t get ug 9 mul kh e
+s1 = add ua_kns l add mul t get ug 4 kh
+uqkn_fwd_one add ua_k l off2 add ua_kpre l off2 up_kn pl s1
+end
+end
+
+fn urope_row l ulong t ulong qbase ulong kbase ulong inv bool to void
+e = get ug 8
+for hi ulong get ug 3
+urope_vec add qbase add mul t get ug 2 mul hi e t inv
+end
+for kh ulong get ug 4
+urope_vec add kbase add mul t get ug 9 mul kh e t inv
+end
+end
+
+fn uqk_post_fwd l ulong pl ulong ct ulong to void
+if eq get ug 31 1
+for t ulong ct
+uqkn_fwd_row l pl t
+end
+end
+if eq get ug 28 1
+qb = ua_q l
+kb = ua_k l
+for t2 ulong ct
+urope_row l t2 qb kb false
+end
+end
+end
+
+fn uqkn_bwd_q l ulong pl ulong t ulong hi ulong to void
+off = add mul t get ug 2 mul hi get ug 8
+si = add ua_qns l add mul t get ug 3 hi
+sv = get ua si
+pre = add ua_qpre l off
+g0 = up_qn pl
+uqkn_bwd_one pre g0 add get ug 45 off sv
+end
+
+fn uqkn_bwd_k l ulong pl ulong t ulong kh ulong to void
+off = add mul t get ug 9 mul kh get ug 8
+si = add ua_kns l add mul t get ug 4 kh
+sv = get ua si
+pre = add ua_kpre l off
+g0 = up_kn pl
+uqkn_bwd_one pre g0 add get ug 46 off sv
+end
+
+fn uqkn_bwd_row l ulong pl ulong t ulong to void
+for hi ulong get ug 3
+uqkn_bwd_q l pl t hi
+end
+for kh ulong get ug 4
+uqkn_bwd_k l pl t kh
+end
+end
+
+fn uqk_post_bwd l ulong pl ulong ct ulong to void
+if eq get ug 28 1
+for t ulong ct
+urope_row l t get ug 45 get ug 46 true
+end
+end
+if eq get ug 31 1
+for t2 ulong ct
+uqkn_bwd_row l pl t2
+end
+end
+end
+
+fn udot_ua a ulong b ulong n ulong to f64
+s = 0.0f64
+for c ulong n
+av = get ua add a c
+bv = get ua add b c
+s = add s mul av bv
+end
+ret s
+end
+
+fn uaxpy_ua dst ulong src ulong w f64 n ulong to void
+for c ulong n
+sv = get ua add src c
+ua_add add dst c mul w sv
+end
+end
+
+fn uattn_scores l ulong hi ulong kh ulong t ulong to f64
+e = get ug 8
+qb = add ua_q l add mul t get ug 2 mul hi e
+k0 = add ua_k l mul kh e
+mx = -1.0e300f64
+for j ulong add t 1
+kb = add k0 mul j get ug 9
+sc = div udot_ua qb kb e fsqrt f64 e
+put utmp j sc
+if gt sc mx
+mx = sc
+end
+end
+ret mx
+end
+
+fn up_off l ulong hi ulong t ulong to ulong
+tc = get ug 1
+ret add add mul l get ug 38 mul hi mul tc tc mul t tc
+end
+
+fn uattn_soft pb ulong t ulong mx f64 to f64
+sm = 0.0f64
+for j ulong add t 1
+w = ufexp sub get utmp j mx
+put upa add pb j w
+sm = add sm w
+end
+ret div 1.0 sm
+end
+
+fn uattn_accum pb ulong ob ulong v0 ulong t ulong invs f64 to void
+e = get ug 8
+ua_zero ob e
+for j ulong add t 1
+p0 = get upa add pb j
+pw = mul p0 invs
+put upa add pb j pw
+uaxpy_ua ob add v0 mul j get ug 9 pw e
+end
+end
+
+fn uattn_pos_fwd l ulong hi ulong kh ulong t ulong to void
+mx = uattn_scores l hi kh t
+pb = up_off l hi t
+invs = uattn_soft pb t mx
+e = get ug 8
+ob = add ua_o l add mul t get ug 2 mul hi e
+v0 = add ua_v l mul kh e
+uattn_accum pb ob v0 t invs
+end
+
+fn uattn_head_fwd l ulong hi ulong ct ulong to void
+kh = div hi div get ug 3 get ug 4
+for t ulong ct
+uattn_pos_fwd l hi kh t
+end
+end
+
+fn uattn_b1_loop pb ulong dob ulong v0 ulong dv0 ulong t ulong to f64
+e = get ug 8
+dotp = 0.0f64
+for j ulong add t 1
+pw = get upa add pb j
+off = mul j get ug 9
+dp = udot_ua dob add v0 off e
+uaxpy_ua add dv0 off dob pw e
+put utmp j dp
+dotp = add dotp mul pw dp
+end
+ret dotp
+end
+
+fn uattn_pos_bwd1 l ulong hi ulong kh ulong t ulong to f64
+e = get ug 8
+dob = add get ug 48 add mul t get ug 2 mul hi e
+pb = up_off l hi t
+v0 = add ua_v l mul kh e
+dv0 = add get ug 47 mul kh e
+ret uattn_b1_loop pb dob v0 dv0 t
+end
+
+global uat_s f64 2
+global uat_p ulong 2
+
+fn uattn_b2_loop qb ulong dqb ulong k0 ulong dk0 ulong t ulong to void
+e = get ug 8
+for j ulong add t 1
+pw = get upa add get uat_p 0 j
+d1 = sub get utmp j get uat_s 0
+ds = mul mul pw d1 get uat_s 1
+off = mul j get ug 9
+uaxpy_ua dqb add k0 off ds e
+uaxpy_ua add dk0 off qb ds e
+end
+end
+
+fn uattn_pos_bwd2 l ulong hi ulong kh ulong t ulong dotp f64 to void
+e = get ug 8
+put uat_s 0 dotp
+put uat_s 1 div 1.0 fsqrt f64 e
+put uat_p 0 up_off l hi t
+qb = add ua_q l add mul t get ug 2 mul hi e
+dqb = add get ug 45 add mul t get ug 2 mul hi e
+k0 = add ua_k l mul kh e
+dk0 = add get ug 46 mul kh e
+uattn_b2_loop qb dqb k0 dk0 t
+end
+
+fn uattn_head_bwd l ulong hi ulong ct ulong to void
+kh = div hi div get ug 3 get ug 4
+for t ulong ct
+dotp = uattn_pos_bwd1 l hi kh t
+uattn_pos_bwd2 l hi kh t dotp
+end
+end
+
+fn uffn_act_fwd l ulong ct ulong to void
+n = mul ct get ug 5
+f1 = ua_f1 l
+f2 = ua_f2 l
+f3 = ua_f3 l
+fl = get ug 12
+if ne and fl 2 0
+for i ulong n
+g = get ua add f1 i
+u = get ua add f2 i
+ua_put add f3 i mul mul g ufsig g u
+end
+ret
+end
+if ne and fl 64 0
+for i2 ulong n
+g2 = get ua add f1 i2
+u2 = get ua add f2 i2
+ua_put add f3 i2 mul ufgelu g2 u2
+end
+ret
+end
+if ne and fl 32 0
+for i3 ulong n
+g3 = get ua add f1 i3
+ua_put add f3 i3 ufgelu g3
+end
+ret
+end
+for i4 ulong n
+v = get ua add f1 i4
+if gt v 0.0
+ua_put add f3 i4 v
+else
+ua_put add f3 i4 0.0
+end
+end
+end
+
+fn uffn_act_bwd_swi f1 ulong f2 ulong n ulong to void
+df1 = get ug 50
+df2 = get ug 51
+for i ulong n
+dy = get ua add df1 i
+g = get ua add f1 i
+u = get ua add f2 i
+sig = ufsig g
+ua_put add df2 i mul dy mul g sig
+ds = mul sig add 1.0 mul g sub 1.0 sig
+ua_put add df1 i mul mul dy u ds
+end
+end
+
+fn uffn_act_bwd_geglu f1 ulong f2 ulong n ulong to void
+df1 = get ug 50
+df2 = get ug 51
+for i ulong n
+dy = get ua add df1 i
+g = get ua add f1 i
+u = get ua add f2 i
+ua_put add df2 i mul dy ufgelu g
+ua_put add df1 i mul mul dy u ufgelu_d g
+end
+end
+
+fn uffn_act_bwd l ulong ct ulong to void
+n = mul ct get ug 5
+f1 = ua_f1 l
+f2 = ua_f2 l
+fl = get ug 12
+if ne and fl 2 0
+uffn_act_bwd_swi f1 f2 n
+ret
+end
+if ne and fl 64 0
+uffn_act_bwd_geglu f1 f2 n
+ret
+end
+df1 = get ug 50
+if ne and fl 32 0
+for i3 ulong n
+dy3 = get ua add df1 i3
+g3 = get ua add f1 i3
+ua_put add df1 i3 mul dy3 ufgelu_d g3
+end
+ret
+end
+for i4 ulong n
+if le get ua add f1 i4 0.0
+ua_put add df1 i4 0.0
+end
+end
+end
+
+fn ua_copy dst ulong src ulong n ulong to void
+for i ulong n
+v = get ua add src i
+put ua add dst i v
+end
+end
+
+fn ulay_fwd l ulong ct ulong to void
+pl = ulp l
+d = get ug 2
+kvd = get ug 9
+f = get ug 5
+urms_fwd ua_hin l up_g1 pl ua_a l ua_s1 l ct d
+umm_fwd ua_a l up_wq pl ua_q l ct d d
+umm_fwd ua_a l up_wk pl ua_k l ct d kvd
+umm_fwd ua_a l up_wv pl ua_v l ct d kvd
+uqk_post_fwd l pl ct
+for hi ulong get ug 3
+uattn_head_fwd l hi ct
+end
+hmid = ua_hmid l
+ua_copy hmid ua_hin l mul ct d
+umm_add ua_o l up_wo pl hmid ct d d
+urms_fwd hmid up_g2 pl ua_bn l ua_s2 l ct d
+umm_fwd ua_bn l up_w1 pl ua_f1 l ct d f
+if eq get ug 29 1
+umm_fwd ua_bn l up_wup pl ua_f2 l ct d f
+end
+uffn_act_fwd l ct
+nxt = get ug 39
+if lt add l 1 get ug 11
+nxt = ua_hin add l 1
+end
+ua_copy nxt hmid mul ct d
+umm_add ua_f3 l up_w2 pl nxt ct f d
+end
+
+fn ulay_bwd_ffn l ulong pl ulong ct ulong to void
+d = get ug 2
+f = get ug 5
+dh = get ug 43
+da = get ug 44
+df1 = get ug 50
+umm_dw ua_f3 l dh up_w2 pl ct f d
+ua_zero df1 mul ct f
+umm_dx dh up_w2 pl df1 ct f d
+uffn_act_bwd l ct
+umm_dw ua_bn l df1 up_w1 pl ct d f
+ua_zero da mul ct d
+umm_dx df1 up_w1 pl da ct d f
+if eq get ug 29 1
+umm_dw ua_bn l get ug 51 up_wup pl ct d f
+umm_dx get ug 51 up_wup pl da ct d f
+end
+urms_bwd ua_hmid l up_g2 pl da dh ua_s2 l ct
+end
+
+fn ulay_bwd l ulong ct ulong to void
+pl = ulp l
+ulay_bwd_ffn l pl ct
+d = get ug 2
+kvd = get ug 9
+dh = get ug 43
+umm_dw ua_o l dh up_wo pl ct d d
+ua_zero get ug 48 mul ct d
+umm_dx dh up_wo pl get ug 48 ct d d
+ua_zero get ug 45 mul ct d
+ua_zero get ug 46 mul ct kvd
+ua_zero get ug 47 mul ct kvd
+for hi ulong get ug 3
+uattn_head_bwd l hi ct
+end
+uqk_post_bwd l pl ct
+umm_dw ua_a l get ug 45 up_wq pl ct d d
+umm_dw ua_a l get ug 46 up_wk pl ct d kvd
+umm_dw ua_a l get ug 47 up_wv pl ct d kvd
+ua_zero get ug 44 mul ct d
+umm_dx get ug 45 up_wq pl get ug 44 ct d d
+umm_dx get ug 46 up_wk pl get ug 44 ct d kvd
+umm_dx get ug 47 up_wv pl get ug 44 ct d kvd
+urms_bwd ua_hin l up_g1 pl get ug 44 dh ua_s1 l ct
+end
+
+fn udot_ap a ulong p ulong n ulong to f64
+s = 0.0f64
+for j ulong n
+av = get ua add a j
+pv = get up add p j
+s = add s mul av pv
+end
+ret s
+end
+
+fn uloss_soft pb ulong v ulong mx f64 to f64
+sm = 0.0f64
+for c ulong v
+lv = get ua add pb c
+w = ufexp sub lv mx
+put ua add pb c w
+sm = add sm w
+end
+invs = div 1.0 sm
+for c2 ulong v
+pv = get ua add pb c2
+put ua add pb c2 mul pv invs
+end
+ret sm
+end
+
+fn uloss_pos b ulong pos ulong to f64
+v = get ug 0
+d = get ug 2
+lmw = ulong 0
+if eq get ug 30 1
+lmw = get ug 36
+end
+zb = add get ug 41 mul pos d
+pb = add get ug 42 mul pos v
+mx = -1.0e300f64
+for c ulong v
+dot = udot_ap zb add lmw mul c d d
+put ua add pb c dot
+if gt dot mx
+mx = dot
+end
+end
+yt = get uby add mul b get ug 1 pos
+ly = get ua add pb yt
+sm = uloss_soft pb v mx
+ret sub uflog sm sub ly mx
+end
+
+fn uemb_fwd_pos tok ulong pos ulong hb ulong to void
+d = get ug 2
+wte_b = mul tok d
+if eq get ug 28 1
+for j ulong d
+v = get up add wte_b j
+put ua add hb j v
+end
+else
+wpe_b = add get ug 32 mul pos d
+for j2 ulong d
+v1 = get up add wte_b j2
+v2 = get up add wpe_b j2
+ua_put add hb j2 add v1 v2
+end
+end
+end
+
+fn useq_fwd_emb b ulong ct ulong to void
+d = get ug 2
+xb = mul b get ug 1
+h0 = ua_hin 0
+for pos ulong ct
+tok = get ubx add xb pos
+uemb_fwd_pos tok pos add h0 mul pos d
+end
+end
+
+fn useq_fwd b ulong want_loss bool to f64
+ct = get ug 24
+useq_fwd_emb b ct
+for l ulong get ug 11
+ulay_fwd l ct
+end
+urms_fwd get ug 39 get ug 35 get ug 41 get ug 40 ct get ug 2
+if not want_loss
+ret 0.0f64
+end
+lsum = 0.0f64
+for pos2 ulong ct
+lsum = add lsum uloss_pos b pos2
+end
+ret div lsum f64 ct
+end
+
+fn ulogit_bwd_row zb ulong wb ulong dzb ulong dl f64 to void
+d = get ug 2
+for j ulong d
+zv = get ua add zb j
+wv = get up add wb j
+ug_add add wb j mul dl zv
+ua_add add dzb j mul dl wv
+end
+end
+
+fn useq_bwd_logits b ulong pos ulong scale f64 to void
+v = get ug 0
+d = get ug 2
+lmw = ulong 0
+if eq get ug 30 1
+lmw = get ug 36
+end
+zb = add get ug 41 mul pos d
+pb = add get ug 42 mul pos v
+dzb = add get ug 49 mul pos d
+yt = get uby add mul b get ug 1 pos
+for c ulong v
+dl = get ua add pb c
+if eq c yt
+dl = sub dl 1.0
+end
+ulogit_bwd_row zb add lmw mul c d dzb mul dl scale
+end
+end
+
+fn uemb_bwd_pos tok ulong pos ulong dhb ulong to void
+d = get ug 2
+wte_b = mul tok d
+if eq get ug 28 1
+for j ulong d
+gv = get ua add dhb j
+ug_add add wte_b j gv
+end
+else
+wpe_b = add get ug 32 mul pos d
+for j2 ulong d
+gv2 = get ua add dhb j2
+ug_add add wte_b j2 gv2
+ug_add add wpe_b j2 gv2
+end
+end
+end
+
+fn useq_bwd_emb b ulong ct ulong to void
+d = get ug 2
+xb = mul b get ug 1
+dh0 = get ug 43
+for pos ulong ct
+tok = get ubx add xb pos
+uemb_bwd_pos tok pos add dh0 mul pos d
+end
+end
+
+fn useq_bwd b ulong scale f64 to void
+ct = get ug 24
+d = get ug 2
+ua_zero get ug 49 mul ct d
+for pos ulong ct
+useq_bwd_logits b pos scale
+end
+ua_zero get ug 43 mul ct d
+urms_bwd get ug 39 get ug 35 get ug 49 get ug 43 get ug 40 ct
+lv = get ug 11
+for r ulong lv
+ulay_bwd sub sub lv 1 r ct
+end
+useq_bwd_emb b ct
+end
+
+fn ugrad to f64
+ug_zero
+bb = get ug 7
+put ug 24 get ug 1
+sc = div 1.0 f64 mul bb get ug 1
+lsum = 0.0f64
+for b ulong bb
+ls = useq_fwd b true
+put ulos b ls
+lsum = add lsum ls
+useq_bwd b sc
+end
+ret div lsum f64 bb
+end
+
+fn ukv_dot_k qb ulong kb ulong e ulong to f64
+s = 0.0f64
+for c ulong e
+qv = get ua add qb c
+kv = get ukvc add kb c
+s = add s mul qv kv
+end
+ret s
+end
+
+fn ukv_axpy_v ob ulong vb ulong pw f64 e ulong to void
+for c ulong e
+vv = get uvvc add vb c
+ua_add add ob c mul pw vv
+end
+end
+
+fn ukv_scores qb ulong kvb ulong kh ulong pos ulong to f64
+e = get ug 8
+kvd = get ug 9
+inv = div 1.0 fsqrt f64 e
+koff = mul kh e
+mx = -1.0e300f64
+for p2 ulong add pos 1
+kb = add add kvb mul p2 kvd koff
+sc = mul ukv_dot_k qb kb e inv
+put utmp p2 sc
+if gt sc mx
+mx = sc
+end
+end
+ret mx
+end
+
+fn ukv_soft pos ulong mx f64 to f64
+sm = 0.0f64
+for p3 ulong add pos 1
+w = ufexp sub get utmp p3 mx
+put utmp p3 w
+sm = add sm w
+end
+ret div 1.0 sm
+end
+
+fn ukv_blend ob ulong kvb ulong kh ulong pos ulong invs f64 to void
+e = get ug 8
+kvd = get ug 9
+koff = mul kh e
+ua_zero ob e
+for p4 ulong add pos 1
+vb = add add kvb mul p4 kvd koff
+pw = mul get utmp p4 invs
+ukv_axpy_v ob vb pw e
+end
+end
+
+fn ukv_attn_head l ulong pos ulong hi ulong to void
+e = get ug 8
+kh = div hi div get ug 3 get ug 4
+qb = add get ug 45 mul hi e
+kvb = mul l mul get ug 1 get ug 9
+mx = ukv_scores qb kvb kh pos
+invs = ukv_soft pos mx
+ob = add get ug 48 mul hi e
+ukv_blend ob kvb kh pos invs
+end
+
+fn ukv_qkn pl ulong to void
+e = get ug 8
+for hi ulong get ug 3
+qs = add get ug 45 mul hi e
+ua_copy get ug 49 qs e
+sq = urms_vec get ug 49 up_qn pl qs e
+end
+for kh ulong get ug 4
+ks = add get ug 46 mul kh e
+ua_copy get ug 49 ks e
+sk = urms_vec get ug 49 up_kn pl ks e
+end
+end
+
+fn ukv_ffn pl ulong to void
+d = get ug 2
+f = get ug 5
+s2 = urms_vec get ug 43 up_g2 pl get ug 44 d
+f1 = get ug 50
+f2 = get ug 51
+umm_fwd get ug 44 up_w1 pl f1 1 d f
+fl = get ug 12
+if eq get ug 29 1
+umm_fwd get ug 44 up_wup pl f2 1 d f
+if ne and fl 2 0
+for i ulong f
+gv = get ua add f1 i
+uv2 = get ua add f2 i
+ua_put add f1 i mul mul gv ufsig gv uv2
+end
+else
+for i2 ulong f
+gv2 = get ua add f1 i2
+uv3 = get ua add f2 i2
+ua_put add f1 i2 mul ufgelu gv2 uv3
+end
+end
+else
+if ne and fl 32 0
+for i3 ulong f
+gv3 = get ua add f1 i3
+ua_put add f1 i3 ufgelu gv3
+end
+else
+for i4 ulong f
+if le get ua add f1 i4 0.0
+ua_put add f1 i4 0.0
+end
+end
+end
+end
+umm_add f1 up_w2 pl get ug 43 1 f d
+end
+
+fn ukv_store l ulong pos ulong to void
+kvd = get ug 9
+kvp = add mul l mul get ug 1 kvd mul pos kvd
+kb = get ug 46
+vb = get ug 47
+for j3 ulong kvd
+kv = get ua add kb j3
+vv = get ua add vb j3
+put ukvc add kvp j3 kv
+put uvvc add kvp j3 vv
+end
+end
+
+fn ukv_layer l ulong pos ulong to void
+pl = ulp l
+d = get ug 2
+kvd = get ug 9
+e = get ug 8
+s1 = urms_vec get ug 43 up_g1 pl get ug 44 d
+umm_fwd get ug 44 up_wq pl get ug 45 1 d d
+umm_fwd get ug 44 up_wk pl get ug 46 1 d kvd
+umm_fwd get ug 44 up_wv pl get ug 47 1 d kvd
+if eq get ug 31 1
+ukv_qkn pl
+end
+if eq get ug 28 1
+for hi2 ulong get ug 3
+urope_vec add get ug 45 mul hi2 e pos false
+end
+for kh2 ulong get ug 4
+urope_vec add get ug 46 mul kh2 e pos false
+end
+end
+ukv_store l pos
+for hi3 ulong get ug 3
+ukv_attn_head l pos hi3
+end
+umm_add get ug 48 up_wo pl get ug 43 1 d d
+ukv_ffn pl
+end
+
+fn ustep_kv pos ulong tok ulong to void
+d = get ug 2
+hin = get ug 43
+uemb_fwd_pos tok pos hin
+for l ulong get ug 11
+ukv_layer l pos
+end
+sf = urms_vec hin get ug 35 get ug 44 d
+lmw = ulong 0
+if eq get ug 30 1
+lmw = get ug 36
+end
+for cv ulong get ug 0
+put utmp cv udot_ap get ug 44 add lmw mul cv d d
+end
+end

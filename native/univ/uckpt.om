@@ -1,0 +1,305 @@
+note SPDX-License-Identifier: Apache-2.0
+note native/univ/uckpt.om: Streaming OLLMCK04 / OLLMGR04 checkpoint & gradient I/O.
+note 208-byte header, FNV-1a 64 integrity, atomic PATH.tmp + fsync + rename, ZERO size cap.
+note Magic LE u64 (Wolfram): OLLMCK04 = 3760588441286102095, OLLMGR04 = 3760596155047365711.
+
+const UCKHDR ulong 208
+const UCKC ulong 65536
+const UMAGIC_CK4 ulong 3760588441286102095
+const UMAGIC_GR4 ulong 3760596155047365711
+
+fn uck_put8 o ulong v ulong to void
+for k ulong 8
+put uck add o k uchar and shr v mul k 8 255
+end
+end
+
+fn uopw_get8 o ulong to ulong
+v = ulong 0
+for k ulong 8
+v = or v shl ulong get uopw add o k mul k 8
+end
+ret v
+end
+
+fn ufnvk h ulong n ulong to ulong
+x = h
+for i ulong n
+x = mul xor x ulong get uck i 1099511628211
+end
+ret x
+end
+
+fn ufnvw h ulong n ulong to ulong
+x = h
+for i ulong n
+x = mul xor x ulong get uopw i 1099511628211
+end
+ret x
+end
+
+fn ucopen_tmp ai ulong to void
+pl = uargp ai
+if gt pl 4000
+exit 2
+end
+for i ulong pl
+put upath i get uarg i
+end
+put upath pl 46
+put upath add pl 1 116
+put upath add pl 2 109
+put upath add pl 3 112
+fd = int fopen upath 0 add pl 4 577 420
+if lt fd 0
+exit 70
+end
+put ucfd 0 fd
+end
+
+fn ucwput pos ulong n ulong to void
+fd = get ucfd 0
+p = ulong 0
+while lt p n bound 999999
+w = pwrite fd uck p sub n p long add pos p
+if le w 0
+exit 70
+end
+p = add p ulong w
+end
+end
+
+fn ucrename pl ulong to void
+put upk 0 2
+put upk 1 0
+put upk 2 uchar and add pl 4 255
+put upk 3 uchar shr add pl 4 8
+for i ulong add pl 4
+put upk add 4 i get upath i
+end
+q = add 8 pl
+put upk q uchar and pl 255
+put upk add q 1 uchar shr pl 8
+for j ulong pl
+put upk add add q 2 j get upath j
+end
+if ne renames upk 0 add add q 2 pl 0 0
+exit 70
+end
+end
+
+fn ucwend ai ulong to void
+fd = get ucfd 0
+if ne fsync fd 0
+exit 70
+end
+if ne fclose fd 0
+exit 70
+end
+ucrename uargp ai
+end
+
+fn uck_enc_chunk k ulong i ulong m ulong to void
+if eq k 0
+for j ulong m
+uck_put8 mul j 8 bitcast ulong get up add i j
+end
+ret
+end
+if eq k 1
+for j ulong m
+uck_put8 mul j 8 bitcast ulong get um add i j
+end
+ret
+end
+if eq k 2
+for j ulong m
+uck_put8 mul j 8 bitcast ulong get uv add i j
+end
+ret
+end
+for j ulong m
+uck_put8 mul j 8 bitcast ulong get ugd add i j
+end
+end
+
+fn uck_dec_chunk k ulong i ulong m ulong to void
+if eq k 0
+for j ulong m
+put up add i j bitcast f64 uopw_get8 mul j 8
+end
+ret
+end
+if eq k 1
+for j ulong m
+put um add i j bitcast f64 uopw_get8 mul j 8
+end
+ret
+end
+for j ulong m
+put uv add i j bitcast f64 uopw_get8 mul j 8
+end
+end
+
+global uck_st ulong 2
+
+fn uck_body_pool k ulong to void
+p = get ug 10
+nc = div add p sub UCKC 1 UCKC
+for q ulong ucn nc
+c = mul q UCH
+ce = uce q nc
+while lt c ce bound 500001
+i = mul c UCKC
+m = sub p i
+if gt m UCKC
+m = UCKC
+end
+uck_enc_chunk k i m
+nb = mul m 8
+put uck_st 0 ufnvk get uck_st 0 nb
+ucwput get uck_st 1 nb
+put uck_st 1 add get uck_st 1 nb
+c = add c 1
+end
+end
+end
+
+fn uck_body ks ulong ke ulong to ulong
+put uck_st 0 14695981039346656037
+put uck_st 1 UCKHDR
+for k ulong sub ke ks
+uck_body_pool add ks k
+end
+ret get uck_st 0
+end
+
+fn uck_head mg ulong st ulong fnv ulong to void
+uck_put8 0 mg
+uck_put8 8 get ug 0
+uck_put8 16 get ug 1
+uck_put8 24 get ug 2
+uck_put8 32 get ug 3
+uck_put8 40 get ug 4
+uck_put8 48 get ug 5
+uck_put8 56 get ug 6
+uck_put8 64 get ug 7
+uck_put8 72 get ug 20
+uck_put8 80 st
+uck_put8 88 get ug 22
+uck_put8 96 get ug 23
+uck_put8 104 get ug 10
+uck_put8 112 get ug 12
+uck_put8 120 get ug 13
+uck_put8 128 get ug 14
+uck_put8 136 get ug 15
+uck_put8 144 get ug 16
+uck_put8 152 get ug 17
+uck_put8 160 get ug 18
+uck_put8 168 get ug 19
+uck_put8 176 0
+uck_put8 184 0
+uck_put8 192 0
+uck_put8 200 fnv
+end
+
+fn uck_save ai ulong to void
+ucopen_tmp ai
+h = uck_body 0 3
+uck_head UMAGIC_CK4 get ug 21 h
+ucwput 0 UCKHDR
+ucwend ai
+end
+
+fn ugr_save ai ulong to void
+ucopen_tmp ai
+h = uck_body 3 4
+uck_head UMAGIC_GR4 get ug 7 h
+ucwput 0 UCKHDR
+ucwend ai
+end
+
+fn uck_load_hdr ai ulong to ulong
+sz = uofsz ai
+if lt sz UCKHDR
+exit 10
+end
+if ne uoprd ai 0 0 UCKHDR UCKHDR
+exit 10
+end
+if ne uopw_get8 0 UMAGIC_CK4
+exit 11
+end
+for i ulong 8
+put ug i uopw_get8 add 8 mul i 8
+end
+put ug 20 uopw_get8 72
+put ug 21 uopw_get8 80
+put ug 22 uopw_get8 88
+put ug 23 uopw_get8 96
+p_file = uopw_get8 104
+put ug 12 uopw_get8 112
+put ug 13 uopw_get8 120
+put ug 14 uopw_get8 128
+put ug 15 uopw_get8 136
+put ug 16 uopw_get8 144
+put ug 17 uopw_get8 152
+put ug 18 uopw_get8 160
+put ug 19 uopw_get8 168
+want_fnv = uopw_get8 200
+if not ugeom
+exit 12
+end
+p = get ug 10
+if ne p p_file
+exit 13
+end
+want_sz = add UCKHDR mul 24 p
+if lt sz want_sz
+exit 10
+end
+if gt sz want_sz
+exit 15
+end
+ret want_fnv
+end
+
+fn uck_load_one ai ulong k ulong i ulong m ulong to void
+nb = mul m 8
+if ne uoprd ai get uck_st 1 0 nb nb
+exit 10
+end
+put uck_st 0 ufnvw get uck_st 0 nb
+uck_dec_chunk k i m
+put uck_st 1 add get uck_st 1 nb
+end
+
+fn uck_load_pool ai ulong k ulong to void
+p = get ug 10
+nc = div add p sub UCKC 1 UCKC
+for q ulong ucn nc
+c = mul q UCH
+ce = uce q nc
+while lt c ce bound 500001
+i = mul c UCKC
+m = sub p i
+if gt m UCKC
+m = UCKC
+end
+uck_load_one ai k i m
+c = add c 1
+end
+end
+end
+
+fn uck_load ai ulong to void
+want_fnv = uck_load_hdr ai
+put uck_st 0 14695981039346656037
+put uck_st 1 UCKHDR
+for k ulong 3
+uck_load_pool ai k
+end
+if ne get uck_st 0 want_fnv
+exit 14
+end
+end

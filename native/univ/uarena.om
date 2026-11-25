@@ -1,0 +1,552 @@
+note SPDX-License-Identifier: Apache-2.0
+note native/univ/uarena.om: Dynamic zero-cap memory arenas, OLLMCK04 geometry, RoPE table builder,
+note and streaming u8/u16/u32 token reader. Works identically on Linux AArch64 and macOS Apple Silicon.
+
+const UCH ulong 500000
+const UOPWCAP ulong 1048576
+
+global up f64 *
+global ugd f64 *
+global um f64 *
+global uv f64 *
+global ua f64 *
+global upa f64 *
+global ucos f64 *
+global usin f64 *
+global ukvc f64 *
+global uvvc f64 *
+global ubx ulong *
+global uby ulong *
+global ulos f64 *
+global utmp f64 *
+global ukv_toks ulong *
+
+global uarg uchar 4100
+global upath uchar 4100
+global upk uchar 8220
+global uck uchar 524288
+global uopw uchar 1048576
+global ucfd int 1
+
+fn ucn n ulong to ulong
+if eq n 0
+ret 0
+end
+ret div add n sub UCH 1 UCH
+end
+
+fn uce q ulong n ulong to ulong
+e = mul add q 1 UCH
+if gt e n
+ret n
+end
+ret e
+end
+
+fn uargp i ulong to ulong
+r = argread i uarg 0 4096
+if or le r 0 gt r 4096
+exit 2
+end
+ret ulong r
+end
+
+fn uargu i ulong to ulong
+n = uargp i
+if gt n 19
+exit 2
+end
+v = ulong 0
+for k ulong n
+c = ulong get uarg k
+if or lt c 48 gt c 57
+exit 2
+end
+v = add mul v 10 sub c 48
+end
+ret v
+end
+
+fn uofsz ai ulong to ulong
+n = uargp ai
+fd = int fopen uarg 0 n 0 0
+if lt fd 0
+exit 70
+end
+sz = fseek fd 0 2
+if lt sz 0
+exit 70
+end
+if ne fclose fd 0
+exit 70
+end
+ret ulong sz
+end
+
+fn uoprd ai ulong pos ulong off ulong n ulong to ulong
+plen = uargp ai
+fd = int fopen uarg 0 plen 0 0
+if lt fd 0
+exit 70
+end
+got = ulong 0
+while lt got n bound 999999
+r = pread fd uopw add off got sub n got long add pos got
+if lt r 0
+c = fclose fd
+exit 70
+end
+if eq r 0
+break
+end
+got = add got ulong r
+end
+if ne fclose fd 0
+exit 70
+end
+ret got
+end
+
+fn ugeom_check to bool
+for i ulong 8
+if eq get ug i 0
+ret false
+end
+end
+if lt get ug 0 2
+ret false
+end
+d = get ug 2
+h = get ug 3
+hkv = get ug 4
+if ne rem d h 0
+ret false
+end
+if or gt hkv h ne rem h hkv 0
+ret false
+end
+e = div d h
+put ug 8 e
+put ug 9 mul hkv e
+fl = get ug 12
+if and ne and fl 2 0 ne and fl 64 0
+ret false
+end
+if and ne and fl 66 0 ne and fl 32 0
+ret false
+end
+if and ne and fl 1 0 ne rem e 2 0
+ret false
+end
+put ug 28 0
+put ug 29 0
+put ug 30 0
+put ug 31 0
+if ne and fl 1 0
+put ug 28 1
+end
+if ne and fl 66 0
+put ug 29 1
+end
+if ne and fl 4 0
+put ug 30 1
+end
+if ne and fl 8 0
+put ug 31 1
+end
+ret true
+end
+
+fn ugeom_params to bool
+ll = get ug 6
+np = get ug 19
+if gt np 1
+lc = get ug 18
+if or eq lc 0 gt add get ug 17 lc ll
+ret false
+end
+put ug 11 add ll mul lc sub np 1
+else
+put ug 11 ll
+end
+d = get ug 2
+kvd = get ug 9
+f = get ug 5
+wpe = mul get ug 0 d
+put ug 32 wpe
+lay0 = wpe
+if eq get ug 28 0
+lay0 = add lay0 mul get ug 1 d
+end
+put ug 33 lay0
+o = add add d mul d d mul 2 mul d kvd
+o = add o mul d d
+put ug 54 o
+if eq get ug 31 1
+o = add o get ug 8
+put ug 55 o
+o = add o get ug 8
+else
+put ug 55 o
+end
+put ug 56 o
+o = add o d
+put ug 57 o
+o = add o mul d f
+put ug 58 o
+if eq get ug 29 1
+o = add o mul d f
+end
+put ug 59 o
+o = add o mul f d
+put ug 34 o
+gf = add lay0 mul ll o
+put ug 35 gf
+lmh = add gf d
+put ug 36 lmh
+if eq get ug 30 1
+put ug 10 add lmh mul get ug 0 d
+else
+put ug 10 lmh
+end
+put ug 24 get ug 1
+tw = ulong 1
+if gt get ug 0 256
+tw = 2
+end
+if gt get ug 0 65535
+tw = 4
+end
+put ug 25 tw
+ret true
+end
+
+fn ugeom_acts to void
+t = get ug 1
+td = mul t get ug 2
+tkv = mul t get ug 9
+tf = mul t get ug 5
+a = add add mul 6 td mul 2 tkv add mul 2 t mul 3 tf
+if eq get ug 31 1
+a = add a add add mul t get ug 3 mul t get ug 4 add td tkv
+end
+put ug 37 a
+put ug 38 mul mul get ug 3 t t
+o = mul get ug 11 a
+put ug 39 o
+o = add o td
+put ug 40 o
+o = add o t
+put ug 41 o
+o = add o td
+put ug 42 o
+o = add o mul t get ug 0
+put ug 43 o
+o = add o td
+put ug 44 o
+o = add o td
+put ug 45 o
+o = add o td
+put ug 46 o
+o = add o tkv
+put ug 47 o
+o = add o tkv
+put ug 48 o
+o = add o td
+put ug 49 o
+o = add o td
+put ug 50 o
+o = add o tf
+put ug 51 o
+o = add o tf
+put ug 52 o
+end
+
+fn ugeom_alloc to void
+p = get ug 10
+r = enlarge up p
+if ne r 0
+exit 70
+end
+r = enlarge ugd p
+if ne r 0
+exit 70
+end
+r = enlarge um p
+if ne r 0
+exit 70
+end
+r = enlarge uv p
+if ne r 0
+exit 70
+end
+r = enlarge ua get ug 52
+if ne r 0
+exit 70
+end
+r = enlarge upa mul get ug 11 get ug 38
+if ne r 0
+exit 70
+end
+bt = mul get ug 7 get ug 1
+r = enlarge ubx bt
+if ne r 0
+exit 70
+end
+r = enlarge uby bt
+if ne r 0
+exit 70
+end
+r = enlarge ulos get ug 7
+if ne r 0
+exit 70
+end
+ts = get ug 0
+if gt get ug 1 ts
+ts = get ug 1
+end
+if gt get ug 2 ts
+ts = get ug 2
+end
+if gt get ug 5 ts
+ts = get ug 5
+end
+r = enlarge utmp add ts 256
+if ne r 0
+exit 70
+end
+kvsz = mul get ug 11 mul get ug 1 get ug 9
+r = enlarge ukvc kvsz
+if ne r 0
+exit 70
+end
+r = enlarge uvvc kvsz
+if ne r 0
+exit 70
+end
+end
+
+fn urobe_col i ulong lth f64 to void
+t = get ug 1
+he = div get ug 8 2
+freq = ufexp mul neg lth div f64 mul 2 i f64 get ug 8
+for pos ulong t
+ang = mul f64 pos freq
+idx = add mul pos he i
+put ucos idx ufcos ang
+put usin idx ufsin ang
+end
+end
+
+fn urobe_init to void
+sz = mul get ug 1 div get ug 8 2
+r = enlarge ucos sz
+if ne r 0
+exit 70
+end
+r = enlarge usin sz
+if ne r 0
+exit 70
+end
+th = div f64 get ug 13 1000.0
+if le th 0.0
+th = 10000.0
+end
+lth = uflog th
+for i ulong div get ug 8 2
+urobe_col i lth
+end
+end
+
+fn ugeom to bool
+if not ugeom_check
+ret false
+end
+if not ugeom_params
+ret false
+end
+ugeom_acts
+ugeom_alloc
+if eq get ug 28 1
+urobe_init
+end
+ret true
+end
+
+fn ulp l ulong to ulong
+np = get ug 19
+if le np 1
+ret l
+end
+lp = get ug 17
+if lt l lp
+ret l
+end
+lc = get ug 18
+j = sub l lp
+if lt j mul lc np
+ret add lp rem j lc
+end
+ret sub l mul lc sub np 1
+end
+
+fn up_lay l ulong to ulong
+ret add get ug 33 mul l get ug 34
+end
+fn up_g1 l ulong to ulong
+ret up_lay l
+end
+fn up_wq l ulong to ulong
+ret add up_lay l get ug 2
+end
+fn up_wk l ulong to ulong
+d = get ug 2
+ret add up_wq l mul d d
+end
+fn up_wv l ulong to ulong
+ret add up_wk l mul get ug 2 get ug 9
+end
+fn up_wo l ulong to ulong
+ret add up_wv l mul get ug 2 get ug 9
+end
+fn up_qn l ulong to ulong
+ret add up_lay l get ug 54
+end
+fn up_kn l ulong to ulong
+ret add up_lay l get ug 55
+end
+fn up_g2 l ulong to ulong
+ret add up_lay l get ug 56
+end
+fn up_w1 l ulong to ulong
+ret add up_lay l get ug 57
+end
+fn up_wup l ulong to ulong
+ret add up_lay l get ug 58
+end
+fn up_w2 l ulong to ulong
+ret add up_lay l get ug 59
+end
+
+fn ua_base l ulong to ulong
+ret mul l get ug 37
+end
+fn ua_hin l ulong to ulong
+ret ua_base l
+end
+fn ua_a l ulong to ulong
+ret add ua_base l mul get ug 1 get ug 2
+end
+fn ua_q l ulong to ulong
+ret add ua_a l mul get ug 1 get ug 2
+end
+fn ua_k l ulong to ulong
+ret add ua_q l mul get ug 1 get ug 2
+end
+fn ua_v l ulong to ulong
+ret add ua_k l mul get ug 1 get ug 9
+end
+fn ua_o l ulong to ulong
+ret add ua_v l mul get ug 1 get ug 9
+end
+fn ua_hmid l ulong to ulong
+ret add ua_o l mul get ug 1 get ug 2
+end
+fn ua_bn l ulong to ulong
+ret add ua_hmid l mul get ug 1 get ug 2
+end
+fn ua_s1 l ulong to ulong
+ret add ua_bn l mul get ug 1 get ug 2
+end
+fn ua_s2 l ulong to ulong
+ret add ua_s1 l get ug 1
+end
+fn ua_f1 l ulong to ulong
+ret add ua_s2 l get ug 1
+end
+fn ua_f2 l ulong to ulong
+ret add ua_f1 l mul get ug 1 get ug 5
+end
+fn ua_f3 l ulong to ulong
+ret add ua_f2 l mul get ug 1 get ug 5
+end
+fn ua_qns l ulong to ulong
+ret add ua_f3 l mul get ug 1 get ug 5
+end
+fn ua_kns l ulong to ulong
+ret add ua_qns l mul get ug 1 get ug 3
+end
+fn ua_qpre l ulong to ulong
+ret add ua_kns l mul get ug 1 get ug 4
+end
+fn ua_kpre l ulong to ulong
+ret add ua_qpre l mul get ug 1 get ug 2
+end
+
+fn udopen ai ulong to void
+w = get ug 25
+nb = uofsz ai
+if ne rem nb w 0
+exit 21
+end
+n = div nb w
+if le n get ug 1
+exit 20
+end
+put ug 26 ai
+put ug 27 n
+end
+
+fn udtk k ulong to ulong
+w = get ug 25
+if eq w 1
+ret ulong get uopw k
+end
+if eq w 2
+lo = ulong get uopw mul k 2
+hi = ulong get uopw add mul k 2 1
+ret or shl hi 8 lo
+end
+b = mul k 4
+v = ulong get uopw b
+v = or v shl ulong get uopw add b 1 8
+v = or v shl ulong get uopw add b 2 16
+v = or v shl ulong get uopw add b 3 24
+ret v
+end
+
+fn udrow o ulong n ulong to void
+w = get ug 25
+nb = mul n w
+if gt nb UOPWCAP
+exit 21
+end
+r = uoprd get ug 26 mul o w 0 nb
+m = div r w
+v = get ug 0
+for k ulong m
+if ge udtk k v
+exit 25
+end
+end
+end
+
+fn ubrow b ulong o ulong to void
+t = get ug 1
+udrow o add t 1
+for j ulong t
+put ubx add mul b t j udtk j
+put uby add mul b t j udtk add j 1
+end
+end
+
+fn ubatch s ulong to void
+bb = get ug 7
+t = get ug 1
+n = get ug 27
+sd = get ug 20
+for b ulong bb
+o = rem usmx xor sd mul add mul s bb b 11400714819323198485 sub n t
+ubrow b o
+end
+end

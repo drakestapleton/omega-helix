@@ -1,0 +1,551 @@
+note SPDX-License-Identifier: Apache-2.0
+note native/univ/ucli.om: Universal Omega Helix CLI (ollm-univ) supporting arbitrary architectures
+note and zero static caps: init, info, grad, train, eval, sample, gcheck, kvcmp, tune.
+
+text u_init "init"
+text u_info "info"
+text u_grad "grad"
+text u_train "train"
+text u_eval "eval"
+text u_sample "sample"
+text u_gcheck "gcheck"
+text u_kvcmp "kvcmp"
+text u_tune "tune"
+text u_llama "llama"
+text u_qwen2 "qwen2"
+text u_qwen3 "qwen3"
+text u_mistral "mistral"
+text u_gemma "gemma"
+text u_gpt "gpt"
+text u_gelu "gelu"
+
+fn uarg_eq ai ulong s view uchar * to bool
+r = argread ai uarg 0 4096
+if ne r long len s
+ret false
+end
+for i ulong len s
+if ne get uarg i get s i
+ret false
+end
+end
+ret true
+end
+
+fn upreset ai ulong to bool
+if or uarg_eq ai u_llama uarg_eq ai u_mistral
+put ug 12 23
+put ug 13 500000000
+put ug 14 bitcast ulong 1.0e-5f64
+put ug 15 bitcast ulong 0.1f64
+put ug 16 100
+ret true
+end
+if uarg_eq ai u_qwen2
+put ug 12 23
+put ug 13 1000000000
+put ug 14 bitcast ulong 1.0e-6f64
+put ug 15 bitcast ulong 0.1f64
+put ug 16 100
+ret true
+end
+if uarg_eq ai u_qwen3
+put ug 12 31
+put ug 13 1000000000
+put ug 14 bitcast ulong 1.0e-6f64
+put ug 15 bitcast ulong 0.1f64
+put ug 16 100
+ret true
+end
+if uarg_eq ai u_gemma
+put ug 12 81
+put ug 13 10000000
+put ug 14 bitcast ulong 1.0e-6f64
+put ug 15 bitcast ulong 0.1f64
+put ug 16 100
+ret true
+end
+if uarg_eq ai u_gpt
+put ug 12 0
+put ug 13 10000000
+put ug 14 bitcast ulong 1.0e-5f64
+put ug 15 bitcast ulong 0.0f64
+put ug 16 100
+ret true
+end
+if uarg_eq ai u_gelu
+put ug 12 32
+put ug 13 10000000
+put ug 14 bitcast ulong 1.0e-5f64
+put ug 15 bitcast ulong 0.0f64
+put ug 16 100
+ret true
+end
+ret false
+end
+
+note init CK ARCH|FLAGS V T D H H_KV F L B SEED TOTAL LRMICRO [ROPE_THETA_MILLI WD_MICRO WARMUP [LP LC NP]]
+fn ucmd_init to void
+na = ulong argcnt
+if and ne na 15 and ne na 18 ne na 21
+exit 2
+end
+if not upreset 3
+put ug 12 uargu 3
+put ug 13 10000000
+put ug 14 bitcast ulong 1.0e-5f64
+put ug 15 bitcast ulong 0.0f64
+put ug 16 100
+end
+for i ulong 8
+put ug i uargu add 4 i
+end
+put ug 20 uargu 12
+put ug 22 uargu 13
+put ug 23 bitcast ulong div f64 uargu 14 1000000.0
+put ug 21 0
+put ug 17 0
+put ug 18 0
+put ug 19 0
+if ge na 18
+put ug 13 uargu 15
+put ug 15 bitcast ulong div f64 uargu 16 1000000.0
+put ug 16 uargu 17
+end
+if eq na 21
+put ug 17 uargu 18
+put ug 18 uargu 19
+put ug 19 uargu 20
+end
+if not ugeom
+exit 12
+end
+uinit
+uck_save 2
+uputc 73
+uputc 32
+uputu get ug 10
+uputc 10
+uflush
+end
+
+fn ucmd_info to void
+if ne ulong argcnt 3
+exit 2
+end
+uck_load 2
+uputc 85
+uputc 52
+for i ulong 8
+uputc 32
+uputu get ug i
+end
+uputc 32
+uputu get ug 10
+uputc 32
+uputu get ug 12
+uputc 32
+uputu get ug 21
+uputc 32
+uputu get ug 11
+uputc 10
+uflush
+end
+
+fn ucmd_grad to void
+if ne ulong argcnt 6
+exit 2
+end
+uck_load 2
+udopen 3
+bb = get ug 7
+want = mul bb 8
+if ne uofsz 4 want
+exit 21
+end
+if ne uoprd 4 0 0 want want
+exit 21
+end
+offs = new ulong 1024 0
+if gt bb 1024
+exit 21
+end
+lim = sub get ug 27 get ug 1
+for b ulong bb
+o = uopw_get8 mul b 8
+if ge o lim
+exit 22
+end
+put offs b o
+end
+for b2 ulong bb
+ubrow b2 get offs b2
+end
+ls = ugrad
+ugr_save 5
+uputc 71
+uputc 32
+uputx bitcast ulong ls
+uputc 32
+uputl urmic ls
+uputc 10
+uflush
+end
+
+fn ucmd_train to void
+if ne ulong argcnt 6
+exit 2
+end
+uck_load 2
+udopen 3
+un = uargu 4
+ev = uargu 5
+if eq ev 0
+exit 2
+end
+en = get ug 22
+if lt un en
+en = un
+end
+while lt get ug 21 en bound 999999
+ubatch get ug 21
+ls = ugrad
+uadam
+s1 = get ug 21
+if or eq rem s1 ev 0 eq s1 en
+uck_save 2
+uputc 84
+uputc 32
+uputu s1
+uputc 32
+uputl urmic ls
+uputc 10
+uflush
+end
+end
+end
+
+fn ucmd_eval to void
+if ne ulong argcnt 5
+exit 2
+end
+uck_load 2
+udopen 3
+w = uargu 4
+t = get ug 1
+if or eq w 0 gt w div sub get ug 27 1 t
+exit 23
+end
+put ug 24 t
+lsum = 0.0f64
+for i ulong w
+ubrow 0 mul i t
+lsum = add lsum useq_fwd 0 true
+end
+ml = div lsum f64 w
+uputc 69
+uputc 32
+uputu get ug 21
+uputc 32
+uputu w
+uputc 32
+uputl urmic ml
+uputc 32
+uputl urmic div ml 0.6931471805599453
+uputc 10
+uflush
+end
+
+fn ugchk_fd idx ulong h f64 to f64
+orig = get up idx
+bb = get ug 7
+put up idx add orig h
+lp = 0.0f64
+for b ulong bb
+lp = add lp useq_fwd b true
+end
+put up idx sub orig h
+lm = 0.0f64
+for b2 ulong bb
+lm = add lm useq_fwd b2 true
+end
+put up idx orig
+ret div div sub lp lm f64 bb sub add orig h sub orig h
+end
+
+fn ugchk_rel g_ana f64 g_num f64 to f64
+dn = fabs g_ana
+if gt fabs g_num dn
+dn = fabs g_num
+end
+if lt dn 1.0e-6
+dn = 1.0e-6
+end
+ret div fabs sub g_num g_ana dn
+end
+
+fn ucmd_gcheck to void
+na = ulong argcnt
+if and ne na 4 ne na 5
+exit 2
+end
+uck_load 2
+udopen 3
+nsamp = ulong 48
+if eq na 5
+nsamp = uargu 4
+end
+ubatch get ug 21
+l0 = ugrad
+put ug 24 get ug 1
+mxrel = 0.0f64
+worst = ulong 0
+retries = ulong 0
+for k ulong nsamp
+idx = rem usmx add 918273645 k get ug 10
+ga = get ugd idx
+rel = ugchk_rel ga ugchk_fd idx 1.0e-6
+if gt rel 1.0e-3
+retries = add retries 1
+r2 = ugchk_rel ga ugchk_fd idx 2.5e-7
+if lt r2 rel
+rel = r2
+end
+end
+if gt rel mxrel
+mxrel = rel
+worst = idx
+end
+end
+uputc 67
+uputc 32
+uputu nsamp
+uputc 32
+uputx bitcast ulong mxrel
+uputc 32
+uputl urmic mul mxrel 1000.0
+uputc 32
+uputu worst
+uputc 32
+uputu retries
+uputc 10
+uflush
+if gt mxrel 1.0e-3
+exit 40
+end
+end
+
+fn ukvcmp_step s ulong cur ulong to ulong
+put ubx s cur
+ustep_kv s cur
+v = get ug 0
+best = ulong 0
+bestv = get utmp 0
+p0 = get ug 42
+for c ulong v
+lv = get utmp c
+put ua add p0 c lv
+if gt lv bestv
+bestv = lv
+best = c
+end
+end
+put ug 24 add s 1
+zd = useq_fwd 0 false
+ret best
+end
+
+fn ukvcmp_diff s ulong to f64
+v = get ug 0
+d = get ug 2
+lmw = ulong 0
+if eq get ug 30 1
+lmw = get ug 36
+end
+zb = add get ug 41 mul s d
+p0 = get ug 42
+mx = 0.0f64
+for c ulong v
+dot = udot_ap zb add lmw mul c d d
+err = fabs sub get ua add p0 c dot
+if gt err mx
+mx = err
+end
+end
+ret mx
+end
+
+fn ucmd_kvcmp to void
+if ne ulong argcnt 4
+exit 2
+end
+uck_load 2
+steps = uargu 3
+if or eq steps 0 gt steps get ug 1
+exit 2
+end
+bad = ulong 0
+mxerr = 0.0f64
+cur = ulong 0
+for s ulong steps
+nxt = ukvcmp_step s cur
+e = ukvcmp_diff s
+if gt e mxerr
+mxerr = e
+end
+if gt e 1.0e-11
+bad = add bad 1
+end
+cur = nxt
+end
+uputc 75
+uputc 86
+uputc 67
+uputc 77
+uputc 80
+uputc 32
+uputu steps
+uputc 32
+uputu bad
+uputc 32
+uputx bitcast ulong mxerr
+uputc 10
+uflush
+if gt bad 0
+exit 43
+end
+end
+
+fn ucmd_tune to void
+if ne ulong argcnt 6
+exit 2
+end
+uck_load 2
+put ug 21 0
+put ug 22 uargu 4
+put ug 23 bitcast ulong div f64 uargu 5 1000000.0
+p = get ug 10
+for q ulong ucn p
+i = mul q UCH
+ie = uce q p
+while lt i ie bound 500001
+put um i 0.0
+put uv i 0.0
+i = add i 1
+end
+end
+uck_save 3
+uputc 85
+uputc 84
+uputc 32
+uputu p
+uputc 10
+uflush
+end
+
+fn usamp_draw tm ulong st ulong to ulong
+v = get ug 0
+if eq tm 0
+best = ulong 0
+bv = get utmp 0
+for c ulong v
+if gt get utmp c bv
+bv = get utmp c
+best = c
+end
+end
+ret best
+end
+invt = div 1000.0 f64 tm
+mx = get utmp 0
+for c2 ulong v
+if gt get utmp c2 mx
+mx = get utmp c2
+end
+end
+sm = 0.0f64
+for c3 ulong v
+w = ufexp mul sub get utmp c3 mx invt
+put utmp c3 w
+sm = add sm w
+end
+u = mul mul f64 shr usmx st 11 1.1102230246251565e-16 sm
+acc = 0.0f64
+for c4 ulong v
+acc = add acc get utmp c4
+if lt u acc
+ret c4
+end
+end
+ret sub v 1
+end
+
+fn ucmd_sample to void
+if ne ulong argcnt 6
+exit 2
+end
+uck_load 2
+sd = uargu 3
+nn = uargu 4
+tm = uargu 5
+if gt nn get ug 1
+nn = get ug 1
+end
+cur = ulong 0
+st = sd
+for s ulong nn
+ustep_kv s cur
+st = add st 11400714819323198485
+nxt = usamp_draw tm st
+if gt s 0
+uputc 32
+end
+uputu nxt
+cur = nxt
+end
+uputc 10
+uflush
+end
+
+fn main to int
+if lt ulong argcnt 2
+exit 2
+end
+if uarg_eq 1 u_init
+ucmd_init
+ret 0
+end
+if uarg_eq 1 u_info
+ucmd_info
+ret 0
+end
+if uarg_eq 1 u_grad
+ucmd_grad
+ret 0
+end
+if uarg_eq 1 u_train
+ucmd_train
+ret 0
+end
+if uarg_eq 1 u_eval
+ucmd_eval
+ret 0
+end
+if uarg_eq 1 u_gcheck
+ucmd_gcheck
+ret 0
+end
+if uarg_eq 1 u_kvcmp
+ucmd_kvcmp
+ret 0
+end
+if uarg_eq 1 u_tune
+ucmd_tune
+ret 0
+end
+if uarg_eq 1 u_sample
+ucmd_sample
+ret 0
+end
+exit 2
+end

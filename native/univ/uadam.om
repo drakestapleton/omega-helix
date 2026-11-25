@@ -1,0 +1,180 @@
+note SPDX-License-Identifier: Apache-2.0
+note native/univ/uadam.om: Universal deterministic init, Adam / AdamW (decoupled weight decay
+note skipping 1D norm gains), linear or cosine LR schedule with warmup.
+
+global uad_f f64 8
+
+fn uis_gain i ulong to bool
+lay0 = get ug 33
+if lt i lay0
+ret false
+end
+gf = get ug 35
+if ge i gf
+ret lt i get ug 36
+end
+off = rem sub i lay0 get ug 34
+d = get ug 2
+if lt off d
+ret true
+end
+g2 = get ug 56
+if and ge off g2 lt off add g2 d
+ret true
+end
+if eq get ug 31 1
+qn = get ug 54
+if and ge off qn lt off add get ug 55 get ug 8
+ret true
+end
+end
+ret false
+end
+
+fn uis_outproj i ulong to bool
+lay0 = get ug 33
+gf = get ug 35
+if or lt i lay0 ge i gf
+ret false
+end
+off = rem sub i lay0 get ug 34
+d = get ug 2
+wo0 = add add d mul d d mul 2 mul d get ug 9
+if and ge off wo0 lt off add wo0 mul d d
+ret true
+end
+ret ge off get ug 59
+end
+
+fn uinit to void
+p = get ug 10
+sd = get ug 20
+rs = div 1.0 fsqrt f64 mul 2 get ug 6
+for q ulong ucn p
+i = mul q UCH
+ie = uce q p
+while lt i ie bound 500001
+put um i 0.0
+put uv i 0.0
+if uis_gain i
+put up i 1.0
+else
+r = mul f64 shr usmx add sd i 11 1.1102230246251565e-16
+val = mul sub mul 2.0 r 1.0 0.034641016151377546
+if uis_outproj i
+val = mul val rs
+end
+put up i val
+end
+i = add i 1
+end
+end
+end
+
+fn ulr s ulong to f64
+lr = bitcast f64 get ug 23
+wu = get ug 16
+tot = get ug 22
+if and gt wu 0 lt s wu
+ret div mul lr f64 add s 1 f64 wu
+end
+rt = ulong 1
+if gt tot wu
+rt = sub tot wu
+end
+prog = div f64 sub s wu f64 rt
+if gt prog 1.0
+prog = 1.0
+end
+if ne and get ug 12 16 0
+ret mul lr add 0.1 mul 0.45 add 1.0 ufcos mul 3.1415926535897932 prog
+end
+ret mul lr sub 1.0 mul 0.9 prog
+end
+
+fn ugrad_clip to void
+p = get ug 10
+s2 = 0.0f64
+for q ulong ucn p
+i = mul q UCH
+ie = uce q p
+while lt i ie bound 500001
+g = get ugd i
+s2 = add s2 mul g g
+i = add i 1
+end
+end
+gn = fsqrt s2
+if gt gn 1.0
+sc = div 1.0 gn
+for q2 ulong ucn p
+i2 = mul q2 UCH
+ie2 = uce q2 p
+while lt i2 ie2 bound 500001
+put ugd i2 mul get ugd i2 sc
+i2 = add i2 1
+end
+end
+end
+end
+
+fn uadam_prep to void
+s = get ug 21
+is_aw = ne and get ug 12 16 0
+b1 = 0.9f64
+b2 = 0.99f64
+if is_aw
+b2 = 0.95f64
+end
+p1 = 1.0f64
+p2 = 1.0f64
+for k ulong ucn add s 1
+j = mul k UCH
+je = uce k add s 1
+while lt j je bound 500001
+p1 = mul p1 b1
+p2 = mul p2 b2
+j = add j 1
+end
+end
+put uad_f 0 ulr s
+put uad_f 1 b1
+put uad_f 2 b2
+put uad_f 3 div 1.0 sub 1.0 p1
+put uad_f 4 div 1.0 sub 1.0 p2
+if is_aw
+put uad_f 5 bitcast f64 get ug 15
+else
+put uad_f 5 0.0
+end
+end
+
+fn uadam_one i ulong to void
+g = get ugd i
+m = add mul get uad_f 1 get um i mul sub 1.0 get uad_f 1 g
+v = add mul get uad_f 2 get uv i mul sub 1.0 get uad_f 2 mul g g
+put um i m
+put uv i v
+w = get up i
+if and gt get uad_f 5 0.0 not uis_gain i
+w = sub w mul mul get uad_f 0 get uad_f 5 w
+end
+num = mul get uad_f 0 mul m get uad_f 3
+den = add fsqrt mul v get uad_f 4 1.0e-8
+put up i sub w div num den
+end
+
+fn uadam to void
+ugrad_clip
+uadam_prep
+p = get ug 10
+for q ulong ucn p
+i = mul q UCH
+ie = uce q p
+while lt i ie bound 500001
+uadam_one i
+i = add i 1
+end
+end
+put ug 21 add get ug 21 1
+end

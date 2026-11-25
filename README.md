@@ -65,10 +65,22 @@ The exact same pure-Omega model & optimizer sources compile to:
 
 ## Quick Start
 
-### Prerequisites
-You only need the seeded Omega compiler **`omc`** (single static binary — download from [interplane.io/omega](https://interplane.io/omega/) or build `seed/out/omc` from `omega-mv`). No GCC, Clang, Rust, Python, or CUDA required to build or run.
+### Prerequisites & One-Command Install (`macOS` Apple Silicon, `DGX Spark`, `Linux`)
+You only need Python 3 (built in on macOS/Linux) and the seeded Omega compiler **`omc`** (single static binary — on macOS: `brew tap drakestapleton/omega https://interplane.io/drakestapleton/homebrew-omega.git && brew install drakestapleton/omega/omc`, or see [interplane.io/omega](https://interplane.io/omega/)). Zero GCC, Clang, Rust, or CUDA required.
 
-### 1. Build
+```sh
+git clone https://github.com/drakestapleton/omega-helix.git
+cd omega-helix
+sh install.sh        # builds all pure-Omega engines for your OS/GPU into ~/.local/opt/omega-helix
+omega-helix          # launches Omega Helix Studio in your browser (http://127.0.0.1:18420)
+```
+
+With **`omega-helix`** installed, you can visually or via CLI:
+- **Search all 73+ OpenWALDO corpora** (`omega-helix catalog --search python`) or load any local folder of files (automatically wrapped into a SHA-256 verified OpenWALDO `EXPORT.json`).
+- **Design Custom DNA Helix Chains** interactively (`Base Trunk -> growpro / FREEZE_LAYERS -> Strand A/B/C/D -> spext -> OLLMSP01 -> spclip`) OR universal architectures (`Llama`, `Qwen3`, `Gemma`, `GPT`, `Looped Core`).
+- **Forge live with SSE telemetry, interactive playground & one-click HF Safetensors / GGUF v3 exports** (`omega-helix setup` for interactive terminal mode, `omega-helix doctor` to inspect binaries & GPU).
+
+### 1. Build Manual Targets (`scripts/build.sh`)
 ```sh
 # DGX Spark / Linux AArch64 + Blackwell GB10 GPU (85k tok/s BF16, 68k tok/s FP32)
 TARGET=gb10 sh scripts/build.sh
@@ -79,22 +91,24 @@ TARGET=aarch64 sh scripts/build.sh
 # Apple Silicon macOS (requires macOS-capable omc with `target a64macos`)
 TARGET=macos sh scripts/build.sh
 
-# Standalone pure-Omega BPE tokenizer & fine-tune driver
-TARGET=tok sh scripts/build.sh
-TARGET=wtrain sh scripts/build.sh
+# Standalone pure-Omega BPE tokenizer, fine-tune driver & OpenWALDO ingestor
+TARGET=tok       sh scripts/build.sh
+TARGET=wtrain    sh scripts/build.sh
+TARGET=openwaldo sh scripts/build.sh
 ```
 
-### 2. Run the 5-Second CPU Smoke Test
-Verifies `init`, finite-difference gradient check (`gcheck`), CPU `train`, `eval`, bit-exact KV-cache (`kvcmp`), and `sample`:
+### 2. Run the Verification Suite & CPU Smoke Test
+Verifies `adamck`, `init`, finite-difference gradient check (`gcheck`), CPU `train`, `eval`, `sample`, BPE roundtrip, bit-exact KV-cache (`kvcmp`), DNA specialist chaining (`growpro`/`trainf`/`spext`/`spchainsamp`), looped-core `OLLMCK03`, Python f64 oracle cross-checks, OpenWALDO BOM negative controls, and (on Linux AArch64) 165-task benchmark, contrast/controller replays, 43-slot SM121 SASS disassembly, and Lean 4 proofs:
 ```sh
-sh scripts/quickstart-cpu.sh
+sh scripts/quickstart-cpu.sh   # 5-second CPU smoke test
+sh scripts/verify.sh           # full host-verifiable gate (no GPU required)
 ```
 
 ### 3. Train on DGX Spark GB10 at 85,000+ tok/s (BF16)
 ```sh
 # Fit a 4096-token BPE vocabulary and encode your corpus
-./build/ollm-gb10 bpefit corpus.txt 4096 merges4096.bin
-./build/ollm-gb10 bpeenc merges4096.bin corpus.txt train.tok
+./build/ollm-gb10 bpefit corpus.txt merges4096.bin 4096
+./build/ollm-gb10 bpeenc merges4096.bin 4096 corpus.txt train.tok
 
 # Launch 15.8M v2 BF16 training (16,384 tokens/step, ~85k tok/s on GB10)
 sh scripts/train-gb10-bf16.sh train.tok held.tok merges4096.bin
@@ -110,19 +124,53 @@ LOOP=1    sh scripts/train-gb10-bf16.sh train.tok held.tok merges4096.bin
 ./build/ollm-gb10 gsample run-gb10/ck.bin 42 128 800 "fn main" merges4096.bin
 ./build/ollm-gb10 gsampb  run-gb10/ck.bin 42 128 800 "fn main" merges4096.bin
 
-# OpenAI-compatible HTTP server (POST /v1/chat/completions, GET /v1/models)
-./build/ollm-gb10 gserveb run-gb10/ck.bin 18098 merges4096.bin
+# OpenAI-compatible HTTP server (POST /v1/chat/completions, GET /v1/models): <port> <ck> <merges>
+./build/ollm-gb10 gserveb 18098 run-gb10/ck.bin merges4096.bin
 ```
 
 ### 5. Grow & Chain DNA Specialists (`OLLMSP01`)
 ```sh
-# Grow 2 frozen-core specialist layers, train only the new layers, and extract a DNA pack
-./build/ollm growpro base.ck spec.ck 2 150 1000
+# Expand an 8-layer base to 10 layers (2 frozen-core specialist layers), train only layers 8..9, and extract a DNA pack
+./build/ollm growpro base.ck spec.ck 10 150 1000
 ./build/ollm trainf  spec.ck skill.tok 150 25 8
 ./build/ollm spext   base.ck spec.ck skill.sp
 
 # Chain multiple DNA packs at inference time without modifying base.ck
 ./build/ollm spchainsamp base.ck 128 800 "Prompt:" 42 merges4096.bin 2 skill_a.sp skill_b.sp
+```
+
+### 6. Train on Open-Source OpenWALDO Datasets with Provenance BOMs
+Omega Helix connects to [OpenWALDO](https://github.com/openwaldo/waldo) (`waldo index export --format jsonl`) via fail-closed `EXPORT.json` SHA-256 verification and a pure-Omega JSONL ingestor (`ollm-waldo`), producing an `openwaldo-helix-bom.json` linking source shards and licenses to trained checkpoints — see [`docs/OPENWALDO.md`](docs/OPENWALDO.md):
+```sh
+waldo index export --format jsonl core/example ./waldo-export
+sh scripts/openwaldo-train.sh ./waldo-export ./run-waldo
+```
+
+---
+
+## Universal Model Engine, Weight Interchange & Open-Source Data
+
+Omega Helix supports **any decoder-only Transformer architecture and parameter scale** with zero static array limits via the pure seeded-Omega universal engine (`ollm-univ`, [`docs/CONTRACT-V4.md`](docs/CONTRACT-V4.md)):
+
+- **Zero static caps (`TARGET=univ`, `native/univ/`):** Dynamic `enlarge` arenas support arbitrary `V, T, D, H, H_kv, F, L, B`, `u8` (`V<=256`), `u16` (`V<=65535`), and `u32` (`V>65535`, e.g. `128K–152K` vocabularies), verified by an independent `f64` oracle (`tests/oracle_universal.py`, max relative error `<= 7.47e-13`).
+- **Modern architecture presets & custom bitmasks (`OLLMCK04`):** `llama`, `mistral`, `qwen2`, `qwen3` (`QK-RMSNorm`), `gemma` (`GeGLU` + tied `embed*sqrt(D)` / `1+w` norms), `gpt` (`WPE` + `ReLU`), `gelu`, RoPE / GQA / MQA / SwiGLU / GeGLU / AdamW + Cosine LR, and looped cores (`LP / LC / NP`).
+- **Pure-Omega Safetensors & GGUF v3 Interchange (`TARGET=interchange`, `native/univ/interchange.om`):** Import HuggingFace `config.json` + `.safetensors` (`F32`/`BF16`/`F16`/`F64`), export HuggingFace Safetensors (`f32`/`bf16`) and GGUF v3, and upgrade legacy `OLLMCK01/02/03` checkpoints to `OLLMCK04` with zero C/Python/Rust in the binary (`tests/test_interchange.py`).
+- **OpenWALDO Open-Source Training Backend (`tools/openwaldo/omega_helix_backend.py`):** End-to-end audited training pipeline from `EXPORT.json` through `ollm-waldo`, BPE/`byte`/`u32` tokenization, any `ollm-univ` architecture (or imported HF Safetensors), Safetensors/GGUF export, and cryptographic `openwaldo-helix-bom.json` + observation bundles (`docs/OPENWALDO.md`).
+- **GB10 GPU Frozen-Core Specialists, Looped BF16 & Adaptive Loop Exit:** `gtrainf`/`gtrainb`/`gcmp`/`gacmp` support optional `FREEZE_LAYERS` on GB10 (`grow`/`growpro` -> GPU -> `spext`/`spapp`), `ggks` split-K fixes small-shape/looped BF16 (`gbcmp2` per-tensor cosine check), and CPU looped models support per-token loop exit + deterministic inter-pass messages (`adapteval`/`adaptsamp`/`adaptcmp`, `LTP0` `/v1/neuralese/trace`).
+
+### Quick Example (Universal + Interchange)
+```sh
+TARGET=univ        sh scripts/build.sh
+TARGET=interchange sh scripts/build.sh
+
+# Initialize & train any architecture with zero shape caps (e.g. qwen3, llama, gemma, looped core)
+./build/ollm-univ init ck4.bin qwen3 32000 1024 512 8 2 1408 8 4 42 1000 3000
+./build/ollm-univ train ck4.bin train.tok 100 25
+
+# Export HuggingFace Safetensors (BF16) and GGUF v3 purely in Omega
+mkdir -p hf-out
+./build/ollm-interchange export-hf ck4.bin hf-out bf16
+./build/ollm-interchange export-gguf ck4.bin model.gguf
 ```
 
 ---
@@ -131,11 +179,12 @@ LOOP=1    sh scripts/train-gb10-bf16.sh train.tok held.tok merges4096.bin
 
 | Path | Contents |
 |---|---|
-| [`native/`](native/) | Pure-Omega transformer core (`model.om`, `adam.om`, `ckpt.om`, `bpe.om`, `spec.om`, `cli.om`, `serve.om`), platform I/O (`lio.om`, `mio.om`, `eio.om`), HTTP/JSON (`net/`), standalone BPE (`tok/`), and raw SM121 Blackwell GPU kernels (`gpu/`). |
-| [`scripts/`](scripts/) | One-command multi-target builder ([`build.sh`](scripts/build.sh)), CPU smoke test ([`quickstart-cpu.sh`](scripts/quickstart-cpu.sh)), and 85k tok/s GB10 BF16 training launcher ([`train-gb10-bf16.sh`](scripts/train-gb10-bf16.sh)). |
-| [`tools/`](tools/) | Pure-Omega training driver (`wdrive/`), 165-task coding benchmark (`bench/`), contrast training (`contrast/`), learned controller (`controller/`), and weight-patch tools (`wpatch/`, `wscore/`, `wgate/`). |
-| [`docs/`](docs/) | Architecture contracts (`CONTRACT.md`, `CONTRACT-V1..V3.md`, `CONTRACT-BF16.md`), DNA specialists ([`SPECIALISTS.md`](docs/SPECIALISTS.md), [`OM-BUNDLES.md`](docs/OM-BUNDLES.md)), looped core ([`LOOP.md`](docs/LOOP.md)), and checkpoint growth ([`GROW.md`](docs/GROW.md)). |
-| [`tests/`](tests/) | Python f64 referee oracle (`oracle.py`), core receipts (`core-receipts.sh`), GPU SASS disassembler guard (`gpu-disasm.sh`), metrics benchmark (`ollm_metrics_bench.py`), and `.om` test harnesses. |
+| [`install.sh`](install.sh) / [`bin/`](bin/) | One-command cross-platform installer (`install.sh`) and `omega-helix` CLI launcher (`studio`, `setup`, `catalog`, `forge`, `sample`, `doctor`). |
+| [`native/`](native/) | Pure-Omega transformer core (`model.om`, `adam.om`, `ckpt.om`, `bpe.om`, `spec.om`, `cli.om`, `serve.om`), universal zero-cap engine & HF/GGUF interchange (`univ/`), platform I/O (`lio.om`, `mio.om`, `eio.om`), HTTP/JSON (`net/`), standalone BPE (`tok/`), and raw SM121 Blackwell GPU kernels (`gpu/`). |
+| [`scripts/`](scripts/) | One-command multi-target builder ([`build.sh`](scripts/build.sh)), independent verification suite ([`verify.sh`](scripts/verify.sh)), CPU smoke test ([`quickstart-cpu.sh`](scripts/quickstart-cpu.sh)), OpenWALDO pipeline ([`openwaldo-train.sh`](scripts/openwaldo-train.sh)), and 85k tok/s GB10 BF16 training launcher ([`train-gb10-bf16.sh`](scripts/train-gb10-bf16.sh)). |
+| [`tools/`](tools/) | Omega Helix Studio local web app & OpenWALDO directory search (`studio/`), OpenWALDO pure-Omega ingestor, BOM bridge & multi-arch training backend (`openwaldo/`), pure-Omega training driver (`wdrive/`), 165-task coding benchmark (`bench/`), contrast training (`contrast/`), learned controller (`controller/`), and weight-patch tools (`wpatch/`, `wscore/`, `wgate/`). |
+| [`docs/`](docs/) | Architecture contracts (`CONTRACT.md`, `CONTRACT-V1..V4.md`, `CONTRACT-BF16.md`), OpenWALDO integration ([`OPENWALDO.md`](docs/OPENWALDO.md)), DNA specialists ([`SPECIALISTS.md`](docs/SPECIALISTS.md), [`OM-BUNDLES.md`](docs/OM-BUNDLES.md)), looped core & adaptive exit ([`LOOP.md`](docs/LOOP.md)), and checkpoint growth ([`GROW.md`](docs/GROW.md)). |
+| [`tests/`](tests/) | Python `f64` referee oracles (`oracle.py`, `oracle_universal.py`), HF/GGUF interchange tests (`test_interchange.py`), adaptive loop suite (`test_adaptive_loop.py`), GB10 frozen-core & BF16 loop suite (`test_gpu_spec_loop.sh`), core receipts (`core-receipts.sh`), GPU SASS guard (`gpu-disasm.sh`), and metrics benchmark (`ollm_metrics_bench.py`). |
 | [`evidence/`](evidence/) | Complete immutable receipts for the entire rung ladder (`v0`, `v1`/Rung 3, Rung 4 `gpu`, Rung 5 `gpu-max`, Rung 6 `gpu-r6`, kernel rounds `gpu-k1`–`gpu-k9`, Rungs 7–10, `gpu-bf`, `v3`, `bf16-inference`, `specialists`, `serve`, `x86`, `efi`, `a64efi`, and the `2026-11-21` looped-core study). |
 
 ---

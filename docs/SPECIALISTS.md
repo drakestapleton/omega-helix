@@ -83,8 +83,16 @@ ollm spclip BASE.ck MODE PROMPT N TEMPMILLI SEED MERGES S W1 K1 A1..AK1 W2 K2 B1
 - `ollm tttsamp CK SEED N TEMPMILLI PROMPT MERGES STEPS LRMICRO LAYER_FROM` — ephemeral test-time adaptation on `PROMPT` before sampling, then restoring base weights.
 - `ollm dolaeval CK HELD W EARLY_LAYER BETA_MILLI` — layer-contrastive decoding evaluation (`log P_final - beta * log P_early`).
 
-## Measured Host Results (Apple Silicon M2, Darwin 25.6.0 arm64, f64 CPU)
-- **Cross-target build:** compiles cleanly to Darwin ARM64 Mach-O (`mio.om`, 247,840 B), Linux AArch64 static ELF (`lio.om`, 405,436 B), and `gb10` (`lio.om` + `gpu/*`, 706,536 B) with 0 errors. Linux/x86/UEFI execution and GB10 GPU execution remain `NOT_RUN`.
+## Measured Host, Emulated & GB10 GPU Results
+- **Cross-target builds & execution (`EXERCISED`):**
+  - **Apple Silicon M2 (`macos`, Darwin arm64 CPU f64):** `ollm-macos` (full suite below).
+  - **Linux AArch64 (`aarch64` static ELF, DGX Spark host):** `scripts/verify.sh` (`quickstart-cpu.sh`: `growpro` -> `trainf` -> `spext` -> `spchainsamp` + `kvcmp`).
+  - **Linux x86-64 (`x86linux` static ELF under `qemu-x86_64` on Spark):** `scripts/quickstart-cpu.sh` (`growpro`, `trainf`, `spext`, `spchainsamp`, `kvcmp`, `OLLMCK03` loop) PASS.
+  - **Bare-metal UEFI (`x86efi` under QEMU + OVMF & `a64efi` under QEMU + KVM + AAVMF):** executed `\OLLM\JOB.TXT` (`init` -> `growpro` -> `trainf` -> `spext` -> `spapp` -> bit-identical `eval` `5529126 7976843` -> `spclip`). Physical bare-metal x86 hardware remains `NOT_RUN` (verified via QEMU emulation).
+- **DGX Spark GB10 GPU Frozen-Core Specialist Training (`EXERCISED`, `native/gpu/gg.om` & `gb.om`):**
+  - `gtrainf` (`FP32`), `gtrainb` (`BF16`), `gcmp`, and `gacmp` accept optional `FREEZE_LAYERS`, skipping frozen backward layers and embeddings and restricting on-chip Adam updates to `[fz, P)` (`tests/test_gpu_spec_loop.sh`).
+  - Measured on GB10 (`spark-window` `--gb10 shared --quiet none`, `L=2->4` grown via `grow` and `growpro`): `gcmp` (`GCF 2 86272 0`), `gacmp` (`GAF 2 86272 0`), `grow` -> `gtrainf` -> `spext` -> `spapp` (bit-identical CPU `eval` `4938909 7125340`), `growpro` -> `gtrainb` (BF16) -> `spext` -> `spapp` (`4938717 7125062`), plus `OMUTFZ=0` negative controls (`gcmp 45`, `gacmp 46`, `spext 62`).
+  - Also available cleanly on arbitrary architectures/depths via `ollm-univ` (`OLLMCK04`).
 - **Multi-link Merkle chains & multi-helix `spclip` (`V=256, T=16, D=32, H=2, F=64, L=2→3→4`):**
   - Built 2-link chains (`base L=2` → `P1.sp L=2→3` → `P2_{a,b,c}.sp L=3→4` pinned to `base + P1`).
   - `spchainapp` (`SPCHAPP 2 4 2 41760`) and in-memory `spchaineval` matched the trained 4-layer checkpoint `eval` **bit-identically** (`E 5 4 5492684 7924269`); greedy (`TEMPMILLI=0`) and stochastic (`TEMPMILLI=800`) `spchainsamp` matched `sample` bit-for-bit via `cmp`.

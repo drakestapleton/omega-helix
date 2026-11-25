@@ -655,7 +655,7 @@ class Receipt:
                       binary_sha256=sha256_file(binary) if os.path.exists(binary) else None,
                       oracle_sha256=sha256_file(os.path.abspath(__file__)),
                       started=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                      affinity=sorted(os.sched_getaffinity(0)), nice=os.nice(0),
+                      affinity=(sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else []), nice=os.nice(0),
                       commands=[], results=[], verdict=None)
 
     def run(self, argv):

@@ -18,9 +18,13 @@ prints `G OLD_LAYERS NEW_LAYERS PARAMETERS`.
 The output starts at step zero with zero Adam moments and the specified learning
 rate and schedule, just as a fresh fine-tune does. Retaining moments while changing
 the model is intentionally not supported. Use the same tokenizer as the input.
-`train` consumes the ordinary output checkpoint. The GPU trainers use the same
-checkpoint format, but growth followed by GPU training has not been exercised.
-This change tests host training only.
+`train`, `gtrainf`, and `gtrainb` consume the ordinary output checkpoint. On the GB10
+GPU (`native/gpu/gg.om`, `native/gpu/gb.om`), passing optional `FREEZE_LAYERS`
+to `gtrainf` / `gtrainb` keeps all embeddings and layers `0 .. FREEZE_LAYERS - 1`
+bit-identically frozen in both FP32 and BF16 while updating only the newly grown
+layers (`tests/test_gpu_spec_loop.sh`). Growth followed by GPU training (`grow` /
+`growpro` -> `gtrainf` / `gtrainb` -> `spext` -> `spapp`) and bare-metal UEFI
+(`x86efi` / `a64efi`) + `x86linux` execution are verified cleanly.
 
 On Linux, the normal checkpoint writer saves OUTPUT.ck through OUTPUT.ck.tmp. As with
 `tune`, an existing output is replaced. Use a distinct output in a private working
