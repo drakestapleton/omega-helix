@@ -885,6 +885,7 @@ def main():
                 "native/rev.om",
                 "native/sp_solve.om",
                 "native/omg.om",
+                "native/pillars_cli.om",
                 "native/cli.om",
             )
         )

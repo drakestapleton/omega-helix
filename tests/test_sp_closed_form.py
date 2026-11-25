@@ -389,7 +389,7 @@ def build_solver_harness(out_dir):
     is_x86 = platform.system() == "Linux" and platform.machine().lower() in ("x86_64", "amd64")
     plat = "mio.om" if is_mac else "lio.om"
     rev_unit = "norev.om" if is_x86 else "rev.om"
-    units = ["math.om", "data.om", "lpool.om", "model.om", "adam.om", "ckpt.om", "bpe.om", "spec.om", rev_unit, "arboris.om", "sp_solve.om", "omg.om"]
+    units = ["math.om", "data.om", "lpool.om", "model.om", "adam.om", "ckpt.om", "bpe.om", "spec.om", rev_unit, "arboris.om", "sp_solve.om", "omg.om", "pillars_cli.om"]
     cli_txt = read_text(os.path.join(SRC, "cli.om")).replace("fn ocmd to int", "fn ocmd_orig to int", 1)
     src_text = "target a64macos\nom2\n" if is_mac else ("target x86linux\nom2\n" if is_x86 else "om2\n")
     src_text += "\n".join(read_text(os.path.join(SRC, u)) for u in units)
@@ -403,7 +403,7 @@ def build_solver_harness(out_dir):
 def test_cross_target_compile():
     """Verify sp_solve.om compiles cleanly with math..spec for host target and gb10 (om2)."""
     with tempfile.TemporaryDirectory() as td:
-        units = ["math.om", "data.om", "lpool.om", "model.om", "adam.om", "ckpt.om", "bpe.om", "spec.om", "rev.om", "arboris.om", "sp_solve.om", "omg.om", "cli.om"]
+        units = ["math.om", "data.om", "lpool.om", "model.om", "adam.om", "ckpt.om", "bpe.om", "spec.om", "rev.om", "arboris.om", "sp_solve.om", "omg.om", "pillars_cli.om", "cli.om"]
         if platform.system() == "Darwin":
             mac_text = "target a64macos\nom2\n" + "\n".join(read_text(os.path.join(SRC, u)) for u in units + ["mio.om", "noserve.om", "nogpu.om"])
             mac_bin = os.path.join(td, "ollm-macos")

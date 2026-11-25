@@ -1,0 +1,334 @@
+note SPDX-License-Identifier: Apache-2.0
+note Unified 8-Pillar Pure-Omega CLI (OMG pack/decode/samp + Arboris 3-layer guide).
+note Concatenated after cli.om on hosted targets (gb10, aarch64, macos, x86linux); stubbed on UEFI.
+
+fn omg_pick_neural st ulong tm ulong to ulong
+off = get og 27
+best = OMG_EOF
+bv = bitcast f64 ulong 18442240474082181120
+for c ulong 256
+if eq get omg_mask c 1
+v = get oa add off c
+if or eq best OMG_EOF gt v bv
+bv = v
+best = c
+end
+end
+end
+if or eq best OMG_EOF eq tm 0
+ret best
+end
+tau = div f64 tm 1000.0
+m = bitcast f64 ulong 18442240474082181120
+for c2 ulong 256
+if eq get omg_mask c2 1
+x = div get oa add off c2 tau
+put oa add off c2 x
+m = fmax m x
+end
+end
+sm = 0.0f64
+for c3 ulong 256
+if eq get omg_mask c3 1
+e = fexp sub get oa add off c3 m
+put oa add off c3 e
+sm = add sm e
+else
+put oa add off c3 0.0f64
+end
+end
+if le sm 0.0f64
+ret best
+end
+u = mul mul f64 shr smx st 11 1.1102230246251565e-16 sm
+acc = 0.0f64
+la = best
+for k ulong 256
+if eq get omg_mask k 1
+pk = get oa add off k
+acc = add acc pk
+if lt u acc
+ret k
+end
+if gt pk 0.0f64
+la = k
+end
+end
+end
+ret la
+end
+
+fn omg_write_dec ai ulong to ulong
+rc = omg_decode_om
+if ne rc 0
+exit 33
+end
+nd = get omg_ndec 0
+if gt nd 524288
+exit 70
+end
+ocwopen ai
+for i ulong nd
+put ock i get omg_dec i
+end
+ocwput 0 nd
+ocwend ai
+ret nd
+end
+
+text omg_p_pack "OMGPACK "
+text omg_p_dec "OMGDEC "
+text omg_p_samp "OMGSAMP "
+text arb_p_guide "ARBGUIDE "
+
+fn omg_pack_cli to void
+if ne oargc 5
+exit 2
+end
+n = odread 3
+if or eq n 0 gt n OMG_MAX_SRC
+exit 2
+end
+for i ulong n
+put omg_src i get od0 i
+end
+put omg_nsrc 0 n
+if ne omg_parse_om 0
+exit 30
+end
+nt = get omg_ntok 0
+if or eq nt 0 gt nt 524288
+exit 70
+end
+sid = omg_semantic_id
+ocwopen 4
+for j ulong nt
+put ock j uchar and ulong get omg_toks j 255
+end
+ocwput 0 nt
+ocwend 4
+omg_put_str omg_p_pack
+oputu n
+oputc 32
+oputu nt
+oputc 32
+oputx sid
+oputc 10
+oflush
+end
+
+fn omg_dec_cli to void
+if ne oargc 5
+exit 2
+end
+nt = odread 3
+if or eq nt 0 gt nt OMG_MAX_TOKS
+exit 2
+end
+for i ulong nt
+put omg_toks i ushort get od0 i
+end
+put omg_ntok 0 nt
+nd = omg_write_dec 4
+omg_put_str omg_p_dec
+oputu nt
+oputc 32
+oputu nd
+oputc 10
+oflush
+end
+
+fn omg_samp_cli to void
+if ne oargc 8
+exit 2
+end
+ockloop 3
+if ne get og 0 256
+exit 2
+end
+st = oargu 4
+budget = oargu 5
+tm = oargu 6
+if or eq budget 0 gt budget 512
+exit 2
+end
+ochipup
+omg_init_gen
+put omg_ntok 0 0
+put og 9 0
+ocpush 0
+for step ulong budget
+omg_valid_mask sub budget step
+olastf
+tok = omg_pick_neural st tm
+if ne tm 0
+st = add st 11400714819323198485
+end
+if eq tok OMG_EOF
+break
+end
+omg_emit tok
+if ne omg_step tok 0
+exit 32
+end
+ocpush tok
+if and eq get omg_st 0 0 eq get omg_st 1 0
+break
+end
+end
+nd = omg_write_dec 7
+sid = omg_semantic_id
+omg_put_str omg_p_samp
+oputu get omg_ntok 0
+oputc 32
+oputu nd
+oputc 32
+oputx sid
+oputc 10
+oflush
+end
+
+fn cmdomg_cli to void
+if lt oargc 3
+cmdomg
+ret
+end
+r = oargr 2
+if eq r 8
+if and eq get oarg 0 115 eq get oarg 1 101
+cmdomg
+ret
+end
+end
+if and eq r 4 eq get oarg 0 112
+omg_pack_cli
+ret
+end
+if and eq r 6 eq get oarg 0 100
+omg_dec_cli
+ret
+end
+if and eq r 4 and eq get oarg 0 115 eq get oarg 1 97
+omg_samp_cli
+ret
+end
+exit 2
+end
+
+fn arb_ingest_toks cn ulong to void
+arboris_clear
+if lt cn 4
+ret
+end
+win = new ulong 3 0
+lim = sub cn 3
+for i ulong lim
+put win 0 ulong get od0 i
+put win 1 ulong get od0 add i 1
+put win 2 ulong get od0 add i 2
+nxt = ulong get od0 add i 3
+ok = arboris_put win 0 3 nxt 950000
+end
+end
+
+fn arb_try_bypass step ulong to ulong
+if lt step 3
+ret OMG_EOF
+end
+ctx = new ulong 3 0
+put ctx 0 ulong get omg_toks sub step 3
+put ctx 1 ulong get omg_toks sub step 2
+put ctx 2 ulong get omg_toks sub step 1
+res = new ulong 2 0
+if not arboris_probe ctx 0 3 res
+ret OMG_EOF
+end
+cand = get res 0
+if and lt cand 256 and ge get res 1 900000 eq get omg_mask cand 1
+ret cand
+end
+ret OMG_EOF
+end
+
+fn arb_guide_cli to void
+if ne oargc 9
+exit 2
+end
+cn = odread 4
+arb_ingest_toks cn
+ockloop 3
+if ne get og 0 256
+exit 2
+end
+st = oargu 5
+budget = oargu 6
+tm = oargu 7
+if or eq budget 0 gt budget 512
+exit 2
+end
+ochipup
+omg_init_gen
+put omg_ntok 0 0
+put og 9 0
+ocpush 0
+bp = ulong 0
+ltp = ulong 0
+for step ulong budget
+omg_valid_mask sub budget step
+tok = arb_try_bypass step
+if ne tok OMG_EOF
+bp = add bp 1
+else
+ltp = add ltp 1
+olastf
+tok = omg_pick_neural st tm
+if ne tm 0
+st = add st 11400714819323198485
+end
+end
+if eq tok OMG_EOF
+break
+end
+omg_emit tok
+if ne omg_step tok 0
+exit 32
+end
+ocpush tok
+if and eq get omg_st 0 0 eq get omg_st 1 0
+break
+end
+end
+nd = omg_write_dec 8
+sid = omg_semantic_id
+omg_put_str arb_p_guide
+oputu get omg_ntok 0
+oputc 32
+oputu bp
+oputc 32
+oputu ltp
+oputc 32
+oputu nd
+oputc 32
+oputx sid
+oputc 10
+oflush
+end
+
+fn cmdarboris_cli to void
+if lt oargc 3
+cmdarboris
+ret
+end
+r = oargr 2
+if eq r 8
+if and eq get oarg 0 115 eq get oarg 1 101
+cmdarboris
+ret
+end
+end
+if and eq r 5 eq get oarg 0 103
+arb_guide_cli
+ret
+end
+exit 2
+end

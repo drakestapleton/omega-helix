@@ -419,6 +419,7 @@ def main():
             os.path.join(nat_dir, "arboris.om"),
             os.path.join(nat_dir, "sp_solve.om"),
             os.path.join(nat_dir, "omg.om"),
+            os.path.join(nat_dir, "pillars_cli.om"),
             os.path.join(nat_dir, "cli.om"),
             os.path.join(nat_dir, "lio.om"),
             os.path.join(nat_dir, "serve.om"),
