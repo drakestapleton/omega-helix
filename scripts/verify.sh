@@ -47,7 +47,12 @@ else
   OUT="$OUT" TARGET=gb10 sh "$here/scripts/build.sh"
   OUT="$OUT" TARGET=x86linux sh "$here/scripts/build.sh"
   OUT="$OUT" TARGET=x86efi sh "$here/scripts/build.sh"
-  OUT="$OUT" TARGET=a64efi sh "$here/scripts/build.sh"
+  OMC_TMP=${OMC:-$(command -v omc 2>/dev/null || ([ -x "$HOME/.local/bin/omc" ] && echo "$HOME/.local/bin/omc") || echo "$HOME/canon/omega-mv/seed/out/omc")}
+  if [ -f "${EFIRT:-$(dirname "$OMC_TMP")/../a64efi/efirt.om}" ]; then
+    OUT="$OUT" TARGET=a64efi sh "$here/scripts/build.sh"
+  else
+    echo "--- a64efi build skipped: efirt.om not present alongside standalone omc ---"
+  fi
   OUT="$OUT" TARGET=tok sh "$here/scripts/build.sh"
   OUT="$OUT" TARGET=wtrain sh "$here/scripts/build.sh"
   OUT="$OUT" TARGET=openwaldo sh "$here/scripts/build.sh"
