@@ -581,7 +581,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                     max_tok=int(body.get("max_tok") or body.get("n_tokens") or 64),
                     top_k=int(body.get("top_k", 4)),
                     temp_milli=int(body.get("temp_milli", 700)),
-                    subcmd=str(body.get("subcmd") or "spsamp"),
+                    subcmd=str(body.get("subcmd") or "spwsamp"),
                 )
                 self._send_json(HTTPStatus.OK, res)
             except Exception as exc:

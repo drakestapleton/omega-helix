@@ -283,6 +283,79 @@ class StudioTestCase(unittest.TestCase):
                     self.assertEqual(e.code, 400)
                 finally:
                     e.close()
+
+            # End-to-end live spcryst -> spweval -> spsamp against native ollm
+            sp_dir = self.tmp_root / "spiral_e2e"
+            sp_dir.mkdir(parents=True, exist_ok=True)
+            seed_ck = sp_dir / "seed.ck"
+            dom_tok = sp_dir / "dom.bin"
+            sp2_out = sp_dir / "s01.sp2"
+            dom_tok.write_bytes((b"fn main to int ret 0 end\n" * 80))
+            r_init = subprocess.run(
+                [str(self.bins["ollm"]), "init", str(seed_ck), "256", "16", "16", "2", "32", "2", "2", "1", "4", "3000"],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(r_init.returncode, 0, r_init.stderr)
+
+            c_req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/spiral/cryst",
+                data=json.dumps({
+                    "base_ck": str(seed_ck),
+                    "domain_tok": str(dom_tok),
+                    "out_sp2": str(sp2_out),
+                    "f_exp": 16,
+                    "lambda_milli": 1000,
+                    "max_toks": 512,
+                    "strand_id": 1,
+                    "quant_bits": 4,
+                    "use_gpu": False,
+                }).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(c_req, timeout=15.0) as resp:
+                cr = json.loads(resp.read().decode("utf-8"))
+            self.assertTrue(cr["ok"])
+            self.assertTrue(cr["pack"]["valid_magic"])
+            self.assertEqual(cr["pack"]["quant_bits"], 4)
+
+            e_req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/spiral/eval",
+                data=json.dumps({
+                    "base_ck": str(seed_ck),
+                    "eval_tok": str(dom_tok),
+                    "strands": [str(sp2_out)],
+                    "top_k": 1,
+                    "windows": 4,
+                    "use_gpu": False,
+                }).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(e_req, timeout=15.0) as resp:
+                ev = json.loads(resp.read().decode("utf-8"))
+            self.assertTrue(ev["ok"])
+            self.assertIsNotNone(ev["loss"])
+            self.assertIsNotNone(ev["base_loss"])
+
+            s_req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/spiral/sample",
+                data=json.dumps({
+                    "base_ck": str(seed_ck),
+                    "strands": [str(sp2_out)],
+                    "prompt": "42",
+                    "max_tok": 12,
+                    "top_k": 1,
+                    "temp_milli": 0,
+                    "use_gpu": False,
+                }).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(s_req, timeout=15.0) as resp:
+                sm = json.loads(resp.read().decode("utf-8"))
+            self.assertTrue(sm["ok"])
+            self.assertGreater(len(sm["stdout"]), 0)
         finally:
             srv.shutdown()
             srv.server_close()
