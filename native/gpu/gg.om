@@ -21,6 +21,17 @@ note OMUTLG: 1 in the product; 0 in mutant lg (the w2 gradient of an application
 note earlier parameter layer is not launched, model.om's mutant lp on the chip), which gcmp and gcmp2 on
 note a looped checkpoint must catch. Without a loop the two are the same.
 const OMUTLG ulong 1
+note Frozen-core training on the chip (spec.om trainf's FREEZE_LAYERS F). ggfz: 0 the frozen
+note parameter count fz = og 31 + F og 32 (the embeddings wte and wpe, then layers 0..F-1), 1 F. With
+note fz > 0, ggbwd stops after layer F and launches no gradient into [0, fz) (the tied head's wte
+note term, the WPE column sums, the embedding scatter), so G[0, fz) stays the zero ggbwd wrote; ggadam
+note clips over that G and steps only [fz, P); ggdnst brings back only [fz, P), so the frozen f64
+note weights and moments on the host stay bit for bit (spext checks them by hash). A looped
+note checkpoint with F > 0 is exit 17, as cmdtrainf (ockload) refuses it on the CPU.
+note OMUTFZ: 1 in the product; 0 in mutant fz (the chip ignores the freeze: full backward, Adam and
+note download), which gcmp and gacmp with FREEZE_LAYERS and spext after gtrainf must catch.
+const OMUTFZ ulong 1
+global ggfz ulong 2
 
 note GPU setup failed (ggopen): a clear stage and error on stderr, then exit 75. L1014: a setup
 note that failed before buffers 2 and 3 existed used to reach ggdie's mapget of the unmapped slots, which
@@ -312,13 +323,21 @@ note Split-K for the weight gradients, whose depth is R = B T. A grid of (m/32)(
 note leaves most SMs idle (rung-6 gprof: id 4 at 1.7-6 TFLOP/s on 64-256 blocks), so ggks doubles
 note the split s (up to 16, R/s a multiple of 16) until the grid reaches 1024 blocks: then
 note blocks s < 2048, so the m n nz s partials fit the 2^21 floats of slot 37.
+note Under gkbf 1 a slice depth R/s must also be a multiple of the BF16 K tile 32 (gk.om gkbfok):
+note with R = 128 (the small shape B 4, T 32) the f32 rule took s = 8, depth 16, which gkmm refuses
+note with nverr -22, so gbcmp, gbcmp2 and gtrainb ended in ggdie (exit 84). At R = 16384 (B 64, T 256)
+note every s <= 16 leaves a depth that is a multiple of 32: the split there is unchanged.
 fn ggks m ulong n ulong nz ulong to ulong
 b = mul mul div m 32 div n 32 nz
 r = ggr
+kq = ulong 16
+if eq get gkbf 0 1
+kq = 32
+end
 s = ulong 1
 while lt mul b s 1024 bound 8
 s2 = mul s 2
-if or gt s2 16 ne rem r mul s2 16 0
+if or gt s2 16 ne rem r mul s2 kq 0
 ret s
 end
 s = s2
@@ -726,13 +745,18 @@ r = ggr
 ggew 20 ggp5 gga1 1 gga1 1
 ggew 20 mul r d gga1 13 gga1 13
 ggxw gga1 11 ggw 0 gga1 14 d v false
+if eq ggfzn 0
 ggwg gga1 11 gga1 10 ggg 0 v d
+end
 ggrmsb gga1 8 ggw get og 33 gga1 9
 ggain get og 33
 l = get og 56
-while gt l 0 bound 9223372036854775807
+while gt l ggfzl bound 9223372036854775807
 l = sub l 1
 ggbl l
+end
+if ne ggfzn 0
+ret
 end
 td = mul tt d
 ggu 0 td
@@ -813,18 +837,6 @@ omvp add s j f64 bitcast f32 x
 end
 end
 
-note chip parameters of chunk q back into the parameter banks as f64
-fn ggdnwc q ulong p ulong to void
-h = get gbmem 5
-o = get gga 0
-i0 = mul q OCH
-for j ulong sub oce q p i0
-i = add i0 j
-x = uint mapget h add o mul i 4 4
-owp i f64 bitcast f32 x
-end
-end
-
 note optimizer state (parameters, Adam pool) to the chip as f32 (m in gga 21, v in gga 22), and back
 fn ggupst to void
 ggupw
@@ -838,14 +850,39 @@ end
 put gkinv 0 1
 end
 
+note only [fz, P) comes back (ggfz): the frozen f64 weights and moments stay as loaded
 fn ggdnst to void
 p = get og 8
+fz = ggfzn
 for q ulong ocn p
-ggdnwc q p
-i0 = mul q OCH
-n = sub oce q p i0
-ggdnmc add get og 11 i0 add get gga 21 mul i0 4 n
-ggdnmc add get og 12 i0 add get gga 22 mul i0 4 n
+ggdnq q p fz
+end
+end
+
+note chunk q of P from its first index at or above fz: parameters, then both moments
+fn ggdnq q ulong p ulong fz ulong to void
+a = mul q OCH
+e = oce q p
+if le e fz
+ret
+end
+if lt a fz
+a = fz
+end
+n = sub e a
+ggdnwr a n
+ggdnmc add get og 11 a add get gga 21 mul a 4 n
+ggdnmc add get og 12 a add get gga 22 mul a 4 n
+end
+
+note chip parameters [a, a + n) back into the parameter banks as f64 (n at most OCH)
+fn ggdnwr a ulong n ulong to void
+h = get gbmem 5
+o = get gga 0
+for j ulong n
+i = add a j
+x = uint mapget h add o mul i 4 4
+owp i f64 bitcast f32 x
 end
 end
 
@@ -1000,15 +1037,24 @@ if eq OMUTC 0
 bc1 = 1.0f64
 bc2 = 1.0f64
 end
-ggu 0 p
-ggpt 1 gga1 0
-ggpt 2 gga1 21
-ggpt 3 gga1 22
-ggpt 4 gga1 1
+ggad24 p cl div lrs bc1 div 1.0f64 bc2
+end
+
+note ADAM over [fz, P) (ggfz; all of P without a freeze): the frozen weights and moments are not
+note touched on the chip. Clip factor cl, lr / bc1 and 1 / bc2 from ggadam.
+fn ggad24 p ulong cl f64 lb f64 ib f64 to void
+fz = ggfzn
+n = sub p fz
+o = mul fz 4
+ggu 0 n
+ggpt 1 add gga1 0 o
+ggpt 2 add gga1 21 o
+ggpt 3 add gga1 22 o
+ggpt 4 add gga1 1 o
 ggu 10 ulong grf cl
-ggu 11 ulong grf div lrs bc1
-ggu 12 ulong grf div 1.0f64 bc2
-ggrun 24 13 ggcd p 64 1 1
+ggu 11 ulong grf lb
+ggu 12 ulong grf ib
+ggrun 24 13 ggcd n 64 1 1
 end
 
 fn ggtms to void
@@ -1063,23 +1109,158 @@ end
 end
 end
 
-note gcmp CK DATA S: CPU ograd and GPU gradient for batch S; prints
-note `GC P maxabs_e12 maxref_e12 rel_e9 cpu_loss_micro gpu_loss_micro gpu_ns tol_e9` and GCMP PASS
-note (rel < tol, |loss difference| < 1e-5) or GCMP FAIL (exit 45). tol = R 2^-24 is the first-order
-note bound gamma_R on the f32 error of a sum of R = B T rows, the longest reduction of the weight
-note gradients, relative to the sum of magnitudes; the CPU reference is f64. ReLU units whose f64
-note pre-activation lies within f32 resolution of zero can take the other side on the GPU (receipt:
-note evidence/OMEGALLM/gpu/README.md), and both sides are valid subgradients.
-fn ggcmp to void
-if ne oargc 5
+note the chip's frozen count and layer (ggfz; 0 in mutant fz)
+fn ggfzn to ulong
+if eq OMUTFZ 0
+ret 0
+end
+ret get ggfz 0
+end
+
+fn ggfzl to ulong
+if eq OMUTFZ 0
+ret 0
+end
+ret get ggfz 1
+end
+
+note FREEZE_LAYERS f for the loaded checkpoint, checked as cmdtrainf: f > L is exit 2, f > 0 on a
+note looped checkpoint exit 17 (ockload's refusal); fz = og 31 + f og 32
+fn ggfzset f ulong to void
+if gt f get og 5
+exit 2
+end
+if and gt f 0 gt get og 59 1
+exit 17
+end
+put ggfz 0 0
+put ggfz 1 f
+if gt f 0
+put ggfz 0 add get og 31 mul f get og 32
+end
+end
+
+note `GFZ F fz`
+fn ggfzpr to void
+oputc 71
+oputc 70
+oputc 90
+oputc 32
+oputu get ggfz 1
+oputc 32
+oputu get ggfz 0
+oputc 10
+oflush
+end
+
+note gcmp and gacmp arguments CK DATA S [FREEZE_LAYERS]: load CK, open DATA, batch S; FREEZE_LAYERS
+note sets ggfz for the chip and ofreeze / ofzlay (cmdtrainf's freeze) for the CPU reference
+fn ggcarg to void
+na = oargc
+if and ne na 5 ne na 6
 exit 2
 end
 ockloop 2
 odopen 3
 obatch oargu 4
+if eq na 6
+ggfzset oargu 5
+ggfzpr
+put ofreeze 0 get ggfz 0
+put ofzlay 0 get ggfz 1
+end
+end
+
+note GRD[i] = 0 for i < fz: oadam's mask on the CPU reference gradient (the tied head still writes
+note the frozen wte's gradient on the CPU)
+fn ggfzz to void
+fz = get ggfz 0
+i = ulong 0
+while lt i fz bound 9223372036854775807
+ocsp i 0.0f64
+i = add i 1
+end
+end
+
+note after gggrad: true without a freeze; else `GCF F fz nonzero` over the chip's GRD[0, fz), which must
+note all be 0 (no frozen gradient launched)
+fn ggfzok to bool
+fz = get ggfz 0
+if eq fz 0
+ret true
+end
+n = ulong 0
+i = ulong 0
+while lt i fz bound 9223372036854775807
+if ne ocsg i 0.0f64
+n = add n 1
+end
+i = add i 1
+end
+oputc 71
+oputc 67
+oputc 70
+ggfzln n
+ret eq n 0
+end
+
+note ` F fz n` and a newline
+fn ggfzln n ulong to void
+oputc 32
+oputu get ggfz 1
+oputc 32
+oputu get ggfz 0
+oputc 32
+oputu n
+oputc 10
+end
+
+note after gacmp's step: true without a freeze; else `GAF F fz changed`, the frozen parameters whose CPU
+note value is not BLK (the loaded f64) or whose chip value (GRD, ggdw) is not f32 of it
+fn ggfzad p ulong to bool
+fz = get ggfz 0
+if eq fz 0
+ret true
+end
+n = ulong 0
+i = ulong 0
+while lt i fz bound 9223372036854775807
+n = add n ggfzd1 i p
+i = add i 1
+end
+oputc 71
+oputc 65
+oputc 70
+ggfzln n
+ret eq n 0
+end
+
+fn ggfzd1 i ulong p ulong to ulong
+w0 = ogrg add p i
+if ne bitcast ulong owg i bitcast ulong w0
+ret 1
+end
+if ne bitcast ulong ocsg i bitcast ulong f64 f32 w0
+ret 1
+end
+ret 0
+end
+
+note gcmp CK DATA S [FREEZE_LAYERS]: CPU ograd and GPU gradient for batch S; prints
+note `GC P maxabs_e12 maxref_e12 rel_e9 cpu_loss_micro gpu_loss_micro gpu_ns tol_e9` and GCMP PASS
+note (rel < tol, |loss difference| < 1e-5) or GCMP FAIL (exit 45). tol = R 2^-24 is the first-order
+note bound gamma_R on the f32 error of a sum of R = B T rows, the longest reduction of the weight
+note gradients, relative to the sum of magnitudes; the CPU reference is f64. ReLU units whose f64
+note pre-activation lies within f32 resolution of zero can take the other side on the GPU (receipt:
+note evidence/OMEGALLM/gpu/README.md), and both sides are valid subgradients. With FREEZE_LAYERS F
+note (ggcarg) both sides freeze as trainf: the CPU reference is ograd with ofzlay F and GRD[0, fz)
+note zeroed (oadam's mask), the chip's G[0, fz) must be exactly 0 (`GCF F fz nonzero`, ggfzok).
+fn ggcmp to void
+ggcarg
 put og 10 0
 lc = ograd
 p = get og 8
+ggfzz
 ggkeep p
 ggopen
 t0 = monons
@@ -1114,7 +1295,7 @@ tol = div f64 ggr 16777216.0f64
 oputl rmic mul tol 1000.0f64
 oputc 10
 ggtms
-ok = and lt rel tol lt dl 0.00001f64
+ok = and and lt rel tol lt dl 0.00001f64 ggfzok
 r = nvstop
 oputc 71
 oputc 67
@@ -1562,17 +1743,14 @@ ggad1 add i0 j p
 end
 end
 
-note gacmp CK DATA S: one step from CK on batch S with the chip gradient, Adam on the CPU (oadam, f64)
-note and on the chip (ggadam, f32); prints `GA P maxd_e12 maxu_e12 rel_e9 resid_e9 tol_e9 adam_ns
-note loss_micro` and GACMP PASS (resid = max(|d| - 2^-24 |c|) / max |u| < tol = 2^-16) or GACMP FAIL
-note (exit 46)
+note gacmp CK DATA S [FREEZE_LAYERS]: one step from CK on batch S with the chip gradient, Adam on the
+note CPU (oadam, f64) and on the chip (ggadam, f32); prints `GA P maxd_e12 maxu_e12 rel_e9 resid_e9
+note tol_e9 adam_ns loss_micro` and GACMP PASS (resid = max(|d| - 2^-24 |c|) / max |u| < tol = 2^-16)
+note or GACMP FAIL (exit 46). With FREEZE_LAYERS (ggcarg) oadam runs with ofreeze fz and the chip
+note with ggfz; every frozen chip weight must still be its uploaded f32 and every frozen CPU weight
+note its loaded f64 (`GAF F fz changed`, ggfzad).
 fn ggacmp to void
-if ne oargc 5
-exit 2
-end
-ockloop 2
-odopen 3
-obatch oargu 4
+ggcarg
 put og 10 0
 p = get og 8
 ggopen
@@ -1618,13 +1796,14 @@ oputc 32
 oputl rmic lg
 oputc 10
 r = nvstop
+ok = and lt res tol ggfzad p
 oputc 71
 oputc 65
 oputc 67
 oputc 77
 oputc 80
 oputc 32
-if lt res tol
+if ok
 oputc 80
 oputc 65
 oputc 83
@@ -1642,11 +1821,14 @@ oflush
 exit 46
 end
 
-note gtrainf CK TRAIN UNTIL EVERY: gtrain with the parameters and Adam state resident on the chip in
-note f32 (ggadam); only the batch goes up each step. At save points the state comes back to f64 for
-note ocksave and `T s+1 loss_micro` is printed; GT at the end has the last step's phase times.
+note gtrainf CK TRAIN UNTIL EVERY [FREEZE_LAYERS]: gtrain with the parameters and Adam state resident
+note on the chip in f32 (ggadam); only the batch goes up each step. At save points the state comes back
+note to f64 for ocksave and `T s+1 loss_micro` is printed; GT at the end has the last step's phase
+note times. FREEZE_LAYERS F > 0 is trainf's frozen core on the chip (ggfz): `GFZ F fz` first, then the
+note embeddings and layers 0..F-1 are skipped in backward, untouched by ADAM and saved as loaded.
 fn ggtrainf to void
-if ne oargc 6
+na = oargc
+if and ne na 6 ne na 7
 exit 2
 end
 ockloop 2
@@ -1655,6 +1837,10 @@ un = oargu 4
 ev = oargu 5
 if eq ev 0
 exit 2
+end
+if eq na 7
+ggfzset oargu 6
+ggfzpr
 end
 en = get og 42
 if lt un en
