@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/twitter-card.png" alt="Omega Helix — Pure-Omega Zero-CUDA DNA LLM Training Engine" width="100%">
+  <img src="assets/twitter-card.jpg" alt="Omega Helix — Pure-Omega Zero-CUDA DNA LLM Training Engine" width="100%">
 </p>
 
 # Omega Helix
