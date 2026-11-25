@@ -1,0 +1,10 @@
+build/
+*.ck
+*.ck.tmp
+*.bin
+*.tok
+*.hc
+*.sp
+.DS_Store
+__pycache__/
+*.pyc
