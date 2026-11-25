@@ -551,7 +551,7 @@ if a[0] == "import-hf":
         str(cfg["num_hidden_layers"]), B, "3", total, lr], check=True)
 elif a[0] == "export-hf":
     assert os.path.getsize(a[1]) > 0 and a[3] in ("f32", "bf16")
-    os.makedirs(a[2], exist_ok=True)
+    assert os.path.isdir(a[2])  # real tool requires OUT_DIR to exist
     json.dump({{"model_type": "llama"}}, open(os.path.join(a[2], "config.json"), "w"))
     open(os.path.join(a[2], "model.safetensors"), "wb").write(struct.pack("<Q", 2) + b"{{}}")
 elif a[0] == "export-gguf":
