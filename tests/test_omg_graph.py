@@ -650,7 +650,7 @@ fn main to int
   a = long -15
   b = long 28
   c = add a b
-  f = fma 2.0f64 3.5f64 1.0f64
+  f = add mul 2.0f64 3.5f64 1.0f64
   fi = long f
   ret int add c fi
 end
@@ -701,11 +701,13 @@ end
 
         progs = out.decode("utf-8").split("===")
         self.assertEqual(len(progs) - 1, 200)
+        # x86linux omc does not support AArch64 `fma`, so compile decoded samples as AArch64 om2 on x86_64
+        sample_hdr = "" if platform.machine().lower() in ("x86_64", "amd64") else self.host_hdr
         for chunk in progs[1:]:
             idx, body = chunk.split("\n", 1)
             p = subprocess.run(
                 [OMC],
-                input=(self.host_hdr + body).encode("utf-8"),
+                input=(sample_hdr + body).encode("utf-8"),
                 capture_output=True,
             )
             self.assertEqual(
