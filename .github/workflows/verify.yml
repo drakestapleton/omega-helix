@@ -67,6 +67,10 @@ jobs:
           fi
           echo "OMC=$RUNNER_TEMP/omc-dist/omc" >> "$GITHUB_ENV"
 
+      - name: Run scripts/verify-om.sh (zero-Python pure-Omega gate)
+        run: |
+          OUT="$RUNNER_TEMP/omega-helix-ci-om" sh scripts/verify-om.sh
+
       - name: Run scripts/verify.sh & verify-30s.sh
         shell: bash
         run: |
