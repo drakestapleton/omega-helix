@@ -1,0 +1,2690 @@
+note SPDX-License-Identifier: Apache-2.0
+note native/univ/interchange.om: Pure-Omega Universal Weight Interchange (ollm-interchange), Phase 3.
+note Built by `TARGET=interchange sh scripts/build.sh` after net/json.om, net/jsonw.om, univ/umath.om,
+note univ/uarena.om and univ/uckpt.om. No float library, no C, no Python: every byte is read and written here.
+note
+note Commands (argv[1]):
+note  import-hf CONFIG.json MODEL.safetensors OUT.ck [T B TOTAL LRMICRO]
+note    model_type llama | mistral | qwen2 | qwen3 | gemma | helix; dtypes F32 BF16 F16 F64.
+note    HF linear weights [out][in] are transposed into Helix [in][out] row-major (y = x . W).
+note    Flags: llama/mistral/qwen2 1|2|16, qwen3 1|2|8|16 (each +4 when untied), gemma 1|4|16|64 with
+note    wte = embed * sqrt(D), lmh = embed and every gemma RMSNorm gain stored as 1 + w; helix from
+note    helix_arch_flags + helix_loop_lp/lc/np. Defaults T = min(max_position_embeddings, 256) (WPE models:
+note    T = rows of model.embed_positions.weight), B 1, TOTAL 1000, LRMICRO 100, seed 0, step 0, m = v = 0.
+note    stdout `I V T D H HKV F L P FLAGS`.
+note  export-hf IN.ck OUT_DIR [f32|bf16]  -> OUT_DIR/config.json (jsonw.om) + OUT_DIR/model.safetensors.
+note    OUT_DIR must exist (the a64macos target has no makedir host word; exit 70 otherwise).
+note    stdout `XH NTENSORS SAFETENSORS_BYTES`.
+note  export-gguf IN.ck OUT.gguf          -> GGUF v3 (magic 1179993927), 20 KV pairs, F32 tensors, 32-byte
+note    aligned data; llama arch Q/K rows permuted as convert_hf_to_gguf. stdout `XG NTENSORS FILE_BYTES`.
+note  upgrade LEGACY.ck OUT.ck            -> OLLMCK01/02/03 to OLLMCK04 (gpt flags 0, HKV = H, eps 1e-5,
+note    loop from CK03, p/m/v bit-exact). stdout `U VER P`.
+note Architecture rule for both exports (loop NP <= 1 for every named family): RoPE+SwiGLU+QKnorm = qwen3,
+note RoPE+SwiGLU = llama, RoPE+GeGLU+untied with wte == lmh*sqrt(D) bit for bit = gemma, else helix.
+note Exit codes: 2 usage, 70 I/O, 80 config JSON malformed, 81 config field missing/invalid or model_type
+note unsupported, 82 unsupported feature (rope_scaling, head_dim != D/H, activation, nonzero bias, sliding
+note window < T), 83 safetensors header malformed (size, JSON, entry, byte size, overlap, hole, trailing,
+note duplicate), 84 tensor missing/unknown or dtype unsupported, 85 shape mismatch, 86 NaN/Inf weight,
+note 87 truncated safetensors, 88 geometry refused; CK loads 10..15 exactly as uckpt.om.
+
+const IXOB ulong 1048576
+const IXBIG ulong 9223372036854775807
+
+note ixc config slots: 0 model_type (1 llama 2 qwen2 3 qwen3 4 mistral 5 gemma 6 helix 99 other)
+note  1 V 2 D 3 H 4 HKV 5 F 6 L 7 max_pos 8 head_dim 9 eps bits 10 eps set 11 theta bits 12 theta set
+note  13 tie (0 absent 1 false 2 true) 14 rope_scaling set 15 sliding_window 16 use_sliding_window
+note  17 hidden_act 18 hidden_activation (0 none 1 silu 2 gelu-tanh 3 other 4 gelu-erf 5 relu)
+note  19 helix flags 20 helix flags set 21 LP 22 LC 23 NP
+global ixc ulong 64
+note ixs state: 0 extents 1 safetensors fd 2 data base 3 data bytes 4 table slots 5 name length
+note  6 out fill 7 out file pos 8 out fd 9 path length 10 export tensors 11 T given 12 T arg
+note  13 extent capacity 14 suffix pos 15 B 16 TOTAL 17 LRMICRO
+global ixs ulong 32
+global ixt ulong *
+global ixe ulong *
+global ixl ulong *
+note ixq one export tensor: 0 code 1 layer 2 ndims 3 rows 4 cols 5 helix base 6 kind 7 heads
+global ixq ulong 8
+note ixent one safetensors entry: 0 dtype 1 ndims 2 d0 3 d1 4 begin 5 end 6 numel 7 seen mask
+global ixent ulong 8
+note ixld tensor load: 0 dtype 1 base 2 mode 3 rows 4 cols
+global ixld ulong 8
+note ixm export mode: 0 arch (1 llama 3 qwen3 5 gemma 6 helix) 1 bf16 2 permute q/k 3 gguf
+global ixm ulong 4
+global ixf f64 4
+global ixnm uchar 1100
+global ixpath uchar 4400
+global ixob uchar 1048576
+
+text ix_c_imp "import-hf"
+text ix_c_exh "export-hf"
+text ix_c_exg "export-gguf"
+text ix_c_upg "upgrade"
+text ix_s_f32 "f32"
+text ix_s_bf16 "bf16"
+
+text ixk_mt "model_type"
+text ixk_vs "vocab_size"
+text ixk_hs "hidden_size"
+text ixk_nh "num_attention_heads"
+text ixk_kv "num_key_value_heads"
+text ixk_is "intermediate_size"
+text ixk_nl "num_hidden_layers"
+text ixk_mp "max_position_embeddings"
+text ixk_hd "head_dim"
+text ixk_eps "rms_norm_eps"
+text ixk_th "rope_theta"
+text ixk_tie "tie_word_embeddings"
+text ixk_rs "rope_scaling"
+text ixk_sw "sliding_window"
+text ixk_usw "use_sliding_window"
+text ixk_act "hidden_act"
+text ixk_acn "hidden_activation"
+text ixk_hf "helix_arch_flags"
+text ixk_lp "helix_loop_lp"
+text ixk_lc "helix_loop_lc"
+text ixk_np "helix_loop_np"
+text ixk_arch "architectures"
+text ixk_td "torch_dtype"
+text ixk_ab "attention_bias"
+
+text ixv_llama "llama"
+text ixv_qwen2 "qwen2"
+text ixv_qwen3 "qwen3"
+text ixv_mistral "mistral"
+text ixv_gemma "gemma"
+text ixv_helix "helix"
+text ixv_silu "silu"
+text ixv_gtanh "gelu_pytorch_tanh"
+text ixv_gnew "gelu_new"
+text ixv_gelu "gelu"
+text ixv_relu "relu"
+text ixv_allama "LlamaForCausalLM"
+text ixv_aqwen3 "Qwen3ForCausalLM"
+text ixv_agemma "GemmaForCausalLM"
+text ixv_ahelix "HelixForCausalLM"
+text ixv_fp32 "float32"
+text ixv_bf16 "bfloat16"
+
+text ixs_meta "__metadata__"
+text ixs_fmt "format"
+text ixs_pt "pt"
+text ixs_dtype "dtype"
+text ixs_shape "shape"
+text ixs_doff "data_offsets"
+text ixs_F32 "F32"
+text ixs_BF16 "BF16"
+text ixs_F16 "F16"
+text ixs_F64 "F64"
+
+text ixn_emb "model.embed_tokens.weight"
+text ixn_pos "model.embed_positions.weight"
+text ixn_norm "model.norm.weight"
+text ixn_lmh "lm_head.weight"
+text ixn_lay "model.layers."
+text ixn_inv "rotary_emb.inv_freq"
+text ixr_0 "input_layernorm.weight"
+text ixr_1 "self_attn.q_proj.weight"
+text ixr_2 "self_attn.k_proj.weight"
+text ixr_3 "self_attn.v_proj.weight"
+text ixr_4 "self_attn.o_proj.weight"
+text ixr_5 "self_attn.q_norm.weight"
+text ixr_6 "self_attn.k_norm.weight"
+text ixr_7 "post_attention_layernorm.weight"
+text ixr_8 "mlp.gate_proj.weight"
+text ixr_9 "mlp.up_proj.weight"
+text ixr_10 "mlp.down_proj.weight"
+text ixr_11 "self_attn.q_proj.bias"
+text ixr_12 "self_attn.k_proj.bias"
+text ixr_13 "self_attn.v_proj.bias"
+text ixr_14 "self_attn.o_proj.bias"
+text ixr_15 "mlp.gate_proj.bias"
+text ixr_16 "mlp.up_proj.bias"
+text ixr_17 "mlp.down_proj.bias"
+
+text ixg_temb "token_embd.weight"
+text ixg_tpos "position_embd.weight"
+text ixg_tnorm "output_norm.weight"
+text ixg_tout "output.weight"
+text ixg_blk "blk."
+text ixg_r0 ".attn_norm.weight"
+text ixg_r1 ".attn_q.weight"
+text ixg_r2 ".attn_k.weight"
+text ixg_r3 ".attn_v.weight"
+text ixg_r4 ".attn_output.weight"
+text ixg_r5 ".attn_q_norm.weight"
+text ixg_r6 ".attn_k_norm.weight"
+text ixg_r7 ".ffn_norm.weight"
+text ixg_r8 ".ffn_gate.weight"
+text ixg_r9 ".ffn_up.weight"
+text ixg_r10 ".ffn_down.weight"
+text ixg_arch "general.architecture"
+text ixg_name "general.name"
+text ixg_namev "omega-helix"
+text ixg_align "general.alignment"
+text ixg_ftype "general.file_type"
+text ixg_vs ".vocab_size"
+text ixg_ctx ".context_length"
+text ixg_emb ".embedding_length"
+text ixg_blkc ".block_count"
+text ixg_ffn ".feed_forward_length"
+text ixg_hc ".attention.head_count"
+text ixg_hkv ".attention.head_count_kv"
+text ixg_kl ".attention.key_length"
+text ixg_vl ".attention.value_length"
+text ixg_eps ".attention.layer_norm_rms_epsilon"
+text ixg_fb ".rope.freq_base"
+text ixg_rd ".rope.dimension_count"
+text ixg_hfl "helix.arch_flags"
+text ixg_hlp "helix.loop.lp"
+text ixg_hlc "helix.loop.lc"
+text ixg_hnp "helix.loop.np"
+
+text ixp_cfg "/config.json"
+text ixp_st "/model.safetensors"
+
+note ======== small helpers ========
+
+fn ix_arg_eq ai ulong s view uchar * to bool
+r = argread ai uarg 0 4096
+if ne r long len s
+ret false
+end
+for i ulong len s
+if ne get uarg i get s i
+ret false
+end
+end
+ret true
+end
+
+fn ix_bad v f64 to bool
+ret ne sub v v 0.0
+end
+
+fn ix_p10 k ulong to f64
+r = 1.0f64
+for i ulong k bound 400
+r = mul r 10.0
+end
+ret r
+end
+
+note m * 10^ex: one correctly rounded operation when m < 2^53 and |ex| <= 22 (both operands exact)
+fn ix_scale m ulong ex long to f64
+if eq m 0
+ret 0.0f64
+end
+v = f64 m
+x = ex
+if lt m 9007199254740992
+if and ge x -22 le x 22
+if ge x 0
+ret mul v ix_p10 ulong x
+end
+ret div v ix_p10 ulong neg x
+end
+end
+while gt x 22 bound 100000
+v = mul v 1.0e22
+x = sub x 22
+end
+while lt x -22 bound 100000
+v = div v 1.0e22
+x = add x 22
+end
+if ge x 0
+ret mul v ix_p10 ulong x
+end
+ret div v ix_p10 ulong neg x
+end
+
+fn ix_nexp src view uchar * p ulong e ulong to long
+q = p
+ng = false
+if lt q e
+c = get src q
+if eq c 45
+ng = true
+q = add q 1
+else
+if eq c 43
+q = add q 1
+end
+end
+end
+x = long 0
+while lt q e bound 1000000
+d = long sub get src q 48
+if lt x 100000
+x = add mul x 10 d
+end
+q = add q 1
+end
+if ng
+ret neg x
+end
+ret x
+end
+
+note a JSON number lexeme src[off .. off + n) as f64 (19 significant digits, then ix_scale)
+fn ix_numf src view uchar * off ulong n ulong to f64
+e = add off n
+p = off
+ng = false
+if eq get src p 45
+ng = true
+p = add p 1
+end
+m = ulong 0
+nd = ulong 0
+ex = long 0
+fr = false
+while lt p e bound 1000000
+c = get src p
+if or eq c 101 eq c 69
+ex = add ex ix_nexp src add p 1 e
+break
+end
+if eq c 46
+fr = true
+else
+if lt nd 19
+m = add mul m 10 ulong sub c 48
+if gt m 0
+nd = add nd 1
+end
+if fr
+ex = sub ex 1
+end
+else
+if not fr
+ex = add ex 1
+end
+end
+end
+p = add p 1
+end
+v = ix_scale m ex
+if ng
+ret neg v
+end
+ret v
+end
+
+fn ix_e10 a f64 to long
+k = long 0
+x = a
+while ge x 10.0 bound 400
+x = div x 10.0
+k = add k 1
+end
+while lt x 1.0 bound 400
+x = mul x 10.0
+k = sub k 1
+end
+ret k
+end
+
+fn ix_cand a f64 sc long to ulong
+x = a
+if ge sc 0
+x = mul a ix_p10 ulong sc
+else
+x = div a ix_p10 ulong neg sc
+end
+ret ulong add x 0.5
+end
+
+fn ix_lexu lex edit uchar * w ulong v ulong to ulong
+tmp = new uchar 24 0
+k = ulong 0
+x = v
+while true bound 21
+put tmp k uchar add rem x 10 48
+k = add k 1
+x = div x 10
+if eq x 0
+break
+end
+end
+q = w
+while gt k 0 bound 21
+k = sub k 1
+put lex q get tmp k
+q = add q 1
+end
+ret q
+end
+
+note shortest decimal (<= 17 digits) that ix_numf reads back to the same f64 bits
+fn ix_fmt lex edit uchar * v f64 to ulong
+if eq v 0.0
+put lex 0 48
+ret 1
+end
+a = fabs v
+k = ix_e10 a
+want = bitcast ulong a
+mm = ulong 0
+sc = long 0
+for p ulong 17
+sc = sub long p k
+mm = ix_cand a sc
+if eq bitcast ulong ix_scale mm neg sc want
+break
+end
+end
+w = ulong 0
+if lt v 0.0
+put lex 0 45
+w = 1
+end
+w = ix_lexu lex w mm
+if ne sc 0
+put lex w 101
+w = add w 1
+if gt sc 0
+put lex w 45
+w = add w 1
+w = ix_lexu lex w ulong sc
+else
+w = ix_lexu lex w ulong neg sc
+end
+end
+ret w
+end
+
+fn ix_wf64 ob edit uchar * v f64 to void
+lex = new uchar 64 0
+n = ix_fmt lex v
+js_wnumb ob lex 0 n
+end
+
+note f64 -> bf16 bits, one round-to-nearest-even of the f64 value (no double rounding through f32)
+fn ix_bf16 v f64 to ulong
+f = f32 v
+b = ulong bitcast uint f
+hi = shr b 16
+lo = and b 65535
+if and eq lo 32768 ne f64 f v
+if gt fabs f64 f fabs v
+ret hi
+end
+ret and add hi 1 65535
+end
+ret and shr add b add 32767 and hi 1 16 65535
+end
+
+note ======== name buffer ========
+
+fn ixn_reset to void
+put ixs 5 0
+end
+
+fn ixn_c c ulong to void
+n = get ixs 5
+if ge n 1024
+exit 70
+end
+put ixnm n uchar and c 255
+put ixs 5 add n 1
+end
+
+fn ixn_t t view uchar * to void
+for i ulong len t
+ixn_c ulong get t i
+end
+end
+
+fn ixn_dec v ulong to void
+tmp = new uchar 24 0
+k = ulong 0
+x = v
+while true bound 21
+put tmp k uchar add rem x 10 48
+k = add k 1
+x = div x 10
+if eq x 0
+break
+end
+end
+while gt k 0 bound 21
+k = sub k 1
+ixn_c ulong get tmp k
+end
+end
+
+fn ixn_at off ulong t view uchar * to bool
+if ne get ixs 5 add off len t
+ret false
+end
+for i ulong len t
+if ne get ixnm add off i get t i
+ret false
+end
+end
+ret true
+end
+
+fn ixn_eq t view uchar * to bool
+ret ixn_at 0 t
+end
+
+fn ixn_pre t view uchar * to bool
+if gt len t get ixs 5
+ret false
+end
+for i ulong len t
+if ne get ixnm i get t i
+ret false
+end
+end
+ret true
+end
+
+fn ixn_suf t view uchar * to bool
+n = get ixs 5
+if gt len t n
+ret false
+end
+ret ixn_at sub n len t t
+end
+
+fn ixn_arch to void
+a = get ixm 0
+if eq a 1
+ixn_t ixv_llama
+ret
+end
+if eq a 3
+ixn_t ixv_qwen3
+ret
+end
+if eq a 5
+ixn_t ixv_gemma
+ret
+end
+ixn_t ixv_helix
+end
+
+note ======== buffered writer (ixob -> ixs 8 fd) and paths ========
+
+fn ix_path_arg ai ulong to void
+n = uargp ai
+for i ulong n
+put ixpath i get uarg i
+end
+put ixs 9 n
+end
+
+fn ix_path_t t view uchar * to void
+n = get ixs 9
+if gt add n len t 4300
+exit 2
+end
+for i ulong len t
+put ixpath add n i get t i
+end
+put ixs 9 add n len t
+end
+
+fn ixw_open to void
+fd = int fopen ixpath 0 get ixs 9 577 420
+if lt fd 0
+exit 70
+end
+put ixs 8 ulong fd
+put ixs 6 0
+put ixs 7 0
+end
+
+fn ixw_flush to void
+n = get ixs 6
+fd = int get ixs 8
+pos = get ixs 7
+p = ulong 0
+while lt p n bound 1000000
+w = pwrite fd ixob p sub n p long add pos p
+if le w 0
+exit 70
+end
+p = add p ulong w
+end
+put ixs 7 add pos n
+put ixs 6 0
+end
+
+fn ixw_b c ulong to void
+n = get ixs 6
+if ge n IXOB
+ixw_flush
+n = 0
+end
+put ixob n uchar and c 255
+put ixs 6 add n 1
+end
+
+fn ixw_u16 v ulong to void
+ixw_b and v 255
+ixw_b and shr v 8 255
+end
+
+fn ixw_u32 v ulong to void
+for k ulong 4
+ixw_b and shr v mul k 8 255
+end
+end
+
+fn ixw_u64 v ulong to void
+for k ulong 8
+ixw_b and shr v mul k 8 255
+end
+end
+
+fn ixw_pos to ulong
+ret add get ixs 7 get ixs 6
+end
+
+fn ixw_nm to void
+n = get ixs 5
+ixw_u64 n
+for i ulong n
+ixw_b ulong get ixnm i
+end
+end
+
+fn ixw_close to ulong
+ixw_flush
+fd = int get ixs 8
+if ne fsync fd 0
+exit 70
+end
+if ne fclose fd 0
+exit 70
+end
+ret get ixs 7
+end
+
+note ======== OLLMCK04 load without activation buffers ========
+
+fn ix_geom to bool
+if not ugeom_check
+ret false
+end
+ret ugeom_params
+end
+
+fn ix_alloc3 to void
+p = get ug 10
+r = enlarge up p
+if ne r 0
+exit 70
+end
+r = enlarge um p
+if ne r 0
+exit 70
+end
+r = enlarge uv p
+if ne r 0
+exit 70
+end
+end
+
+fn ix_zero_mv to void
+p = get ug 10
+i = ulong 0
+while lt i p bound IXBIG
+put um i 0.0
+put uv i 0.0
+i = add i 1
+end
+end
+
+fn ix_ck_hdr ai ulong to ulong
+sz = uofsz ai
+if lt sz UCKHDR
+exit 10
+end
+if ne uoprd ai 0 0 UCKHDR UCKHDR
+exit 10
+end
+if ne uopw_get8 0 UMAGIC_CK4
+exit 11
+end
+for i ulong 8
+put ug i uopw_get8 add 8 mul i 8
+end
+put ug 20 uopw_get8 72
+put ug 21 uopw_get8 80
+put ug 22 uopw_get8 88
+put ug 23 uopw_get8 96
+for j ulong 8
+put ug add 12 j uopw_get8 add 112 mul j 8
+end
+pf = uopw_get8 104
+fnv = uopw_get8 200
+if not ix_geom
+exit 12
+end
+p = get ug 10
+if ne p pf
+exit 13
+end
+want = add UCKHDR mul 24 p
+if lt sz want
+exit 10
+end
+if gt sz want
+exit 15
+end
+ret fnv
+end
+
+fn ix_ck_load ai ulong to void
+fnv = ix_ck_hdr ai
+ix_alloc3
+put uck_st 0 14695981039346656037
+put uck_st 1 UCKHDR
+for k ulong 3
+uck_load_pool ai k
+end
+if ne get uck_st 0 fnv
+exit 14
+end
+end
+
+fn ix_finite to void
+p = get ug 10
+i = ulong 0
+while lt i p bound IXBIG
+if ix_bad get up i
+exit 86
+end
+i = add i 1
+end
+end
+
+note ======== config.json reader ========
+
+fn ix_slurp ai ulong src edit uchar * code ulong to ulong
+pl = uargp ai
+fd = int fopen uarg 0 pl 0 0
+if lt fd 0
+exit 70
+end
+sz = fseek fd 0 2
+if lt sz 0
+exit 70
+end
+n = ulong sz
+if or eq n 0 gt n len src
+c = fclose fd
+exit int code
+end
+got = ulong 0
+while lt got n bound 1000000
+r = pread fd src got sub n got long got
+if le r 0
+exit 70
+end
+got = add got ulong r
+end
+if ne fclose fd 0
+exit 70
+end
+ret n
+end
+
+fn ixj_u src view uchar * tape view uint * v ulong to ulong
+if ne js_type tape v jsnum
+exit 81
+end
+o = js_off tape v
+if not js_isu src o
+exit 81
+end
+ret js_tou src o
+end
+
+fn ix_stu src view uchar * tape view uint * v ulong to ulong
+if ne js_type tape v jsnum
+exit 83
+end
+o = js_off tape v
+if not js_isu src o
+exit 83
+end
+ret js_tou src o
+end
+
+fn ixj_f src view uchar * tape view uint * v ulong to f64
+if ne js_type tape v jsnum
+exit 81
+end
+ret ix_numf src js_off tape v js_span tape v
+end
+
+fn ixj_b src view uchar * tape view uint * v ulong to ulong
+t = js_type tape v
+if eq t jstrue
+ret 2
+end
+if eq t jsfalse
+ret 1
+end
+exit 81
+end
+
+fn ix_cfg_mt src view uchar * tape view uint * v ulong to ulong
+if ne js_type tape v jsstr
+exit 81
+end
+o = js_off tape v
+if js_streq src o ixv_llama
+ret 1
+end
+if js_streq src o ixv_qwen2
+ret 2
+end
+if js_streq src o ixv_qwen3
+ret 3
+end
+if js_streq src o ixv_mistral
+ret 4
+end
+if js_streq src o ixv_gemma
+ret 5
+end
+if js_streq src o ixv_helix
+ret 6
+end
+ret 99
+end
+
+fn ix_cfg_act src view uchar * tape view uint * v ulong to ulong
+t = js_type tape v
+if eq t jsnull
+ret 0
+end
+if ne t jsstr
+exit 81
+end
+o = js_off tape v
+if js_streq src o ixv_silu
+ret 1
+end
+if or js_streq src o ixv_gtanh js_streq src o ixv_gnew
+ret 2
+end
+if js_streq src o ixv_gelu
+ret 4
+end
+if js_streq src o ixv_relu
+ret 5
+end
+ret 3
+end
+
+fn ix_cfg_m1 src view uchar * tape view uint * ko ulong v ulong to bool
+if js_streq src ko ixk_mt
+put ixc 0 ix_cfg_mt src tape v
+ret true
+end
+if js_streq src ko ixk_vs
+put ixc 1 ixj_u src tape v
+ret true
+end
+if js_streq src ko ixk_hs
+put ixc 2 ixj_u src tape v
+ret true
+end
+if js_streq src ko ixk_nh
+put ixc 3 ixj_u src tape v
+ret true
+end
+if js_streq src ko ixk_kv
+put ixc 4 ixj_u src tape v
+ret true
+end
+if js_streq src ko ixk_is
+put ixc 5 ixj_u src tape v
+ret true
+end
+if js_streq src ko ixk_nl
+put ixc 6 ixj_u src tape v
+ret true
+end
+if js_streq src ko ixk_mp
+put ixc 7 ixj_u src tape v
+ret true
+end
+if js_streq src ko ixk_hd
+put ixc 8 ixj_u src tape v
+ret true
+end
+ret false
+end
+
+fn ix_cfg_m2 src view uchar * tape view uint * ko ulong v ulong to bool
+if js_streq src ko ixk_eps
+put ixc 9 bitcast ulong ixj_f src tape v
+put ixc 10 1
+ret true
+end
+if js_streq src ko ixk_th
+put ixc 11 bitcast ulong ixj_f src tape v
+put ixc 12 1
+ret true
+end
+if js_streq src ko ixk_tie
+put ixc 13 ixj_b src tape v
+ret true
+end
+if js_streq src ko ixk_rs
+if ne js_type tape v jsnull
+put ixc 14 1
+end
+ret true
+end
+if js_streq src ko ixk_sw
+if ne js_type tape v jsnull
+put ixc 15 ixj_u src tape v
+end
+ret true
+end
+if js_streq src ko ixk_usw
+put ixc 16 sub ixj_b src tape v 1
+ret true
+end
+if js_streq src ko ixk_act
+put ixc 17 ix_cfg_act src tape v
+ret true
+end
+if js_streq src ko ixk_acn
+put ixc 18 ix_cfg_act src tape v
+ret true
+end
+ret false
+end
+
+fn ix_cfg_m3 src view uchar * tape view uint * ko ulong v ulong to void
+if js_streq src ko ixk_hf
+put ixc 19 ixj_u src tape v
+put ixc 20 1
+ret
+end
+if js_streq src ko ixk_lp
+put ixc 21 ixj_u src tape v
+ret
+end
+if js_streq src ko ixk_lc
+put ixc 22 ixj_u src tape v
+ret
+end
+if js_streq src ko ixk_np
+put ixc 23 ixj_u src tape v
+end
+end
+
+fn ix_cfg_member src view uchar * tape view uint * k ulong to void
+ko = js_off tape k
+v = add k 1
+if ix_cfg_m1 src tape ko v
+ret
+end
+if ix_cfg_m2 src tape ko v
+ret
+end
+ix_cfg_m3 src tape ko v
+end
+
+fn ix_cfg ai ulong to void
+src = new uchar 262144 0
+tape = new uint 65536 0
+n = ix_slurp ai src 80
+if lt js_init tape 262144 64 0
+exit 80
+end
+if le js_parse src tape n 0
+exit 80
+end
+if ne js_type tape 0 jsobj
+exit 80
+end
+k = js_first tape 0
+while ne k jsnone bound 1000000
+ix_cfg_member src tape k
+k = js_mnext tape k
+end
+end
+
+fn ix_cfg_flags mt ulong to ulong
+if or eq mt 1 or eq mt 2 eq mt 4
+if gt get ixc 17 1
+exit 82
+end
+ret 19
+end
+if eq mt 3
+if gt get ixc 17 1
+exit 82
+end
+ret 27
+end
+if eq mt 5
+a = get ixc 18
+if and ne a 0 ne a 2
+exit 82
+end
+if eq get ixc 13 1
+exit 82
+end
+ret 85
+end
+if eq get ixc 20 0
+exit 81
+end
+ret get ixc 19
+end
+
+fn ix_cfg_check to void
+mt = get ixc 0
+if or eq mt 0 eq mt 99
+exit 81
+end
+for i ulong 6
+if and ne i 3 eq get ixc add 1 i 0
+exit 81
+end
+end
+if gt get ixc 6 100000
+exit 81
+end
+h = get ixc 3
+hkv = get ixc 4
+if eq hkv 0
+hkv = h
+end
+hd = get ixc 8
+if and ne hd 0 ne mul hd h get ixc 2
+exit 82
+end
+if ne get ixc 14 0
+exit 82
+end
+fl = ix_cfg_flags mt
+if and ne mt 5 ne mt 6
+if ne get ixc 13 2
+fl = or fl 4
+end
+end
+if eq mt 6
+tie = get ixc 13
+if ne tie 0
+if ne eq tie 2 eq and fl 4 0
+exit 81
+end
+end
+end
+put ug 0 get ixc 1
+put ug 2 get ixc 2
+put ug 3 h
+put ug 4 hkv
+put ug 5 get ixc 5
+put ug 6 get ixc 6
+put ug 7 get ixs 15
+put ug 12 fl
+ix_cfg_scal fl
+end
+
+fn ix_cfg_scal fl ulong to void
+eps = 1.0e-6f64
+if ne get ixc 10 0
+eps = bitcast f64 get ixc 9
+end
+if or ix_bad eps le eps 0.0
+exit 81
+end
+put ug 14 bitcast ulong eps
+th = 10000.0f64
+if ne get ixc 12 0
+th = bitcast f64 get ixc 11
+end
+mi = mul th 1000.0
+if or ix_bad mi or le mi 0.0 ge mi 1.0e18
+exit 81
+end
+if ne mi f64 ulong mi
+exit 81
+end
+put ug 13 ulong mi
+wd = 0.0f64
+if ne and fl 16 0
+wd = 0.1f64
+end
+put ug 15 bitcast ulong wd
+put ug 16 100
+put ug 17 0
+put ug 18 0
+put ug 19 0
+if eq get ixc 0 6
+put ug 17 get ixc 21
+put ug 18 get ixc 22
+put ug 19 get ixc 23
+end
+put ug 20 0
+put ug 21 0
+put ug 22 get ixs 16
+put ug 23 bitcast ulong div f64 get ixs 17 1000000.0
+end
+
+note ======== safetensors header reader ========
+
+fn ix_st_open ai ulong to ulong
+pl = uargp ai
+fd = int fopen uarg 0 pl 0 0
+if lt fd 0
+exit 70
+end
+put ixs 1 ulong fd
+sz = fseek fd 0 2
+if lt sz 8
+exit 87
+end
+hb = new uchar 8 0
+if ne pread fd hb 0 8 0 8
+exit 87
+end
+n = ulong 0
+for k ulong 8
+n = or n shl ulong get hb k mul k 8
+end
+if or lt n 2 gt n 983040
+exit 83
+end
+if gt add 8 n ulong sz
+exit 87
+end
+put ixs 2 add 8 n
+put ixs 3 sub ulong sz add 8 n
+ret n
+end
+
+fn ix_st_read src edit uchar * n ulong to void
+fd = int get ixs 1
+got = ulong 0
+while lt got n bound 1000000
+r = pread fd src got sub n got long add 8 got
+if le r 0
+exit 87
+end
+got = add got ulong r
+end
+end
+
+fn ix_key src view uchar * tape view uint * k ulong to void
+nb = new uchar 1100 0
+r = js_sget src js_off tape k nb
+if or lt r 0 gt r 1024
+exit 83
+end
+n = ulong r
+for i ulong n
+put ixnm i get nb i
+end
+put ixs 5 n
+end
+
+fn ix_dtype src view uchar * o ulong to ulong
+if js_streq src o ixs_F32
+ret 1
+end
+if js_streq src o ixs_BF16
+ret 2
+end
+if js_streq src o ixs_F16
+ret 3
+end
+if js_streq src o ixs_F64
+ret 4
+end
+exit 84
+end
+
+fn ix_dsz dt ulong to ulong
+if eq dt 1
+ret 4
+end
+if eq dt 4
+ret 8
+end
+ret 2
+end
+
+fn ix_st_shape src view uchar * tape view uint * v ulong to void
+if ne js_type tape v jsarr
+exit 83
+end
+nd = js_nkids tape v
+if gt nd 8
+exit 83
+end
+put ixent 1 nd
+put ixent 2 0
+put ixent 3 0
+nm = ulong 1
+i = ulong 0
+e = js_first tape v
+while ne e jsnone bound 9
+d = ix_stu src tape e
+if gt d 1099511627776
+exit 83
+end
+if and ne d 0 gt nm div 4611686018427387904 d
+exit 83
+end
+nm = mul nm d
+if lt i 2
+put ixent add 2 i d
+end
+i = add i 1
+e = js_enext tape e
+end
+put ixent 6 nm
+end
+
+fn ix_st_doff src view uchar * tape view uint * v ulong to void
+if ne js_type tape v jsarr
+exit 83
+end
+if ne js_nkids tape v 2
+exit 83
+end
+e = js_first tape v
+b = ix_stu src tape e
+f = ix_stu src tape js_enext tape e
+if gt b f
+exit 83
+end
+put ixent 4 b
+put ixent 5 f
+end
+
+fn ix_seen bit ulong to void
+s = get ixent 7
+if ne and s bit 0
+exit 83
+end
+put ixent 7 or s bit
+end
+
+fn ix_st_field src view uchar * tape view uint * m ulong to void
+ko = js_off tape m
+v = add m 1
+if js_streq src ko ixs_dtype
+ix_seen 1
+if ne js_type tape v jsstr
+exit 83
+end
+put ixent 0 ix_dtype src js_off tape v
+ret
+end
+if js_streq src ko ixs_shape
+ix_seen 2
+ix_st_shape src tape v
+ret
+end
+if js_streq src ko ixs_doff
+ix_seen 4
+ix_st_doff src tape v
+ret
+end
+exit 83
+end
+
+fn ix_st_entry src view uchar * tape view uint * v ulong to void
+for i ulong 8
+put ixent i 0
+end
+if ne js_nkids tape v 3
+exit 83
+end
+m = js_first tape v
+while ne m jsnone bound 4
+ix_st_field src tape m
+m = js_mnext tape m
+end
+if ne get ixent 7 7
+exit 83
+end
+nb = mul get ixent 6 ix_dsz get ixent 0
+if ne sub get ixent 5 get ixent 4 nb
+exit 83
+end
+end
+
+fn ix_ext_add to void
+c = get ixs 0
+if ge c get ixs 13
+exit 83
+end
+put ixe mul c 2 get ixent 4
+put ixe add mul c 2 1 get ixent 5
+put ixs 0 add c 1
+end
+
+fn ix_role o ulong to ulong
+if ixn_at o ixr_0
+ret 0
+end
+if ixn_at o ixr_1
+ret 1
+end
+if ixn_at o ixr_2
+ret 2
+end
+if ixn_at o ixr_3
+ret 3
+end
+if ixn_at o ixr_4
+ret 4
+end
+if ixn_at o ixr_5
+ret 5
+end
+if ixn_at o ixr_6
+ret 6
+end
+if ixn_at o ixr_7
+ret 7
+end
+if ixn_at o ixr_8
+ret 8
+end
+if ixn_at o ixr_9
+ret 9
+end
+if ixn_at o ixr_10
+ret 10
+end
+ret ix_role_b o
+end
+
+fn ix_role_b o ulong to ulong
+if ixn_at o ixr_11
+ret 11
+end
+if ixn_at o ixr_12
+ret 12
+end
+if ixn_at o ixr_13
+ret 13
+end
+if ixn_at o ixr_14
+ret 14
+end
+if ixn_at o ixr_15
+ret 15
+end
+if ixn_at o ixr_16
+ret 16
+end
+if ixn_at o ixr_17
+ret 17
+end
+ret 99
+end
+
+note slot of the name in ixnm: 0 embed 1 positions 2 final norm 3 lm_head, 8 + 24 l + role; 9999 ignored;
+note 9998 unknown
+fn ix_slot to ulong
+if ixn_eq ixn_emb
+ret 0
+end
+if ixn_eq ixn_pos
+ret 1
+end
+if ixn_eq ixn_norm
+ret 2
+end
+if ixn_eq ixn_lmh
+ret 3
+end
+if ixn_suf ixn_inv
+ret 9999
+end
+if not ixn_pre ixn_lay
+ret 9998
+end
+n = get ixs 5
+p = len ixn_lay
+l = ulong 0
+nd = ulong 0
+while lt p n bound 1100
+c = ulong get ixnm p
+if or lt c 48 gt c 57
+break
+end
+if lt nd 7
+l = add mul l 10 sub c 48
+end
+nd = add nd 1
+p = add p 1
+end
+if or eq nd 0 gt nd 6
+ret 9998
+end
+if or ge l get ug 6 ge p n
+ret 9998
+end
+if ne get ixnm p 46
+ret 9998
+end
+r = ix_role add p 1
+if eq r 99
+ret 9998
+end
+ret add 8 add mul l 24 r
+end
+
+fn ix_slot_put sl ulong to void
+b = mul sl 8
+if ne get ixt b 0
+exit 83
+end
+put ixt b 1
+for i ulong 4
+put ixt add b add 1 i get ixent i
+end
+put ixt add b 5 get ixent 4
+put ixt add b 6 get ixent 5
+end
+
+fn ix_st_member src view uchar * tape view uint * k ulong to void
+ix_key src tape k
+v = add k 1
+if ixn_eq ixs_meta
+if ne js_type tape v jsobj
+exit 83
+end
+ret
+end
+if ne js_type tape v jsobj
+exit 83
+end
+ix_st_entry src tape v
+ix_ext_add
+sl = ix_slot
+if eq sl 9999
+ret
+end
+if ge sl 9998
+exit 84
+end
+ix_slot_put sl
+end
+
+fn ix_st ai ulong to void
+src = new uchar 983040 0
+tape = new uint 524288 0
+hn = ix_st_open ai
+ix_st_read src hn
+if lt js_init tape 983040 64 0
+exit 83
+end
+if le js_parse src tape hn 0
+exit 83
+end
+if ne js_type tape 0 jsobj
+exit 83
+end
+nk = js_nkids tape 0
+r = enlarge ixe mul add nk 1 2
+if ne r 0
+exit 70
+end
+put ixs 13 nk
+k = js_first tape 0
+while ne k jsnone bound 1000000
+ix_st_member src tape k
+k = js_mnext tape k
+end
+end
+
+fn ix_tab_alloc to void
+n = add 8 mul get ug 6 24
+put ixs 4 n
+r = enlarge ixt mul n 8
+if ne r 0
+exit 70
+end
+for i ulong mul n 8 bound IXBIG
+put ixt i 0
+end
+end
+
+fn ix_overlap i ulong n ulong to bool
+b = get ixe mul i 2
+e = get ixe add mul i 2 1
+if eq b e
+ret false
+end
+j = add i 1
+while lt j n bound IXBIG
+b2 = get ixe mul j 2
+e2 = get ixe add mul j 2 1
+if and ne b2 e2 and lt b e2 lt b2 e
+ret true
+end
+j = add j 1
+end
+ret false
+end
+
+fn ix_cover to void
+n = get ixs 0
+ds = get ixs 3
+sm = ulong 0
+for i ulong n bound IXBIG
+e = get ixe add mul i 2 1
+if gt e ds
+exit 87
+end
+sm = add sm sub e get ixe mul i 2
+end
+if ne sm ds
+exit 83
+end
+for i2 ulong n bound IXBIG
+if ix_overlap i2 n
+exit 83
+end
+end
+end
+
+note ======== import: shape checks and conversion ========
+
+fn ix_has sl ulong to bool
+ret ne get ixt mul sl 8 0
+end
+
+fn ix_dim sl ulong k ulong to ulong
+ret get ixt add mul sl 8 k
+end
+
+fn ix_req1 sl ulong n ulong to void
+if not ix_has sl
+exit 84
+end
+if or ne ix_dim sl 2 1 ne ix_dim sl 3 n
+exit 85
+end
+end
+
+fn ix_req2 sl ulong r ulong c ulong to void
+if not ix_has sl
+exit 84
+end
+if ne ix_dim sl 2 2
+exit 85
+end
+if or ne ix_dim sl 3 r ne ix_dim sl 4 c
+exit 85
+end
+end
+
+fn ix_forbid sl ulong to void
+if ix_has sl
+exit 84
+end
+end
+
+fn ix_bias sl ulong n ulong to void
+if ix_has sl
+if or ne ix_dim sl 2 1 ne ix_dim sl 3 n
+exit 85
+end
+end
+end
+
+fn ix_set_t to void
+fl = get ug 12
+t = ulong 256
+mp = get ixc 7
+if and ne mp 0 lt mp 256
+t = mp
+end
+if ne get ixs 11 0
+t = get ixs 12
+end
+if eq and fl 1 0
+if not ix_has 1
+exit 84
+end
+r = ix_dim 1 3
+if and ne get ixs 11 0 ne r t
+exit 85
+end
+t = r
+end
+if eq t 0
+exit 88
+end
+put ug 1 t
+sw = get ixc 15
+mt = get ixc 0
+if and ne sw 0 lt sw t
+if or eq mt 4 and eq mt 2 eq get ixc 16 1
+exit 82
+end
+end
+end
+
+fn ix_need_l l ulong to void
+d = get ug 2
+kvd = mul get ug 4 div d get ug 3
+f = get ug 5
+fl = get ug 12
+b = add 8 mul l 24
+ix_req1 b d
+ix_req2 add b 1 d d
+ix_req2 add b 2 kvd d
+ix_req2 add b 3 kvd d
+ix_req2 add b 4 d d
+if ne and fl 8 0
+ix_req1 add b 5 div d get ug 3
+ix_req1 add b 6 div d get ug 3
+else
+ix_forbid add b 5
+ix_forbid add b 6
+end
+ix_req1 add b 7 d
+if ne and fl 66 0
+ix_req2 add b 8 f d
+else
+ix_forbid add b 8
+end
+ix_req2 add b 9 f d
+ix_req2 add b 10 d f
+ix_bias add b 11 d
+ix_bias add b 12 kvd
+ix_bias add b 13 kvd
+ix_bias add b 14 d
+ix_bias add b 15 f
+ix_bias add b 16 f
+ix_bias add b 17 d
+end
+
+fn ix_need to void
+v = get ug 0
+d = get ug 2
+h = get ug 3
+hkv = get ug 4
+if or eq h 0 ne rem d h 0
+exit 88
+end
+if or eq hkv 0 or gt hkv h ne rem h hkv 0
+exit 88
+end
+fl = get ug 12
+ix_req2 0 v d
+if eq and fl 1 0
+ix_req2 1 get ug 1 d
+else
+ix_forbid 1
+end
+ix_req1 2 d
+if and ne and fl 4 0 ne get ixc 0 5
+ix_req2 3 v d
+end
+for l ulong get ug 6 bound IXBIG
+ix_need_l l
+end
+end
+
+fn ix_dec j ulong dt ulong to f64
+if eq dt 1
+b = mul j 4
+u = ulong get uopw b
+u = or u shl ulong get uopw add b 1 8
+u = or u shl ulong get uopw add b 2 16
+u = or u shl ulong get uopw add b 3 24
+ret f64 bitcast f32 uint u
+end
+if eq dt 4
+ret bitcast f64 uopw_get8 mul j 8
+end
+b2 = mul j 2
+h = or ulong get uopw b2 shl ulong get uopw add b2 1 8
+if eq dt 2
+ret ubf16_to_f64 h
+end
+ret uf16_to_f64 h
+end
+
+fn ix_store k ulong v f64 to void
+md = get ixld 2
+base = get ixld 1
+if eq md 0
+put up add base k v
+ret
+end
+if eq md 1
+c = get ixld 4
+r = get ixld 3
+o = div k c
+i = rem k c
+put up add base add mul i r o v
+ret
+end
+if eq md 2
+put up add base k add v 1.0
+ret
+end
+if eq md 3
+put up add base k mul v get ixf 0
+ret
+end
+if ne v 0.0
+exit 82
+end
+end
+
+fn ix_conv k0 ulong m ulong to void
+dt = get ixld 0
+for j ulong m bound IXBIG
+v = ix_dec j dt
+if ix_bad v
+exit 86
+end
+ix_store add k0 j v
+end
+end
+
+fn ix_pread pos ulong n ulong to void
+fd = int get ixs 1
+got = ulong 0
+while lt got n bound 1000000
+r = pread fd uopw got sub n got long add pos got
+if le r 0
+exit 87
+end
+got = add got ulong r
+end
+end
+
+fn ix_load sl ulong base ulong md ulong to void
+b = mul sl 8
+put ixld 0 get ixt add b 1
+put ixld 1 base
+put ixld 2 md
+put ixld 3 get ixt add b 3
+put ixld 4 get ixt add b 4
+put ixld 5 get ixt add b 5
+put ixld 6 get ixt add b 6
+ix_load_run
+end
+
+fn ix_load_run to void
+ds = ix_dsz get ixld 0
+pos = add get ixs 2 get ixld 5
+n = div sub get ixld 6 get ixld 5 ds
+cn = div IXOB ds
+k = ulong 0
+while lt k n bound IXBIG
+m = sub n k
+if gt m cn
+m = cn
+end
+ix_pread add pos mul k ds mul m ds
+ix_conv k m
+k = add k m
+end
+end
+
+fn ix_fill_l l ulong gn ulong to void
+fl = get ug 12
+b = add 8 mul l 24
+ix_load b up_g1 l gn
+ix_load add b 1 up_wq l 1
+ix_load add b 2 up_wk l 1
+ix_load add b 3 up_wv l 1
+ix_load add b 4 up_wo l 1
+if ne and fl 8 0
+ix_load add b 5 up_qn l 0
+ix_load add b 6 up_kn l 0
+end
+ix_load add b 7 up_g2 l gn
+if ne and fl 66 0
+ix_load add b 8 up_w1 l 1
+ix_load add b 9 up_wup l 1
+else
+ix_load add b 9 up_w1 l 1
+end
+ix_load add b 10 up_w2 l 1
+for r ulong 7
+if ix_has add b add 11 r
+ix_load add b add 11 r 0 5
+end
+end
+end
+
+fn ix_fill to void
+fl = get ug 12
+gem = eq get ixc 0 5
+gn = ulong 0
+put ixf 0 fsqrt f64 get ug 2
+if gem
+gn = 2
+ix_load 0 0 3
+ix_load 0 get ug 36 0
+else
+ix_load 0 0 0
+if ne and fl 4 0
+ix_load 3 get ug 36 0
+end
+end
+if eq and fl 1 0
+ix_load 1 get ug 32 0
+end
+ix_load 2 get ug 35 gn
+for l ulong get ug 6 bound IXBIG
+ix_fill_l l gn
+end
+end
+
+fn ix_cmd_import to void
+na = ulong argcnt
+if and ne na 5 ne na 9
+exit 2
+end
+put ixs 11 0
+put ixs 15 1
+put ixs 16 1000
+put ixs 17 100
+if eq na 9
+put ixs 11 1
+put ixs 12 uargu 5
+put ixs 15 uargu 6
+put ixs 16 uargu 7
+put ixs 17 uargu 8
+end
+ix_cfg 2
+ix_cfg_check
+ix_tab_alloc
+ix_st 3
+ix_cover
+ix_set_t
+ix_need
+if not ix_geom
+exit 88
+end
+ix_alloc3
+ix_zero_mv
+ix_fill
+c = fclose int get ixs 1
+uck_save 4
+uputc 73
+for i ulong 7
+uputc 32
+uputu get ug i
+end
+uputc 32
+uputu get ug 10
+uputc 32
+uputu get ug 12
+uputc 10
+uflush
+end
+
+note ======== export: architecture, tensor list, values ========
+
+fn ix_gemma_ok to bool
+n = mul get ug 0 get ug 2
+lm = get ug 36
+sq = fsqrt f64 get ug 2
+i = ulong 0
+while lt i n bound IXBIG
+a = get up i
+b = get up add lm i
+if ne bitcast ulong a bitcast ulong mul b sq
+ret false
+end
+i = add i 1
+end
+ret true
+end
+
+fn ix_arch to ulong
+fl = get ug 12
+if gt get ug 19 1
+ret 6
+end
+if eq and fl 1 0
+ret 6
+end
+if ne and fl 2 0
+if ne and fl 8 0
+ret 3
+end
+ret 1
+end
+if and ne and fl 64 0 eq and fl 8 0
+if ne and fl 4 0
+if ix_gemma_ok
+ret 5
+end
+end
+end
+ret 6
+end
+
+fn ix_la n ulong code ulong l ulong to ulong
+put ixl mul n 2 code
+put ixl add mul n 2 1 l
+ret add n 1
+end
+
+fn ix_list_l n ulong l ulong to ulong
+fl = get ug 12
+k = n
+for r ulong 5
+k = ix_la k add 8 r l
+end
+if ne and fl 8 0
+k = ix_la k 13 l
+k = ix_la k 14 l
+end
+k = ix_la k 15 l
+if ne and fl 66 0
+k = ix_la k 16 l
+end
+k = ix_la k 17 l
+k = ix_la k 18 l
+ret k
+end
+
+fn ix_list to void
+fl = get ug 12
+cap = add 8 mul get ug 6 12
+r = enlarge ixl mul cap 2
+if ne r 0
+exit 70
+end
+n = ix_la 0 0 0
+if eq and fl 1 0
+n = ix_la n 1 0
+end
+for l ulong get ug 6 bound IXBIG
+n = ix_list_l n l
+end
+n = ix_la n 2 0
+if and ne and fl 4 0 ne get ixm 0 5
+n = ix_la n 3 0
+end
+put ixs 10 n
+end
+
+fn ix_q nd ulong rows ulong cols ulong base ulong kind ulong to void
+put ixq 2 nd
+put ixq 3 rows
+put ixq 4 cols
+put ixq 5 base
+put ixq 6 kind
+end
+
+fn ix_ti_g code ulong gn ulong to void
+v = get ug 0
+d = get ug 2
+if eq code 0
+if eq get ixm 0 5
+ix_q 2 v d get ug 36 0
+else
+ix_q 2 v d 0 0
+end
+ret
+end
+if eq code 1
+ix_q 2 get ug 1 d get ug 32 0
+ret
+end
+if eq code 2
+ix_q 1 d 1 get ug 35 gn
+ret
+end
+ix_q 2 v d get ug 36 0
+end
+
+fn ix_pk heads ulong to ulong
+put ixq 7 heads
+if ne get ixm 2 0
+ret 4
+end
+ret 1
+end
+
+fn ix_ti_l r ulong l ulong gn ulong to void
+d = get ug 2
+e = get ug 8
+kvd = get ug 9
+f = get ug 5
+if eq r 0
+ix_q 1 d 1 up_g1 l gn
+ret
+end
+if eq r 1
+ix_q 2 d d up_wq l ix_pk get ug 3
+ret
+end
+if eq r 2
+ix_q 2 kvd d up_wk l ix_pk get ug 4
+ret
+end
+if eq r 3
+ix_q 2 kvd d up_wv l 1
+ret
+end
+if eq r 4
+ix_q 2 d d up_wo l 1
+ret
+end
+if eq r 5
+ix_q 1 e 1 up_qn l 0
+ret
+end
+if eq r 6
+ix_q 1 e 1 up_kn l 0
+ret
+end
+if eq r 7
+ix_q 1 d 1 up_g2 l gn
+ret
+end
+if eq r 8
+ix_q 2 f d up_w1 l 1
+ret
+end
+if eq r 9
+if ne and get ug 12 66 0
+ix_q 2 f d up_wup l 1
+else
+ix_q 2 f d up_w1 l 1
+end
+ret
+end
+ix_q 2 d f up_w2 l 1
+end
+
+fn ix_ti k ulong to void
+code = get ixl mul k 2
+l = get ixl add mul k 2 1
+put ixq 0 code
+put ixq 1 l
+gn = ulong 0
+if and eq get ixm 0 5 eq get ixm 3 0
+gn = 2
+end
+if lt code 8
+ix_ti_g code gn
+ret
+end
+ix_ti_l sub code 8 l gn
+end
+
+fn ix_perm r ulong to ulong
+e = get ug 8
+h = div r e
+j = rem r e
+ret add mul h e add mul rem j 2 div e 2 div j 2
+end
+
+fn ix_val r ulong c ulong to f64
+kind = get ixq 6
+base = get ixq 5
+if eq kind 0
+i0 = add base add mul r get ixq 4 c
+ret get up i0
+end
+if eq kind 2
+i2 = add base add mul r get ixq 4 c
+ret sub get up i2 1.0
+end
+rr = r
+if eq kind 4
+rr = ix_perm r
+end
+i1 = add base add mul c get ixq 3 rr
+ret get up i1
+end
+
+fn ix_hfname to void
+code = get ixq 0
+ixn_reset
+if eq code 0
+ixn_t ixn_emb
+ret
+end
+if eq code 1
+ixn_t ixn_pos
+ret
+end
+if eq code 2
+ixn_t ixn_norm
+ret
+end
+if eq code 3
+ixn_t ixn_lmh
+ret
+end
+ixn_t ixn_lay
+ixn_dec get ixq 1
+ixn_c 46
+r = sub code 8
+if eq r 0
+ixn_t ixr_0
+end
+if eq r 1
+ixn_t ixr_1
+end
+if eq r 2
+ixn_t ixr_2
+end
+if eq r 3
+ixn_t ixr_3
+end
+if eq r 4
+ixn_t ixr_4
+end
+if eq r 5
+ixn_t ixr_5
+end
+if eq r 6
+ixn_t ixr_6
+end
+if eq r 7
+ixn_t ixr_7
+end
+if eq r 8
+ixn_t ixr_8
+end
+if eq r 9
+ixn_t ixr_9
+end
+if eq r 10
+ixn_t ixr_10
+end
+end
+
+fn ix_ggname to void
+code = get ixq 0
+ixn_reset
+if eq code 0
+ixn_t ixg_temb
+ret
+end
+if eq code 1
+ixn_t ixg_tpos
+ret
+end
+if eq code 2
+ixn_t ixg_tnorm
+ret
+end
+if eq code 3
+ixn_t ixg_tout
+ret
+end
+ixn_t ixg_blk
+ixn_dec get ixq 1
+r = sub code 8
+if eq r 0
+ixn_t ixg_r0
+end
+if eq r 1
+ixn_t ixg_r1
+end
+if eq r 2
+ixn_t ixg_r2
+end
+if eq r 3
+ixn_t ixg_r3
+end
+if eq r 4
+ixn_t ixg_r4
+end
+if eq r 5
+ixn_t ixg_r5
+end
+if eq r 6
+ixn_t ixg_r6
+end
+if eq r 7
+ixn_t ixg_r7
+end
+if eq r 8
+ixn_t ixg_r8
+end
+if eq r 9
+ixn_t ixg_r9
+end
+if eq r 10
+ixn_t ixg_r10
+end
+end
+
+fn ix_wrow r ulong to void
+c = get ixq 4
+bf = ne get ixm 1 0
+for j ulong c bound IXBIG
+v = ix_val r j
+if bf
+ixw_u16 ix_bf16 v
+else
+ixw_u32 ulong bitcast uint f32 v
+end
+end
+end
+
+fn ix_wtensor to void
+rows = get ixq 3
+for r ulong rows bound IXBIG
+ix_wrow r
+end
+end
+
+fn ix_esz to ulong
+if ne get ixm 1 0
+ret 2
+end
+ret 4
+end
+
+note ======== export-hf ========
+
+fn ixj_ks ob edit uchar * k view uchar * s view uchar * to void
+js_wsbuf ob k 0 len k
+js_wsbuf ob s 0 len s
+end
+
+fn ixj_ku ob edit uchar * k view uchar * v ulong to void
+js_wsbuf ob k 0 len k
+js_wulong ob v
+end
+
+fn ix_wobuf ob view uchar * n ulong to void
+for i ulong n bound IXBIG
+ixw_b ulong get ob add jswh i
+end
+end
+
+fn ix_cfgw_arch ob edit uchar * to void
+a = get ixm 0
+js_wsbuf ob ixk_arch 0 len ixk_arch
+js_warr ob
+if eq a 1
+js_wsbuf ob ixv_allama 0 len ixv_allama
+end
+if eq a 3
+js_wsbuf ob ixv_aqwen3 0 len ixv_aqwen3
+end
+if eq a 5
+js_wsbuf ob ixv_agemma 0 len ixv_agemma
+end
+if eq a 6
+js_wsbuf ob ixv_ahelix 0 len ixv_ahelix
+end
+js_warre ob
+if eq a 1
+ixj_ks ob ixk_mt ixv_llama
+end
+if eq a 3
+ixj_ks ob ixk_mt ixv_qwen3
+end
+if eq a 5
+ixj_ks ob ixk_mt ixv_gemma
+end
+if eq a 6
+ixj_ks ob ixk_mt ixv_helix
+end
+end
+
+fn ix_cfgw_act ob edit uchar * to void
+fl = get ug 12
+if ne and fl 2 0
+ixj_ks ob ixk_act ixv_silu
+ret
+end
+if ne and fl 96 0
+ixj_ks ob ixk_act ixv_gtanh
+if eq get ixm 0 5
+ixj_ks ob ixk_acn ixv_gtanh
+end
+ret
+end
+ixj_ks ob ixk_act ixv_relu
+end
+
+fn ix_cfgw_num ob edit uchar * to void
+js_wsbuf ob ixk_eps 0 len ixk_eps
+ix_wf64 ob bitcast f64 get ug 14
+js_wsbuf ob ixk_th 0 len ixk_th
+mi = get ug 13
+if eq rem mi 1000 0
+js_wulong ob div mi 1000
+else
+ix_wf64 ob div f64 mi 1000.0
+end
+js_wsbuf ob ixk_tie 0 len ixk_tie
+js_wbool ob or eq get ixm 0 5 eq and get ug 12 4 0
+end
+
+fn ix_cfgw to void
+ob = new uchar 65536 0
+if lt js_winit ob 0
+exit 70
+end
+js_wobj ob
+ix_cfgw_arch ob
+ixj_ku ob ixk_vs get ug 0
+ixj_ku ob ixk_hs get ug 2
+ixj_ku ob ixk_is get ug 5
+ixj_ku ob ixk_nl get ug 6
+ixj_ku ob ixk_nh get ug 3
+ixj_ku ob ixk_kv get ug 4
+ixj_ku ob ixk_hd get ug 8
+ixj_ku ob ixk_mp get ug 1
+ix_cfgw_num ob
+ix_cfgw_act ob
+js_wsbuf ob ixk_ab 0 len ixk_ab
+js_wbool ob false
+js_wsbuf ob ixk_rs 0 len ixk_rs
+js_wnull ob
+if ne get ixm 1 0
+ixj_ks ob ixk_td ixv_bf16
+else
+ixj_ks ob ixk_td ixv_fp32
+end
+ixj_ku ob ixk_hf get ug 12
+ixj_ku ob ixk_lp get ug 17
+ixj_ku ob ixk_lc get ug 18
+ixj_ku ob ixk_np get ug 19
+js_wobje ob
+n = js_wdone ob
+if le n 0
+exit 70
+end
+ix_path_arg 3
+ix_path_t ixp_cfg
+ixw_open
+ix_wobuf ob ulong n
+c = ixw_close
+end
+
+fn ix_sth_key ob edit uchar * to void
+js_wsbeg ob
+n = get ixs 5
+for i ulong n
+js_wsb ob get ixnm i
+end
+js_wsend ob
+end
+
+fn ix_sth_one ob edit uchar * k ulong off ulong to ulong
+ix_ti k
+ix_hfname
+ix_sth_key ob
+js_wobj ob
+if ne get ixm 1 0
+ixj_ks ob ixs_dtype ixs_BF16
+else
+ixj_ks ob ixs_dtype ixs_F32
+end
+js_wsbuf ob ixs_shape 0 len ixs_shape
+js_warr ob
+js_wulong ob get ixq 3
+if eq get ixq 2 2
+js_wulong ob get ixq 4
+end
+js_warre ob
+nb = mul mul get ixq 3 get ixq 4 ix_esz
+js_wsbuf ob ixs_doff 0 len ixs_doff
+js_warr ob
+js_wulong ob off
+js_wulong ob add off nb
+js_warre ob
+js_wobje ob
+ret add off nb
+end
+
+fn ix_sth to void
+ob = new uchar 2097152 0
+if lt js_winit ob 0
+exit 70
+end
+js_wobj ob
+js_wsbuf ob ixs_meta 0 len ixs_meta
+js_wobj ob
+ixj_ks ob ixs_fmt ixs_pt
+js_wobje ob
+off = ulong 0
+for k ulong get ixs 10 bound IXBIG
+off = ix_sth_one ob k off
+end
+js_wobje ob
+r = js_wdone ob
+if le r 0
+exit 70
+end
+n = ulong r
+pad = rem sub 8 rem add 8 n 8 8
+ixw_u64 add n pad
+ix_wobuf ob n
+for i ulong pad
+ixw_b 32
+end
+end
+
+fn ix_cmd_exh to void
+na = ulong argcnt
+if and ne na 4 ne na 5
+exit 2
+end
+put ixm 1 0
+if eq na 5
+if ix_arg_eq 4 ix_s_bf16
+put ixm 1 1
+else
+if not ix_arg_eq 4 ix_s_f32
+exit 2
+end
+end
+end
+ix_ck_load 2
+ix_finite
+put ixm 0 ix_arch
+put ixm 2 0
+put ixm 3 0
+ix_list
+ix_cfgw
+ix_path_arg 3
+ix_path_t ixp_st
+ixw_open
+ix_sth
+for k ulong get ixs 10 bound IXBIG
+ix_ti k
+ix_wtensor
+end
+tot = ixw_close
+uputc 88
+uputc 72
+uputc 32
+uputu get ixs 10
+uputc 32
+uputu tot
+uputc 10
+uflush
+end
+
+note ======== export-gguf ========
+
+fn ix_kv_u key view uchar * v ulong to void
+ixn_reset
+ixn_t key
+ixw_nm
+ixw_u32 4
+ixw_u32 v
+end
+
+fn ix_kv_au suf view uchar * v ulong to void
+ixn_reset
+ixn_arch
+ixn_t suf
+ixw_nm
+ixw_u32 4
+ixw_u32 v
+end
+
+fn ix_kv_af suf view uchar * v f64 to void
+ixn_reset
+ixn_arch
+ixn_t suf
+ixw_nm
+ixw_u32 6
+ixw_u32 ulong bitcast uint f32 v
+end
+
+fn ix_gkv to void
+ixn_reset
+ixn_t ixg_arch
+ixw_nm
+ixw_u32 8
+ixn_reset
+ixn_arch
+ixw_nm
+ixn_reset
+ixn_t ixg_name
+ixw_nm
+ixw_u32 8
+ixn_reset
+ixn_t ixg_namev
+ixw_nm
+ix_kv_u ixg_align 32
+ix_kv_u ixg_ftype 0
+ix_kv_au ixg_vs get ug 0
+ix_kv_au ixg_ctx get ug 1
+ix_kv_au ixg_emb get ug 2
+ix_kv_au ixg_blkc get ug 6
+ix_kv_au ixg_ffn get ug 5
+ix_kv_au ixg_hc get ug 3
+ix_kv_au ixg_hkv get ug 4
+ix_kv_au ixg_kl get ug 8
+ix_kv_au ixg_vl get ug 8
+ix_kv_af ixg_eps bitcast f64 get ug 14
+ix_kv_af ixg_fb div f64 get ug 13 1000.0
+ix_kv_au ixg_rd get ug 8
+ix_kv_u ixg_hfl get ug 12
+ix_kv_u ixg_hlp get ug 17
+ix_kv_u ixg_hlc get ug 18
+ix_kv_u ixg_hnp get ug 19
+end
+
+fn ix_al32 x ulong to ulong
+ret and add x 31 18446744073709551584
+end
+
+fn ix_ginfo to void
+off = ulong 0
+for k ulong get ixs 10 bound IXBIG
+ix_ti k
+ix_ggname
+ixw_nm
+nd = get ixq 2
+ixw_u32 nd
+if eq nd 2
+ixw_u64 get ixq 4
+end
+ixw_u64 get ixq 3
+ixw_u32 0
+ixw_u64 off
+off = ix_al32 add off mul mul get ixq 3 get ixq 4 4
+end
+end
+
+fn ix_gpad to void
+while ne and ixw_pos 31 0 bound 32
+ixw_b 0
+end
+end
+
+fn ix_cmd_exg to void
+if ne ulong argcnt 4
+exit 2
+end
+ix_ck_load 2
+ix_finite
+put ixm 0 ix_arch
+put ixm 1 0
+put ixm 2 0
+put ixm 3 1
+if eq get ixm 0 1
+put ixm 2 1
+end
+ix_list
+ix_path_arg 3
+ixw_open
+ixw_u32 1179993927
+ixw_u32 3
+ixw_u64 get ixs 10
+ixw_u64 20
+ix_gkv
+ix_ginfo
+for k ulong get ixs 10 bound IXBIG
+ix_gpad
+ix_ti k
+ix_wtensor
+end
+tot = ixw_close
+uputc 88
+uputc 71
+uputc 32
+uputu get ixs 10
+uputc 32
+uputu tot
+uputc 10
+uflush
+end
+
+note ======== upgrade OLLMCK01/02/03 -> OLLMCK04 ========
+
+fn ix_lmag mg ulong to ulong
+if eq mg 3544415659172318287
+ret 112
+end
+if eq mg 3616473253210246223
+ret 120
+end
+if eq mg 3688530847248174159
+ret 144
+end
+exit 11
+end
+
+fn ix_upg_hdr sz ulong hl ulong to void
+for i ulong 4
+put ug i uopw_get8 add 8 mul i 8
+end
+put ug 4 get ug 3
+put ug 5 uopw_get8 40
+put ug 6 uopw_get8 48
+put ug 7 uopw_get8 56
+put ug 20 uopw_get8 64
+put ug 21 uopw_get8 72
+put ug 22 uopw_get8 80
+put ug 23 uopw_get8 88
+put ug 12 0
+put ug 13 10000000
+put ug 14 bitcast ulong 1.0e-5f64
+put ug 15 0
+put ug 16 100
+put ug 17 0
+put ug 18 0
+put ug 19 0
+if eq hl 144
+put ug 17 uopw_get8 112
+put ug 18 uopw_get8 120
+put ug 19 uopw_get8 128
+if lt get ug 19 2
+exit 12
+end
+end
+if ge hl 120
+g = uopw_get8 104
+b = get ug 7
+if or eq g 0 or gt g b ne rem b g 0
+exit 12
+end
+end
+end
+
+fn ix_lver hl ulong to ulong
+if eq hl 112
+ret 1
+end
+if eq hl 120
+ret 2
+end
+ret 3
+end
+
+fn ix_cmd_upg to void
+if ne ulong argcnt 4
+exit 2
+end
+sz = uofsz 2
+if lt sz 112
+exit 10
+end
+hn = uoprd 2 0 0 144
+hl = ix_lmag uopw_get8 0
+if lt sz hl
+exit 10
+end
+ix_upg_hdr sz hl
+pf = uopw_get8 96
+fnv = uopw_get8 sub hl 8
+if not ix_geom
+exit 12
+end
+p = get ug 10
+if ne p pf
+exit 13
+end
+want = add hl mul 24 p
+if lt sz want
+exit 10
+end
+if gt sz want
+exit 15
+end
+ix_alloc3
+put uck_st 0 14695981039346656037
+put uck_st 1 hl
+for k ulong 3
+uck_load_pool 2 k
+end
+if ne get uck_st 0 fnv
+exit 14
+end
+uck_save 3
+uputc 85
+uputc 32
+uputu ix_lver hl
+uputc 32
+uputu p
+uputc 10
+uflush
+end
+
+fn main to int
+if lt ulong argcnt 2
+exit 2
+end
+if ix_arg_eq 1 ix_c_imp
+ix_cmd_import
+ret 0
+end
+if ix_arg_eq 1 ix_c_exh
+ix_cmd_exh
+ret 0
+end
+if ix_arg_eq 1 ix_c_exg
+ix_cmd_exg
+ret 0
+end
+if ix_arg_eq 1 ix_c_upg
+ix_cmd_upg
+ret 0
+end
+exit 2
+end
