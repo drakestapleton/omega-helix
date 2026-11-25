@@ -1533,8 +1533,12 @@
     if ($("btn-goto-play")) {
       $("btn-goto-play").addEventListener("click", async () => {
         sfx.tap();
+        const targetRun = state.activeRunId;
         await refreshRuns(true);
-        if (state.activeRunId) $("play-run").value = state.activeRunId;
+        if (targetRun) {
+          $("play-run").value = targetRun;
+          await loadRunDetail(targetRun);
+        }
         activateTab("tab-play", true);
       });
     }

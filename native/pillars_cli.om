@@ -217,35 +217,70 @@ end
 
 fn arb_ingest_toks cn ulong to void
 arboris_clear
+if lt cn 2
+ret
+end
+w1 = new ulong 1 0
+lim1 = sub cn 1
+for i1 ulong lim1
+put w1 0 ulong get od0 i1
+ok1 = arboris_put w1 0 1 ulong get od0 add i1 1 910000
+end
+if lt cn 3
+ret
+end
+w2 = new ulong 2 0
+lim2 = sub cn 2
+for i2 ulong lim2
+put w2 0 ulong get od0 i2
+put w2 1 ulong get od0 add i2 1
+ok2 = arboris_put w2 0 2 ulong get od0 add i2 2 930000
+end
 if lt cn 4
 ret
 end
-win = new ulong 3 0
-lim = sub cn 3
-for i ulong lim
-put win 0 ulong get od0 i
-put win 1 ulong get od0 add i 1
-put win 2 ulong get od0 add i 2
-nxt = ulong get od0 add i 3
-ok = arboris_put win 0 3 nxt 950000
+w3 = new ulong 3 0
+lim3 = sub cn 3
+for i3 ulong lim3
+put w3 0 ulong get od0 i3
+put w3 1 ulong get od0 add i3 1
+put w3 2 ulong get od0 add i3 2
+ok3 = arboris_put w3 0 3 ulong get od0 add i3 3 960000
 end
 end
 
 fn arb_try_bypass step ulong to ulong
-if lt step 3
-ret OMG_EOF
-end
 ctx = new ulong 3 0
+res = new ulong 2 0
+if ge step 3
 put ctx 0 ulong get omg_toks sub step 3
 put ctx 1 ulong get omg_toks sub step 2
 put ctx 2 ulong get omg_toks sub step 1
-res = new ulong 2 0
-if not arboris_probe ctx 0 3 res
-ret OMG_EOF
+if arboris_probe ctx 0 3 res
+cand3 = get res 0
+if and lt cand3 256 and ge get res 1 900000 eq get omg_mask cand3 1
+ret cand3
 end
-cand = get res 0
-if and lt cand 256 and ge get res 1 900000 eq get omg_mask cand 1
-ret cand
+end
+end
+if ge step 2
+put ctx 0 ulong get omg_toks sub step 2
+put ctx 1 ulong get omg_toks sub step 1
+if arboris_probe ctx 0 2 res
+cand2 = get res 0
+if and lt cand2 256 and ge get res 1 900000 eq get omg_mask cand2 1
+ret cand2
+end
+end
+end
+if ge step 1
+put ctx 0 ulong get omg_toks sub step 1
+if arboris_probe ctx 0 1 res
+cand1 = get res 0
+if and lt cand1 256 and ge get res 1 900000 eq get omg_mask cand1 1
+ret cand1
+end
+end
 end
 ret OMG_EOF
 end

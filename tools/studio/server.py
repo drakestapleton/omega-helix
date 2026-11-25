@@ -56,6 +56,55 @@ _DEFAULT_OMG_SEED = (
 )
 
 
+_DEFAULT_OMG_SEEDS = [
+    _DEFAULT_OMG_SEED,
+    (
+        "om2\n"
+        "fn sum_to n ulong to ulong\n"
+        "  acc = ulong 0\n"
+        "  for i ulong n\n"
+        "    acc = add acc i\n"
+        "  end\n"
+        "  ret acc\n"
+        "end\n"
+        "fn main to int\n"
+        "  v = sum_to 10\n"
+        "  ret int rem v 127\n"
+        "end\n"
+    ),
+    (
+        "om2\n"
+        "fn clamp_u x ulong hi ulong to ulong\n"
+        "  if gt x hi\n"
+        "    ret hi\n"
+        "  end\n"
+        "  ret x\n"
+        "end\n"
+        "fn main to int\n"
+        "  r = clamp_u 42 30\n"
+        "  ret int r\n"
+        "end\n"
+    ),
+]
+
+
+def _build_arboris_omg_corpus(ollm: str, tdp: Path, seed_om: str | None = None) -> Path:
+    seeds = [seed_om] if seed_om else _DEFAULT_OMG_SEEDS
+    chunks: list[bytes] = []
+    for idx, src in enumerate(seeds):
+        in_p = tdp / f"seed_{idx}.om"
+        tok_p = tdp / f"seed_{idx}.tok"
+        in_p.write_text(src, encoding="utf-8")
+        r_pk = subprocess.run([ollm, "omg", "pack", str(in_p), str(tok_p)], capture_output=True, text=True, check=False)
+        if r_pk.returncode == 0 and tok_p.is_file():
+            chunks.append(tok_p.read_bytes())
+    if not chunks:
+        raise ValueError("omg pack failed for Arboris corpus seeds")
+    out_tok = tdp / "arboris_corpus.tok"
+    out_tok.write_bytes(b"".join(chunks))
+    return out_tok
+
+
 def _find_omc_bin() -> str | None:
     for cand in (
         os.environ.get("OMC", ""),
@@ -640,14 +689,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                     tdp = Path(td)
                     corpus_tok = body.get("corpus_tok")
                     if not corpus_tok:
-                        seed_om = str(body.get("seed_om") or _DEFAULT_OMG_SEED)
-                        in_p = tdp / "seed.om"
-                        tok_p = tdp / "seed.tok"
-                        in_p.write_text(seed_om, encoding="utf-8")
-                        r_pk = subprocess.run([ollm, "omg", "pack", str(in_p), str(tok_p)], capture_output=True, text=True, check=False)
-                        if r_pk.returncode != 0:
-                            raise ValueError(f"omg pack rc={r_pk.returncode}")
-                        corpus_tok = str(tok_p)
+                        corpus_tok = str(_build_arboris_omg_corpus(ollm, tdp, body.get("seed_om")))
                     ck_path = body.get("ck_path")
                     if not ck_path and body.get("run_id"):
                         run = self.server.manager.get_run(str(body["run_id"]))
