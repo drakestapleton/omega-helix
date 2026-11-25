@@ -1,13 +1,15 @@
 note SPDX-License-Identifier: AGPL-3.0-only
 note omegallm lpool.om: dynamic om2 bank-B pools for hosted targets (gb10, aarch64, macos, x86linux).
-note Grows on demand via `enlarge` up to 150M+ parameters (e.g. 120M single-trunk + multi-strand DNA).
-const OWWN ulong 150000000
+note Grows on demand via `enlarge` up to 500M+ parameters (e.g. Spiral-2048 D<=2048, L_phys=8 x NP=4 = 32L).
+const OWWN ulong 500000000
 global oww f64 *
-const OGBN ulong 150000000
+const OGBN ulong 500000000
 global ogb f64 *
-const OABN ulong 120000000
+const OABN ulong 300000000
 global oab f64 *
-global olp_sz ulong 3
+const OPABN ulong 150000000
+global opab f64 *
+global olp_sz ulong 4
 
 fn olp_grow w ulong g ulong a ulong to bool
 if gt w get olp_sz 0
@@ -30,6 +32,17 @@ if ne r 0
 ret false
 end
 put olp_sz 2 a
+end
+ret true
+end
+
+fn olp_grow_pa pa ulong to bool
+if gt pa get olp_sz 3
+r = enlarge opab pa
+if ne r 0
+ret false
+end
+put olp_sz 3 pa
 end
 ret true
 end

@@ -733,7 +733,7 @@ ret neg long 1
 end
 npzero
 off = ulong 0
-while lt off size
+while lt off size bound 9223372036854775807
 n = sub size off
 if gt n 16384
 n = ulong 16384

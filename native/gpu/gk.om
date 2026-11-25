@@ -90,6 +90,11 @@ end
 fn gkimadw d uint a uint imm uint c uint to void
 gkfx or or 30757 shl d 16 shl a 24 imm or 126746624 c
 end
+note Fast independent IMAD.WIDE.U32 (stall 1, for back-to-back disjoint address pairs before a final stall-6 gkimadw)
+fn gkimadw1 d uint a uint imm uint c uint to void
+gkq or or 30757 shl d 16 shl a 24 imm or 126746624 c gkcw 1 7 7 get gkpend 0
+put gkpend 0 0
+end
 fn gkimadh d uint a uint b uint c uint to void
 gkfx or or 29223 shl d 16 shl a 24 b or 126746624 c
 end
@@ -690,11 +695,11 @@ note 128-thread block, K tiles of 32, f32 operands rounded to bf16 (round to nea
 note staging into shared memory, HMMA.16816.F32.BF16 accumulating in f32, the f32 epilogue of gkepi64.
 note Words verified with nvdisasm -b SM121 against ptxas 13.0 sm_121 output for mma.sync.aligned
 note .m16n8k16.row.col.f32.bf16.bf16.f32, cvt.rn.bf16x2.f32 and ld.global.v4.f32.
-note HMMA d a b c: d, c and a 4-aligned, b 2-aligned. ptxas keeps 16 cycles between the HMMAs of a warp
-note (stall 15, then gknop of stall 1); a dependent HMMA comes 128 cycles later here.
+note HMMA d a b c: d, c and a 4-aligned, b 2-aligned. gkmmak cycles across 8 independent accumulators
+note (mi=0..1, ni=0..3), so stall=4 gives 8*4=32 cycles between same-accumulator HMMAs (> SM121's 22-cycle
+note RAW latency) while quadrupling Tensor Core issue rate vs stall 15 + NOP.
 fn gkhmma d uint a uint b uint c uint wt uint to void
-gkq or or 29244 shl d 16 shl a 24 b or c 268288 gkcw 15 7 7 wt
-gknop
+gkq or or 29244 shl d 16 shl a 24 b or c 268288 gkcw 4 7 7 wt
 end
 fn gknop to void
 gkq 31000 0 0 gkcw 1 7 7 0
@@ -709,9 +714,82 @@ c = 102655
 end
 gkq or or 29246 shl d 16 shl a 24 b c or gkcw 2 7 7 wt 8192
 end
-note LDG.E.128 R d..d+3 = [R a:a+1] under predicate p (7 = PT)
+note LDG.E.128 R d..d+3 = [R a:a+1] under predicate p (7 = PT); gkldgq1 issues with stall 1 in a chain
 fn gkldgq d uint a uint more bool p uint to void
 gkvar or or or 2433 shl p 12 shl d 16 shl a 24 4 203300096 more
+end
+fn gkldgq1 d uint a uint more bool p uint to void
+w = get gkpend 0
+if more
+w = and w 2
+end
+gkq or or or 2433 shl p 12 shl d 16 shl a 24 4 203300096 or gkcw 1 0 1 w 8192
+if more
+put gkpend 0 or get gkpend 0 3
+else
+put gkpend 0 3
+end
+end
+note Fast STS (stall 2) for independent shared-memory stores before a final stall-4 gksts / BAR.SYNC
+fn gksts2 a uint off uint b uint more bool to void
+w = get gkpend 0
+if more
+w = and w 4294967293
+end
+gkq or 31112 shl a 24 or b shl off 8 134220031 or gkcw 2 7 1 w 8192
+put gkpend 0 or w 2
+end
+note Vectorized 64-bit global load/store (LDG.E.64 / STG.E.64) for 2-aligned BF16 epilogue pairs
+fn gkldg64 d uint a uint more bool fast bool to void
+w = get gkpend 0
+if more
+w = and w 2
+end
+st = uint 4
+if fast
+st = 1
+end
+w0 = or or 31105 shl d 16 shl a 24
+cw = or gkcw st 0 1 w 8192
+gkq w0 4 203299584 cw
+if more
+put gkpend 0 or get gkpend 0 3
+else
+put gkpend 0 3
+end
+end
+fn gkstg64 a uint b uint more bool fast bool to void
+w = get gkpend 0
+if more
+w = and w 4294967293
+end
+st = uint 4
+if fast
+st = 1
+end
+w0 = or 31110 shl a 24
+cw = or gkcw st 7 1 w 8192
+gkq w0 b 202382084 cw
+put gkpend 0 or w 2
+end
+note 2D L2 CTA swizzle for dense BF16 GEMMs (arg 28 bits 0..1: 0 none, 1 G=4, 2 G=8)
+fn gkswiz to void
+gkldc 12 1008 false
+gkandi 13 12 3
+gkisetp 0 13 255 2
+gkbra 0 add div get gkat 0 16 13
+gkandi 14 12 1
+gkisetp 1 14 255 5
+gkbra 1 add div get gkat 0 16 6
+gkandi 14 2 7
+gkshr 15 2 3
+gkimadi 2 3 8 14
+gkiadd 3 15 255
+gkbra 7 add div get gkat 0 16 5
+gkandi 14 2 3
+gkshr 15 2 2
+gkimadi 2 3 4 14
+gkiadd 3 15 255
 end
 note R d = ((tid >> s) & m) mult (+ R d unless first); R8 is the scratch.
 fn gkbt d uint s uint m uint mult uint first bool to void
@@ -800,19 +878,20 @@ note Load a K tile into staging under predicate p: A in R80-95, B in R96-111 (ad
 note then advance both operand pointers by their tile steps.
 fn gkldb p uint to void
 for i uint 4
-gkimadw add 116 mul i 2 137 i 112
+gkimadw1 add 116 mul i 2 137 i 112
 end
 for i uint 4
-gkimadw add 124 mul i 2 138 i 114
+gkimadw1 add 124 mul i 2 138 i 114
 end
-gkimadw 112 139 1 112
+gkimadw1 112 139 1 112
 gkimadw 114 140 1 114
 for i uint 4
-gkldgq add 80 mul i 4 add 116 mul i 2 ne i 0 p
+gkldgq1 add 80 mul i 4 add 116 mul i 2 ne i 0 p
 end
-for i uint 4
-gkldgq add 96 mul i 4 add 124 mul i 2 true p
+for i uint 3
+gkldgq1 add 96 mul i 4 add 124 mul i 2 true p
 end
+gkldgq 108 130 true p
 end
 note Packed word x (0..7) of a staged operand at s: mode 1 is (i, e) = (x >> 1, x & 1), the k pair e of
 note outer load i; mode 0 is (jp, c) = (x >> 2, x & 3), depth pair jp of outer c. gkcvd is the packed
@@ -867,7 +946,11 @@ end
 note gkcvsb's stores of operand ab (mode md, staged at register s)
 fn gkcvst md uint ab uint s uint to void
 for x uint 8
-gksts add 132 ab add gkcvo md x mul ab 4096 gkcvd md x s or ne x 0 ne ab 0
+if and eq ab 1 eq x 7
+gksts add 132 ab add gkcvo md x mul ab 4096 gkcvd md x s true
+else
+gksts2 add 132 ab add gkcvo md x mul ab 4096 gkcvd md x s or ne x 0 ne ab 0
+end
 end
 end
 note Mutant o (OMUTO 0) runs one K tile fewer than the tile count.
@@ -886,6 +969,7 @@ gkldc 9 992 true
 gkimadh 6 5 8 255
 gkimad 7 6 9 5
 gkczx
+gkswiz
 gkldsb
 gkstsb ma 0
 gkstsb mb 1
@@ -946,38 +1030,51 @@ w = 0
 end
 end
 end
-note Address pairs R48 + 2 e of the 16 elements e = 4 ni + c of one m16 half (row g + 8 (c >> 1),
-note column 8 ni + 2t + (c & 1)) from half base hb; row stride R14, column stride R15.
+note Address pairs R48 + 2 p of the 8 contiguous 64-bit element pairs (e = 2p, 2p+1) of one m16 half
+note (p even: row g, col 8*(p/2) + 2t; p odd: row g + 8, col 8*(p/2) + 2t) from half base hb.
 fn gkhadrb hb uint to void
-gkimadw 52 14 8 hb
-gkimadw 48 15 0 hb
-for e uint 16
-if and ne e 0 ne e 2
+gkimadw 50 14 8 hb
+gkimadw1 48 15 0 hb
+for p uint 8
+if gt p 1
 src = hb
-if ge and e 3 2
-src = 52
+if ne and p 1 0
+src = 50
 end
-gkimadw add 48 mul e 2 15 add mul shr e 2 8 and e 1 src
+col = mul shr p 1 8
+if eq p 7
+gkimadw add 48 mul p 2 15 col src
+else
+gkimadw1 add 48 mul p 2 15 col src
 end
 end
 end
-note One m16 half mi of the thread's accumulators (R16 + 16 mi + e): ep 2 loads M into R80-95, beta
-note the old C; alpha R141; fused epilogue as gkquad64. Half bases: C R112 + 4 mi, second R114 + 4 mi.
+end
+fn gkhld64 to void
+for p uint 8
+p2 = mul p 2
+gkldg64 add 80 p2 add 48 p2 ne p 0 lt p 7
+end
+end
+fn gkhst64 a0 uint to void
+for p uint 8
+p2 = mul p 2
+gkstg64 add 48 p2 add a0 p2 ne p 0 lt p 7
+end
+end
+note One m16 half mi of the thread's accumulators (R16 + 16 mi + e): vectorized 64-bit LDG.E.64/STG.E.64
+note over the 8 adjacent column pairs (col 2t, 2t+1). Half bases: C R112 + 4 mi, second R114 + 4 mi.
 fn gkhalfb mi uint beta bool ep uint to void
 hc = add 112 mul mi 4
 hy = add 114 mul mi 4
 a0 = add 16 mul mi 16
 if eq ep 2
 gkhadrb hy
-for e uint 16
-gkldg add 80 e add 48 mul e 2 0 ne e 0
-end
+gkhld64
 end
 gkhadrb hc
 if beta
-for e uint 16
-gkldg add 80 e add 48 mul e 2 0 ne e 0
-end
+gkhld64
 end
 for e uint 16
 if beta
@@ -992,17 +1089,13 @@ for e uint 16
 gkepm add a0 e add 80 e t
 end
 end
-for e uint 16
-gkstg add 48 mul e 2 add a0 e 0 ne e 0
-end
+gkhst64 a0
 if eq ep 1
 for e uint 16
 gkepm add a0 e add a0 e 255
 end
 gkhadrb hy
-for e uint 16
-gkstg add 48 mul e 2 add a0 e 0 ne e 0
-end
+gkhst64 a0
 end
 end
 note Thread C base R112 (and second base R114 when fused): row 64 R3 + 32 wm + g, column
@@ -1414,7 +1507,7 @@ end
 note submit the recorded batch: one nvsend, one nvwait (batch.om gbbsubmit); the wait goes to gkt 2
 fn gkbsub to bool
 t1 = monons
-ok = gbbsubmit 5000000000
+ok = gbbsubmit 20000000000
 w = sub monons t1
 put gkt 2 add get gkt 2 w
 ret ok
@@ -1631,6 +1724,15 @@ ret false
 end
 ret eq get gkmd 1 sub ep 1
 end
+fn gkmmsw id uint gx uint gy uint nz uint bf bool to bool
+if and bf eq get gkbp 7 0
+if and ge gx 24 and eq rem gx 8 0 ge gy 8
+put gkarg 28 1073741826
+ret gklaunch id mul gy 8 div gx 8 nz
+end
+end
+ret gklaunch id gx gy nz
+end
 fn gkmm m uint n uint k uint nz uint h2 uint beta bool to bool
 ep = get gkep 0
 put gkep 0 0
@@ -1673,21 +1775,23 @@ if bf
 id = gkmmb beta ep
 end
 if not and bf eq get gkbck 0 1
-ret gklaunch id div n t div m t nz
+ret gkmmsw id div n t div m t nz bf
 end
 gkbpset m n k nz h2 beta
 put gkbp 6 ep
 gbpre
-if not gklaunch id div n t div m t nz
+if not gkmmsw id div n t div m t nz bf
 ret false
 end
 ret gbpost
 end
-note BF16 operands both take the 16-byte tile (gkbfop) and k is a multiple of the K tile 32
+note BF16 operands both take the 16-byte tile (gkbfop), C has contiguous 4-byte columns (for 64-bit
+note epilogue LDG.E.64/STG.E.64), and k is a multiple of the K tile 32
 fn gkbfok k uint to bool
 ba = gkbfop 0
 bb = gkbfop 1
-ret and and ba bb eq rem k 32 0
+cc = and eq get gkarg 19 4 eq rem get gkarg 18 8 0
+ret and and ba bb and cc eq rem k 32 0
 end
 note gkbp words 0..5 for gb.om's check: m n k nz h2 beta
 fn gkbpset m uint n uint k uint nz uint h2 uint beta bool to void

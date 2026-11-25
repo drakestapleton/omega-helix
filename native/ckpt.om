@@ -22,7 +22,7 @@ note G > B or B mod G != 0, or (CK03) NP < 2, LC = 0, LP + LC > L or a loop the 
 note 13 P disagrees with the shapes, 14 FNV-1a mismatch, 15 file longer than header + 24 P, 17 a
 note CK03 file given to a command that does not run loops (it loads with ockload, not ockloop);
 note 70 I/O.
-const OCKCAP ulong 4294967296
+const OCKCAP ulong 12884901888
 const OCKC ulong 65536
 global ock uchar 524288
 

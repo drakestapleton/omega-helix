@@ -8,7 +8,13 @@ const OGBN ulong 1
 global ogb f64 1
 const OABN ulong 1
 global oab f64 1
+const OPABN ulong 0
+global opab f64 1
 
 fn olp_grow w ulong g ulong a ulong to bool
 ret and le w OWWN and le g OGBN le a OABN
+end
+
+fn olp_grow_pa pa ulong to bool
+ret eq pa 0
 end

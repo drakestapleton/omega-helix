@@ -135,7 +135,7 @@ note cold store (CONTRACT-V3 section 2): GRD and the Adam moments, 3 P values at
 note maxima (3 29995392 -> 89986176 values, 719889408 bytes), in one private anonymous mapping made
 note on first use (mapnew prot 3 read/write, flags 34 private|anonymous; zero-filled, and inherited
 note copy-on-write by the gradient workers). A failed mapping is an I/O refusal (exit 70).
-const OCSN ulong 450000000
+const OCSN ulong 1500000000
 global ocsh long 1
 global ocsf ulong 1
 
