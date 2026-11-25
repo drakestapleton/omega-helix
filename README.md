@@ -154,6 +154,9 @@ Distill traces, logs, and open-source models into compact Helix students (`dk-un
 ./bin/omega-helix distill run --mode dk-univ --arch qwen3 --trace ./traces.jsonl --K 8 --alpha 0.7 --steps 20
 ```
 
+### 8. Sovereign Runtime: Anti-DNA Firewalls, Disagreement Deep-Thinking & Grammar Decoding
+Run negative-weight contrastive Anti-DNA strands with per-token FNV-1a cryptographic receipts + JSD disagreement `LTP0` extra passes (`ollm spguard`), deterministic FSM JSON grammar masking (`ollm-univ gsamp`), verifier-gated sleep cycles (`omega-helix sleep`), compile-until-green crystallization (`omega-helix green`), and the 10-second `import-hf` -> DNA demo (`sh scripts/demo-10s-wow.sh`) — see [`docs/SOVEREIGN-RUNTIME.md`](docs/SOVEREIGN-RUNTIME.md).
+
 ---
 
 ## Universal Model Engine, Weight Interchange & Open-Source Data

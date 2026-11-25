@@ -6,7 +6,7 @@ global odl1 f64 4096
 global odl2 f64 4096
 global ottt_st ulong 8
 global oens ulong 8
-global ocl_st ulong 16
+global ocl_st ulong 18
 global ocl_k ulong 4
 global ocl_a0 ulong 4
 global ocl_sl ulong 4
@@ -15,6 +15,8 @@ global ocl_wn ulong 4
 global ocl_w f64 4
 global ocl_ent f64 4
 global ocl_al f64 4
+global ocl_ph ulong 4
+global ocl_wm long 4
 
 note ---- 1. Frozen-Core Residual Specialist Training ----
 note trainf CK TOKS UNTIL EVERY FREEZE_LAYERS [BATCH]
@@ -1761,26 +1763,37 @@ end
 ret get og 15
 end
 
-note Parse spclip CLI arguments into ocl_st, ocl_w, ocl_k, ocl_a0
-fn osp_clip_parse to void
+note Parse spclip or spguard CLI strand arguments starting at ss_arg
+fn osp_clip_parse_at md ulong ss_arg ulong to void
 na = oargc
-if lt na 16
+if lt na add ss_arg 7
 exit 2
 end
-md = oargu 3
-ss = oargu 9
-if or gt md 1 or lt ss 2 gt ss 4
+ss = oargu ss_arg
+if or lt ss 2 gt ss 4
 exit 2
 end
 put ocl_st 0 md
 put ocl_st 1 ss
-idx = ulong 10
+idx = add ss_arg 1
 sw = 0.0f64
+ac = ulong 0
 for s ulong ss
 if gt add idx 2 na
 exit 2
 end
-ws = div f64 oargu idx 1000.0
+wi = oargs idx
+if and eq md 1 lt wi 0
+exit 2
+end
+if or lt wi -5000 gt wi 5000
+exit 2
+end
+put ocl_wm s wi
+ws = div f64 wi 1000.0
+if lt wi 0
+ac = add ac 1
+end
 ks = oargu add idx 1
 if or eq ks 0 gt ks 8
 exit 2
@@ -1789,7 +1802,9 @@ if gt add add idx 2 ks na
 exit 2
 end
 put ocl_w s ws
+if gt ws 0.0
 sw = add sw ws
+end
 put ocl_k s ks
 put ocl_a0 s add idx 2
 idx = add add idx 2 ks
@@ -1797,6 +1812,30 @@ end
 if or ne idx na le sw 0.0
 exit 2
 end
+put ocl_st 13 ac
+end
+
+note Parse spclip CLI arguments into ocl_st, ocl_w, ocl_k, ocl_a0
+fn osp_clip_parse to void
+na = oargc
+if lt na 16
+exit 2
+end
+md = oargu 3
+if gt md 1
+exit 2
+end
+osp_clip_parse_at md 9
+end
+
+note Mix 64-bit little-endian integer x into running FNV-1a-64 digest h
+fn osp_mix64 h ulong x ulong to ulong
+z = h
+for k ulong 8
+b = and shr x mul k 8 255
+z = mul xor z b 1099511628211
+end
+ret z
 end
 
 note True iff all ss strands share an identical valid pack at link index j on top of current ow
@@ -1838,16 +1877,21 @@ mink = get ocl_k s
 end
 end
 comm = ulong 0
+phc = ulong 14695981039346656037
 for j ulong mink
 if not osp_clip_same j ss
 break
 end
 osp_chain_link add get ocl_a0 0 j
+phc = osp_mix64 phc get ottt_st 4
 comm = add comm 1
 end
 put ocl_st 3 get og 5
 put ocl_st 4 get og 33
 put ocl_st 6 comm
+for s2 ulong ss
+put ocl_ph s2 phc
+end
 for g ulong get og 2
 put odl2 g owg add get og 33 g
 end
@@ -1907,12 +1951,15 @@ cur_l = get ocl_st 3
 cur_fz = get ocl_st 4
 j = get ocl_st 6
 ks = get ocl_k s
+ph = get ocl_ph s
 while lt j ks bound 16
 sl = osp_clip_1link add get ocl_a0 s j cur_l cur_fz
+ph = osp_mix64 ph get ottt_st 4
 cur_l = sl
 cur_fz = add get og 31 mul sl get og 32
 j = add j 1
 end
+put ocl_ph s ph
 ret cur_l
 end
 
@@ -1956,6 +2003,7 @@ fn osp_clip_init to void
 c = ocsinit
 ockloop 2
 put ocl_st 2 get og 5
+put ocl_st 11 osp_basehash get og 5 get og 33
 osp_clip_trunk
 ml = osp_clip_maxl
 put ocl_st 5 ml
@@ -2038,18 +2086,20 @@ end
 osp_clip_head s nc
 end
 
-note Fuse S strands' log-probs in ocs into TMP[0..V) using MODE=0 (prior) or MODE=1 (entropy-gated)
+note Fuse S strands' log-probs in ocs into TMP[0..V) using MODE=0 (signed PoE) or MODE=1 (entropy-gated)
 fn osp_clip_fuse to void
 md = get ocl_st 0
 ss = get ocl_st 1
 su = 0.0f64
 for s ulong ss
 u = get ocl_w s
-if eq md 1
+if and eq md 1 gt u 0.0
 u = div u add get ocl_ent s 0.001
 end
 put ocl_al s u
+if gt u 0.0
 su = add su u
+end
 end
 for s2 ulong ss
 put ocl_al s2 div get ocl_al s2 su
@@ -2064,6 +2114,227 @@ acc = add acc mul get ocl_al s3 ocsg add lo add mul s3 v j
 end
 put oa add pr j acc
 end
+end
+
+note Jensen-Shannon Disagreement H(pbar) - mean(H(ps)) across positive-weight strands (ocl_w[s] > 0)
+fn osp_jsd_pbar j ulong np ulong lo ulong v ulong to f64
+sm = 0.0f64
+for s ulong get ocl_st 1
+if gt get ocl_w s 0.0
+sm = add sm fexp ocsg add lo add mul s v j
+end
+end
+ret div sm f64 np
+end
+
+fn osp_clip_jsd to f64
+ss = get ocl_st 1
+np = ulong 0
+hmean = 0.0f64
+for s ulong ss
+if gt get ocl_w s 0.0
+np = add np 1
+hmean = add hmean get ocl_ent s
+end
+end
+if lt np 2
+put ocl_st 10 0
+ret 0.0f64
+end
+hmean = div hmean f64 np
+lo = get ocl_st 9
+v = get og 0
+hbar = 0.0f64
+for j ulong v
+pb = osp_jsd_pbar j np lo v
+if gt pb 1.0e-15f64
+hbar = sub hbar mul pb flog pb
+end
+end
+jsd = sub hbar hmean
+if lt jsd 0.0
+jsd = 0.0f64
+end
+jm = ulong add mul jsd 1000.0 0.5
+put ocl_st 10 jm
+ret jsd
+end
+
+note Run one extra refinement pass over trunk layers [c0 .. ta-1] on row nc-1 when strands disagree
+fn osp_guard_c0 ta ulong tl ulong to ulong
+np = get og 59
+lc = add get og 57 get og 58
+if and gt np 1 le lc tl
+ret get og 57
+end
+ret sub ta 1
+end
+
+fn osp_guard_pass nc ulong tl ulong to void
+d = get og 2
+r = mul sub nc 1 d
+ta = osp_app tl
+last_a = sub ta 1
+c0 = osp_guard_c0 ta tl
+onlcopy_oa add oahin c0 r add oaout last_a r d
+for k ulong sub ta c0
+l = add c0 k
+okvlay l sub nc 1 1
+if lt add l 1 ta
+onlcopy_oa add oahin add l 1 r add oaout l r d
+end
+end
+onlcopy_oa add osp_hout tl r add oaout last_a r d
+end
+
+fn osp_guard_rcpt_init to void
+h = ulong 14695981039346656037
+h = osp_mix64 h get ocl_st 11
+for s ulong get ocl_st 1
+h = osp_mix64 h bitcast ulong get ocl_wm s
+h = osp_mix64 h get ocl_ph s
+end
+put ocl_st 12 h
+end
+
+fn osp_guard_rcpt_step g ulong c ulong to ulong
+h = get ocl_st 12
+h = osp_mix64 h g
+h = osp_mix64 h c
+h = osp_mix64 h get ocl_st 10
+h = osp_mix64 h get ocl_st 16
+h = osp_mix64 h get ocl_st 17
+h = osp_mix64 h get ocl_st 13
+put ocl_st 12 h
+ret h
+end
+
+fn osp_guard_emit step ulong tok ulong to void
+oputc 71
+oputc 32
+oputu step
+oputc 32
+oputu tok
+oputc 32
+oputu get ocl_st 10
+oputc 32
+oputu get ocl_st 16
+oputc 32
+oputu get ocl_st 17
+oputc 32
+oputu get ocl_st 13
+oputc 32
+oputx get ocl_st 12
+oputc 10
+oflush
+end
+
+fn osp_guard_eval nc ulong tl ulong to f64
+osp_hsnap get ocl_st 7 osp_hout tl mul nc get og 2
+for s ulong get ocl_st 1
+osp_clip_br s nc
+end
+ret osp_clip_jsd
+end
+
+fn osp_guard_refine nc ulong tl ulong to void
+ex = ulong 0
+mxex = get ocl_st 15
+thresh = div f64 get ocl_st 14 1000.0
+while lt ex mxex bound 8
+ex = add ex 1
+osp_guard_pass nc tl
+if lt osp_guard_eval nc tl thresh
+break
+end
+end
+put ocl_st 16 ex
+end
+
+fn osp_guard_step st ulong tm ulong to ulong
+nc = get og 9
+tl = get ocl_st 3
+put okv 0 0
+put ogkm 1 0
+oemb 0
+for l ulong osp_app tl
+olayf l
+end
+put ocl_st 16 0
+put ocl_st 17 0
+thresh = div f64 get ocl_st 14 1000.0
+if ge osp_guard_eval nc tl thresh
+put ocl_st 17 1
+osp_guard_refine nc tl
+end
+osp_clip_fuse
+if eq tm 0
+ret oargmax
+end
+ret odraw st div f64 tm 1000.0
+end
+
+fn osp_guard_run nn ulong st ulong tm ulong to void
+con_tot = ulong 0
+ex_tot = ulong 0
+drawn = ulong 0
+for g ulong nn
+c = osp_guard_step st tm
+if ne tm 0
+st = add st 11400714819323198485
+end
+if eq c 0
+break
+end
+con_tot = add con_tot get ocl_st 17
+ex_tot = add ex_tot get ocl_st 16
+rcpt = osp_guard_rcpt_step g c
+osp_guard_emit g c
+drawn = add drawn 1
+ocpush c
+end
+oputc 71
+oputc 82
+oputc 32
+oputu drawn
+oputc 32
+oputu con_tot
+oputc 32
+oputu ex_tot
+oputc 32
+oputu get ocl_st 13
+oputc 32
+oputx get ocl_st 11
+oputc 32
+oputx get ocl_st 12
+oputc 10
+oflush
+end
+
+note spguard BASE.ck DISAGREE_MILLI MAX_EXTRA PROMPT N TEMPMILLI SEED MERGES S W1 K1 A1..AK1 ...
+fn cmdspguard to void
+dm = oargu 3
+mx = oargu 4
+if gt mx 4
+exit 2
+end
+nn = oargu 6
+if or eq nn 0 gt nn 999999
+exit 2
+end
+tm = oargu 7
+sd = oargu 8
+osp_clip_parse_at 0 10
+put ocl_st 14 dm
+put ocl_st 15 mx
+osp_clip_init
+v = get og 0
+if gt v 256
+obload 9 v
+end
+osp_prompt 5 v
+osp_guard_rcpt_init
+osp_guard_run nn sd tm
 end
 
 note One DNA-clipped decode step: shared trunk ONCE, then S strands over H_trunk, fused into TMP

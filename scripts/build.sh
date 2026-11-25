@@ -104,7 +104,7 @@ if [ "$TARGET" = univ ]; then
     else
       printf 'om2\n'
     fi
-    cat "$u/umath.om" "$u/uarena.om" "$u/uadam.om" "$u/uckpt.om" "$u/umodel.om" "$u/udistill.om" "$u/ucli.om"
+    cat "$u/umath.om" "$u/uarena.om" "$u/uadam.om" "$u/uckpt.om" "$u/umodel.om" "$u/udistill.om" "$u/ugrammar.om" "$u/ucli.om"
   } > "$OUT/ollm-univ.om"
   "$OMC" < "$OUT/ollm-univ.om" > "$OUT/ollm-univ.tmp"
   chmod +x "$OUT/ollm-univ.tmp"

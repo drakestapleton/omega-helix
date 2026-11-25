@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -490,6 +491,83 @@ def cmd_distill_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_runtime():
+    tools_dir = STUDIO_DIR.parent
+    if str(tools_dir) not in sys.path:
+        sys.path.insert(0, str(tools_dir))
+    import runtime as rt
+    return rt
+
+
+def cmd_runtime_gsamp(args: argparse.Namespace) -> int:
+    bins = runner.ensure_binaries(["ollm_univ"], bin_dir=args.bin_dir)
+    res = subprocess.run(
+        [
+            str(bins["ollm_univ"]), "gsamp",
+            str(Path(args.ck_path).expanduser().resolve()),
+            str(args.seed), str(args.n_tokens), str(args.temp_milli), str(args.mode),
+        ],
+        capture_output=True, text=True, check=False,
+    )
+    if res.returncode != 0:
+        raise RuntimeError(f"ollm-univ gsamp failed (rc={res.returncode}): {res.stderr.strip()}")
+    g_raw = ""
+    toks: list[int] = []
+    for ln in res.stdout.splitlines():
+        if ln.startswith("G "):
+            g_raw = ln[2:]
+        elif ln.startswith("S "):
+            toks = [int(x) for x in ln[2:].split()]
+    out = {"ok": True, "mode": args.mode, "text": g_raw, "tokens": toks}
+    if args.json:
+        print(json.dumps(out, indent=2))
+    else:
+        print(g_raw)
+    return 0
+
+
+def cmd_runtime_guard(args: argparse.Namespace) -> int:
+    rt = _load_runtime()
+    bins = runner.ensure_binaries(["ollm"], bin_dir=args.bin_dir)
+    strands: list[dict[str, Any]] = []
+    for item in args.strand:
+        w_s, _, p_s = item.partition(":")
+        packs = [x.strip() for x in p_s.split(",") if x.strip()]
+        strands.append({"weight_milli": int(w_s), "packs": packs})
+    res = rt.run_firewall_decode(
+        bins["ollm"], args.base_ck, strands,
+        prompt=args.prompt, n_tokens=args.n_tokens, temp_milli=args.temp_milli,
+        seed=args.seed, disagree_milli=args.disagree_milli, max_extra=args.max_extra, merges=args.merges,
+    )
+    chk = rt.verify_firewall_receipt(res)
+    doc = {"ok": chk["verified"], "spguard": res, "verification": chk}
+    print(json.dumps(doc, indent=2))
+    return 0 if chk["verified"] else 1
+
+
+def cmd_runtime_sleep(args: argparse.Namespace) -> int:
+    rt = _load_runtime()
+    bins = runner.ensure_binaries(["ollm"], bin_dir=args.bin_dir)
+    vers = [x.strip() for x in args.verify.split(",") if x.strip()]
+    res = rt.run_sleep_cycle(
+        bins["ollm"], args.base_ck, args.interaction, args.held, args.out_dir,
+        verifiers=vers, max_regression_nats=args.max_regression, steps=args.steps, date_tag=args.date_tag,
+    )
+    print(json.dumps(res, indent=2))
+    return 0 if res.get("accepted") else 1
+
+
+def cmd_runtime_green(args: argparse.Namespace) -> int:
+    rt = _load_runtime()
+    bins = runner.ensure_binaries(["ollm"], bin_dir=args.bin_dir)
+    res = rt.run_compile_until_green(
+        bins["ollm"], args.ck_path, args.prompt,
+        verifier=args.verifier, max_attempts=args.max_attempts, out_dir=args.out_dir,
+    )
+    print(json.dumps(res, indent=2))
+    return 0 if res.get("passed") else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--workspace-dir", default=argparse.SUPPRESS, help="Directory for forged runs")
@@ -614,6 +692,49 @@ def build_parser() -> argparse.ArgumentParser:
     p_dstat.add_argument("run_id", nargs="?", default=None)
     p_dstat.set_defaults(func=cmd_distill_status)
     p_dist.set_defaults(func=lambda a: (p_dist.print_help(), 0)[1])
+
+    p_gs = sub.add_parser("gsamp", parents=[common], help="Grammar-constrained finite-state decoding via ollm-univ gsamp")
+    p_gs.add_argument("ck_path")
+    p_gs.add_argument("--seed", type=int, default=42)
+    p_gs.add_argument("--n-tokens", dest="n_tokens", type=int, default=32)
+    p_gs.add_argument("--temp-milli", dest="temp_milli", type=int, default=900)
+    p_gs.add_argument("--mode", type=int, choices=(1, 2, 3), default=1)
+    p_gs.add_argument("--json", action="store_true")
+    p_gs.set_defaults(func=cmd_runtime_gsamp)
+
+    p_gd = sub.add_parser("guard", parents=[common], help="Anti-DNA contrastive decode + JSD disagreement LTP0 receipt")
+    p_gd.add_argument("base_ck")
+    p_gd.add_argument("--strand", action="append", required=True, help="SIGNED_WEIGHT_MILLI:PACK1[,PACK2]")
+    p_gd.add_argument("--prompt", default="Omega ")
+    p_gd.add_argument("--n-tokens", dest="n_tokens", type=int, default=12)
+    p_gd.add_argument("--temp-milli", dest="temp_milli", type=int, default=0)
+    p_gd.add_argument("--seed", type=int, default=42)
+    p_gd.add_argument("--disagree-milli", dest="disagree_milli", type=int, default=50)
+    p_gd.add_argument("--max-extra", dest="max_extra", type=int, default=2)
+    p_gd.add_argument("--merges", default="-")
+    p_gd.add_argument("--json", action="store_true")
+    p_gd.set_defaults(func=cmd_runtime_guard)
+
+    p_slp = sub.add_parser("sleep", parents=[common], help="Verifier-gated offline sleep cycle consolidation -> .sp")
+    p_slp.add_argument("base_ck")
+    p_slp.add_argument("--held", required=True)
+    p_slp.add_argument("--interaction", action="append", required=True)
+    p_slp.add_argument("--out-dir", dest="out_dir", required=True)
+    p_slp.add_argument("--verify", default="nonempty")
+    p_slp.add_argument("--max-regression", dest="max_regression", type=float, default=0.25)
+    p_slp.add_argument("--steps", type=int, default=8)
+    p_slp.add_argument("--date-tag", dest="date_tag", default=None)
+    p_slp.add_argument("--json", action="store_true")
+    p_slp.set_defaults(func=cmd_runtime_sleep)
+
+    p_grn = sub.add_parser("green", parents=[common], help="Compile-until-green LTP0 + micro-TTT crystallization -> .sp")
+    p_grn.add_argument("ck_path")
+    p_grn.add_argument("--prompt", required=True)
+    p_grn.add_argument("--verifier", default="omc_compile")
+    p_grn.add_argument("--max-attempts", dest="max_attempts", type=int, default=3)
+    p_grn.add_argument("--out-dir", dest="out_dir", required=True)
+    p_grn.add_argument("--json", action="store_true")
+    p_grn.set_defaults(func=cmd_runtime_green)
 
     return p
 

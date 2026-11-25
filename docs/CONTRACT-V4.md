@@ -67,6 +67,7 @@ Math constants in `native/univ/umath.om` (`ufexp`, `uflog`, `ufsin`, `ufcos`, `u
 - `export-hf IN.ck OUT_DIR [f32|bf16]` — writes `OUT_DIR/config.json` via `jsonw.om` and `OUT_DIR/model.safetensors` (`OUT_DIR` must exist).
 - `export-gguf IN.ck OUT.gguf` — writes GGUF v3 (`magic = 1179993927`, `version = 3`, 20 KV metadata entries, 32-byte aligned `F32` tensors, `convert_hf_to_gguf` `Q/K` row permutation for `llama`).
 - `upgrade LEGACY.ck OUT.ck` — upgrades legacy `OLLMCK01`/`02`/`03` checkpoints bit-for-bit to `OLLMCK04`.
+- `ollm-univ gsamp CK SEED N TEMPMILLI GRAMMAR_MODE` — finite-state grammar-constrained KV decode (`1 = json_obj`, `2 = ascii_ident`, `3 = csv_num`; `native/univ/ugrammar.om`), masking invalid token logits before softmax sampling (`G <decoded>\nS <id0> ...`).
 
 ---
 
