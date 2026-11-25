@@ -171,11 +171,11 @@ kbd,
 }
 
 code {
-  background: rgba(148, 163, 184, 0.12);
+  background: color-mix(in srgb, var(--c1) 10%, var(--input-bg));
   padding: 1px 6px;
   border-radius: 5px;
   font-size: 0.9em;
-  color: #cffafe;
+  color: color-mix(in srgb, var(--c5) 82%, var(--text));
 }
 
 :focus-visible {
@@ -323,9 +323,9 @@ code {
 :root:has(> head > meta[name="color-scheme"][content="light"]) .theme-opt-dark { display: inline; }
 
 .pill-btn[aria-pressed="true"] {
-  border-color: rgba(52, 211, 153, 0.55);
-  color: #a7f3d0;
-  background: rgba(52, 211, 153, 0.12);
+  border-color: color-mix(in srgb, var(--c3) 55%, transparent);
+  color: color-mix(in srgb, var(--c3) 70%, var(--text));
+  background: color-mix(in srgb, var(--c3) 14%, var(--surface));
 }
 
 .dot {
@@ -336,8 +336,8 @@ code {
 }
 
 .pill-run[data-state="running"] {
-  border-color: rgba(34, 211, 238, 0.55);
-  color: #cffafe;
+  border-color: color-mix(in srgb, var(--c1) 55%, transparent);
+  color: color-mix(in srgb, var(--c1) 70%, var(--text));
 }
 
 .pill-run[data-state="running"] .dot {
@@ -347,8 +347,8 @@ code {
 }
 
 .pill-run[data-state="done"] {
-  border-color: rgba(52, 211, 153, 0.55);
-  color: #a7f3d0;
+  border-color: color-mix(in srgb, var(--c3) 55%, transparent);
+  color: color-mix(in srgb, var(--c3) 70%, var(--text));
 }
 
 .pill-run[data-state="done"] .dot {
@@ -356,8 +356,8 @@ code {
 }
 
 .pill-run[data-state="error"] {
-  border-color: rgba(251, 113, 133, 0.55);
-  color: #fecdd3;
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+  color: color-mix(in srgb, var(--danger) 75%, var(--text));
 }
 
 .pill-run[data-state="error"] .dot {
@@ -516,7 +516,7 @@ main {
 
 .tabs [role="tab"][aria-selected="true"] {
   color: var(--text);
-  background: rgba(15, 25, 48, 0.65);
+  background: color-mix(in srgb, var(--c1) 10%, var(--surface));
 }
 
 .tabs [role="tab"][data-accent="c1"][aria-selected="true"]::after { border-block-end-color: var(--c1); }
@@ -710,14 +710,14 @@ input[type="checkbox"] {
 }
 
 .btn-danger {
-  border-color: rgba(251, 113, 133, 0.5);
-  color: #fecdd3;
-  background: rgba(251, 113, 133, 0.12);
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+  color: color-mix(in srgb, var(--danger) 80%, var(--text));
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
 }
 
 .btn-danger:hover:not(:disabled) {
   border-color: var(--danger);
-  background: rgba(251, 113, 133, 0.24);
+  background: color-mix(in srgb, var(--danger) 22%, var(--surface));
 }
 
 .btn-sm {
@@ -786,7 +786,7 @@ input[type="checkbox"] {
   padding: 5px 12px;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: rgba(11, 18, 34, 0.72);
+  background: var(--surface);
   color: var(--muted);
   font-size: 12.5px;
   font-weight: 600;
@@ -803,12 +803,13 @@ input[type="checkbox"] {
 .chip:hover {
   border-color: var(--border-hi);
   color: var(--text);
+  background: var(--input-bg);
 }
 
 .chip[aria-pressed="true"] {
   border-color: var(--c1);
-  background: rgba(34, 211, 238, 0.16);
-  color: #cffafe;
+  background: color-mix(in srgb, var(--c1) 16%, var(--surface));
+  color: color-mix(in srgb, var(--c5) 70%, var(--text));
 }
 
 .facet {
@@ -866,9 +867,9 @@ input[type="checkbox"] {
 }
 
 .cat-card:hover {
-  border-color: rgba(34, 211, 238, 0.4);
+  border-color: color-mix(in srgb, var(--c1) 50%, transparent);
   transform: translateY(-1px);
-  box-shadow: 0 10px 28px rgba(3, 8, 26, 0.6);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--text) 12%, transparent);
 }
 
 .cat-card.is-base {
@@ -924,14 +925,14 @@ input[type="checkbox"] {
   border-radius: 6px;
   font-size: 11px;
   font-weight: 600;
-  background: rgba(148, 163, 184, 0.12);
-  color: #cbd5e1;
+  background: var(--input-bg);
+  color: var(--muted);
 }
 
-.badge.cat { background: rgba(34, 211, 238, 0.14); color: #a5f3fc; }
-.badge.lic { background: rgba(52, 211, 153, 0.14); color: #a7f3d0; }
-.badge.lang { background: rgba(167, 139, 250, 0.14); color: #ddd6fe; }
-.badge.assigned { background: rgba(251, 191, 36, 0.18); color: #fde68a; }
+.badge.cat { background: color-mix(in srgb, var(--c1) 14%, var(--surface)); color: color-mix(in srgb, var(--c5) 75%, var(--text)); }
+.badge.lic { background: color-mix(in srgb, var(--c3) 14%, var(--surface)); color: color-mix(in srgb, var(--c3) 65%, var(--text)); }
+.badge.lang { background: color-mix(in srgb, var(--c2) 14%, var(--surface)); color: color-mix(in srgb, var(--c2) 70%, var(--text)); }
+.badge.assigned { background: color-mix(in srgb, var(--c4) 18%, var(--surface)); color: color-mix(in srgb, var(--c4) 60%, var(--text)); }
 
 .card-actions {
   display: flex;
@@ -947,8 +948,8 @@ input[type="checkbox"] {
   gap: 3px;
   padding: 10px 12px;
   border-radius: var(--radius-sm);
-  background: rgba(5, 8, 20, 0.65);
-  border: 1px solid rgba(34, 211, 238, 0.32);
+  background: var(--input-bg);
+  border: 1px solid color-mix(in srgb, var(--c1) 40%, transparent);
   margin: 10px 0 12px;
 }
 
@@ -993,7 +994,7 @@ input[type="checkbox"] {
   gap: 8px;
   padding: 7px 10px;
   border-radius: 8px;
-  background: rgba(5, 8, 20, 0.6);
+  background: var(--input-bg);
   border: 1px solid var(--border);
   font-size: 12.5px;
 }
@@ -1039,12 +1040,12 @@ input[type="checkbox"] {
 .inspect-card {
   padding: 10px 12px;
   border-radius: var(--radius-sm);
-  background: rgba(5, 8, 20, 0.72);
+  background: var(--input-bg);
   border: 1px solid var(--border);
 }
 
-.inspect-card.ok { border-color: rgba(52, 211, 153, 0.45); }
-.inspect-card.err { border-color: rgba(251, 113, 133, 0.5); color: #fecdd3; }
+.inspect-card.ok { border-color: color-mix(in srgb, var(--c3) 50%, transparent); }
+.inspect-card.err { border-color: color-mix(in srgb, var(--danger) 55%, transparent); color: color-mix(in srgb, var(--danger) 80%, var(--text)); }
 
 /* Design Tab */
 .mode-bar {
@@ -1093,7 +1094,7 @@ input[type="checkbox"] {
   padding: 8px 12px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  background: rgba(5, 8, 20, 0.55);
+  background: var(--input-bg);
   cursor: pointer;
   transition: all 0.16s ease;
 }
@@ -1120,7 +1121,7 @@ input[type="checkbox"] {
 
 .dag-wrap {
   border-radius: var(--radius-sm);
-  background: radial-gradient(circle at 50% 45%, rgba(34, 211, 238, 0.06), rgba(5, 8, 20, 0.88));
+  background: radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--c1) 7%, transparent), var(--input-bg));
   border: 1px solid var(--border);
   overflow: hidden;
 }
@@ -1142,7 +1143,7 @@ input[type="checkbox"] {
 .est {
   padding: 9px 11px;
   border-radius: var(--radius-sm);
-  background: rgba(5, 8, 20, 0.65);
+  background: var(--input-bg);
   border: 1px solid var(--border);
 }
 
@@ -1181,11 +1182,11 @@ input[type="checkbox"] {
   margin: 6px 0 0;
   padding: 10px;
   border-radius: 8px;
-  background: rgba(3, 6, 16, 0.9);
+  background: var(--input-bg);
   border: 1px solid var(--border);
   white-space: pre-wrap;
   word-break: break-all;
-  color: #bae6fd;
+  color: color-mix(in srgb, var(--c5) 75%, var(--text));
   font-size: 11.5px;
 }
 
@@ -1257,7 +1258,7 @@ input[type="checkbox"] {
 .strand-card {
   padding: 12px 14px;
   border-radius: var(--radius-sm);
-  background: rgba(5, 8, 20, 0.72);
+  background: var(--input-bg);
   border: 1px solid var(--border);
   border-left: 4px solid var(--strand-c, var(--c1));
   display: flex;
@@ -1351,8 +1352,9 @@ input[type="checkbox"] {
 }
 
 .step-item[data-state="done"] {
-  border-color: rgba(52, 211, 153, 0.48);
-  color: #d1fae5;
+  border-color: color-mix(in srgb, var(--c3) 50%, transparent);
+  background: color-mix(in srgb, var(--c3) 10%, var(--surface));
+  color: var(--text);
 }
 
 .step-item[data-state="done"] .st-dot {
@@ -1360,8 +1362,9 @@ input[type="checkbox"] {
 }
 
 .step-item[data-state="error"] {
-  border-color: rgba(251, 113, 133, 0.6);
-  color: #fecdd3;
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  color: color-mix(in srgb, var(--danger) 80%, var(--text));
 }
 
 .step-item[data-state="error"] .st-dot {
@@ -1426,7 +1429,7 @@ input[type="checkbox"] {
   width: 100%;
   height: auto;
   display: block;
-  background: rgba(5, 8, 20, 0.68);
+  background: var(--input-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
@@ -1470,7 +1473,7 @@ input[type="checkbox"] {
 .mixer-row {
   padding: 9px 11px;
   border-radius: var(--radius-sm);
-  background: rgba(5, 8, 20, 0.65);
+  background: var(--input-bg);
   border: 1px solid var(--border);
   border-left: 3px solid var(--strand-c, var(--c1));
 }
@@ -1479,8 +1482,9 @@ input[type="checkbox"] {
   min-height: 120px;
   padding: 14px;
   border-radius: var(--radius-sm);
-  background: rgba(4, 7, 18, 0.85);
+  background: var(--input-bg);
   border: 1px solid var(--border);
+  color: var(--text);
   font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.65;
@@ -1503,8 +1507,9 @@ input[type="checkbox"] {
   border-radius: 6px;
   font-family: var(--font-mono);
   font-size: 11px;
-  background: rgba(15, 25, 48, 0.9);
+  background: var(--input-bg);
   border: 1px solid var(--border);
+  color: var(--text);
 }
 
 .exit-pill b {
@@ -1538,7 +1543,7 @@ table.art {
 .sha {
   font-family: var(--font-mono);
   font-size: 11.5px;
-  color: #a5f3fc;
+  color: color-mix(in srgb, var(--c5) 75%, var(--text));
 }
 
 /* Toasts & Burst */
@@ -1559,7 +1564,7 @@ table.art {
   background: var(--glass-strong);
   border: 1px solid var(--c1);
   color: var(--text);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--text) 18%, transparent);
   font-size: 13px;
 }
 
