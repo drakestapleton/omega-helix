@@ -475,17 +475,23 @@ end
 end
 end
 
-fn uffn_act_bwd_swi f1 ulong f2 ulong n ulong to void
-df1 = get ug 50
-df2 = get ug 51
-for i ulong n
+fn uffn_act_bwd_swi_one df1 ulong df2 ulong f1 ulong f2 ulong i ulong to void
 dy = get ua add df1 i
 g = get ua add f1 i
 u = get ua add f2 i
 sig = ufsig g
 ua_put add df2 i mul dy mul g sig
-ds = mul sig add 1.0 mul g sub 1.0 sig
+om = sub 1.0 sig
+gm = add 1.0 mul g om
+ds = mul sig gm
 ua_put add df1 i mul mul dy u ds
+end
+
+fn uffn_act_bwd_swi f1 ulong f2 ulong n ulong to void
+df1 = get ug 50
+df2 = get ug 51
+for i ulong n
+uffn_act_bwd_swi_one df1 df2 f1 f2 i
 end
 end
 
