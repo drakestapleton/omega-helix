@@ -188,6 +188,34 @@ class StudioTestCase(unittest.TestCase):
         self.assertFalse(bad["valid"])
         self.assertIn("Looped core", bad["error"])
 
+    def test_estimate_chain_120m_multi_strand_dna_bf16(self) -> None:
+        est = runner.estimate_chain({
+            "name": "code-dna120m",
+            "mode": "dna",
+            "arch": "custom",
+            "tokenizer": "bpe",
+            "V": 4096, "T": 256, "D": 768, "H": 12, "H_KV": 12, "F": 3072, "L": 16, "B": 16,
+            "base_steps": 2000, "lr_micro": 1500,
+            "use_gpu": True, "gpu_precision": "bf16", "save_every": 250,
+            "strands": [
+                {"id": "strand-code", "name": "Code", "add_layers": 1, "steps": 500, "lr_micro": 2000, "weight": 500, "use_fcachem": False},
+                {"id": "strand-agentic", "name": "Agentic Coordination", "add_layers": 1, "steps": 500, "lr_micro": 2000, "weight": 500, "use_fcachem": False},
+            ],
+        })
+        self.assertTrue(est["valid"], est["error"])
+        self.assertGreaterEqual(est["base_params"], 116_000_000)
+        self.assertGreaterEqual(est["params"], 130_000_000)
+        self.assertEqual(est["tok_bytes"], 2)
+        cmds = est["resolved_cmd_preview"]
+        self.assertTrue(any("gtrainb base.ck train.tok 2000 250" in c for c in cmds), cmds)
+        self.assertTrue(any("gtrainb strand-code.ck strand-code.tok 500 250 16" in c for c in cmds), cmds)
+        self.assertTrue(any("gtrainb strand-agentic.ck strand-agentic.tok 500 250 16" in c for c in cmds), cmds)
+
+        # Verify UI exposes 120M DNA scale tier and Code + Agentic Coordination card
+        html = (STUDIO_DIR / "ui" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('value="dna120m"', html)
+        self.assertIn("Code + Agentic Coordination", html)
+
     # ------------------------------------------------------------------ 4. Full DNA Merkle + Hybrid Forge
 
     def test_full_dna_merkle_chain_forge_and_spclip_sample(self) -> None:
