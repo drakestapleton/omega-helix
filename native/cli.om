@@ -140,6 +140,11 @@ if eq w 482871572075
 cmdkvcmp
 ret 0
 end
+note adaptcmp 8101240656462177377 (adapteval and adaptsamp are 9 bytes: under w = 0 below)
+if eq w 8101240656462177377
+cmdadcmp
+ret 0
+end
 if eq w 112624400429684
 cmdtrainf
 ret 0
@@ -217,6 +222,14 @@ ret 0
 end
 if and eq lo 8317701428883976307 eq hi 7368033
 cmdspchainsamp
+ret 0
+end
+if and eq lo 7022912219706909793 eq hi 108
+cmdadeval
+ret 0
+end
+if and eq lo 7881707766813910113 eq hi 112
+cmdadsamp
 ret 0
 end
 end
@@ -876,6 +889,375 @@ put okvs 2 add get okvs 2 nd
 oputc 75
 oputc 70
 kvline s get og 9 oargmax nd long e
+end
+
+note ======== Adaptive loop commands (model.om onlx; docs/LOOP.md "Per-token exit and messages")
+note THRESH is the exit threshold of a row's normalized core delta times 1e6, GAIN the inter-pass
+note message gain times 1e6; 0 0 runs the hooks for telemetry only and computes eval's bits.
+note Every command prints, after its own lines,
+note `AX NP rows exited mean_exit_milli d0min_micro d0max_micro msgnorm_milli fnv` (rows counted,
+note rows that left the loop early, their mean passes, the range of pass-0 deltas, the mean message
+note norm, FNV-1a 64 over every counted row's exit pass, message norm bits and pass-0 delta bits)
+note and `AH c1 .. cNP` (rows by the passes they ran).
+note oadh: rows by passes; oadk: [0] fnv [1] rows [2] exited early [3] passes summed;
+note oada: [0] min pass-0 delta [1] max [2] message norms summed; oadx: [0] telemetry differences
+global oadh ulong 64
+global oadk ulong 4
+global oada f64 4
+global oadx ulong 2
+global oadhs ulong 4096
+
+fn oadset th ulong gn ulong to void
+onlreset
+oadclr
+put onlx 0 th
+put onlx 1 gn
+put onlx 6 1
+end
+
+fn oadclr to void
+for i ulong 8
+put onlx i 0
+end
+end
+
+fn oadzero to void
+for i ulong 64
+put oadh i 0
+end
+put oadk 0 14695981039346656037
+put oadk 1 0
+put oadk 2 0
+put oadk 3 0
+for j ulong 4
+put oada j 0.0f64
+end
+end
+
+note FNV-1a 64 of oadk[0] over the 8 little-endian bytes of w
+fn oadfnv w ulong to void
+h = get oadk 0
+for b ulong 8
+h = xor h and shr w mul b 8 255
+h = mul h 1099511628211
+end
+put oadk 0 h
+end
+
+fn oadacc t0 ulong n ulong to void
+for i ulong n
+oadrow add t0 i
+end
+end
+
+fn oadrow t ulong to void
+xp = get onlxp t
+if le get og 59 1
+xp = ulong 1
+end
+k = xp
+if gt k 63
+k = 63
+end
+put oadh k add get oadh k 1
+put oadk 1 add get oadk 1 1
+put oadk 3 add get oadk 3 xp
+if lt xp get og 59
+put oadk 2 add get oadk 2 1
+end
+oadrow2 t xp
+end
+
+fn oadrow2 t ulong xp ulong to void
+d0 = get onlxd t
+if or eq get oadk 1 1 lt d0 get oada 0
+put oada 0 d0
+end
+if gt d0 get oada 1
+put oada 1 d0
+end
+mn = get onlmn t
+put oada 2 add get oada 2 mn
+oadfnv xp
+oadfnv bitcast ulong mn
+oadfnv bitcast ulong d0
+end
+
+fn oadprint to void
+rows = get oadk 1
+dn = rows
+if eq dn 0
+dn = 1
+end
+oputc 65
+oputc 88
+oadsp get og 59
+oadsp rows
+oadsp get oadk 2
+oadsp div mul get oadk 3 1000 dn
+oputc 32
+oputl rmic get oada 0
+oputc 32
+oputl rmic get oada 1
+oputc 32
+oputl long mul div get oada 2 f64 dn 1000.0
+oputc 32
+oputx get oadk 0
+oputc 10
+oputc 65
+oputc 72
+np = get og 59
+if gt np 63
+np = 63
+end
+if eq np 0
+np = 1
+end
+for p ulong np
+oputc 32
+oputu get oadh add p 1
+end
+oputc 10
+oflush
+end
+
+note adapteval CK HELD W THRESH GAIN [MERGES]: eval's windows with the adaptive loop; prints
+note `AE step W loss_micro bpb_micro` (eval's E line when THRESH and GAIN are 0), then AX and AH over
+note every row of every window.
+fn cmdadeval to void
+na = oargc
+if and ne na 7 ne na 8
+exit 2
+end
+ockloop 2
+ww = oargu 4
+v = get og 0
+if gt v 256
+if eq na 7
+exit 2
+end
+obload 7 v
+end
+odopen 3
+tt = get og 1
+if or eq ww 0 gt ww div sub get odn 0 1 tt
+exit 23
+end
+oadset oargu 5 oargu 6
+oadzero
+ls = 0.0f64
+nb = ulong 0
+for w ulong ww
+obrow 0 mul w tt
+ls = add ls ofwd 0
+oadacc 0 get og 9
+if gt v 256
+nb = add nb oevnb tt
+end
+end
+oadeline ls ww nb
+oadprint
+oadclr
+end
+
+fn oadeline ls f64 ww ulong nb ulong to void
+lo = div ls f64 ww
+bp = div lo 0.6931471805599453
+if gt get og 0 256
+bp = div mul bp f64 mul ww get og 1 f64 nb
+end
+oputc 65
+oputc 69
+oputc 32
+oputu get og 41
+oputc 32
+oputu ww
+oputc 32
+oputl rmic lo
+oputc 32
+oputl rmic bp
+oputc 10
+oflush
+end
+
+note adaptsamp CK SEED N TEMPMILLI PROMPT MERGES THRESH GAIN (V > 256): sample's context and draws
+note on the cached decode with the adaptive loop; one `AS step ct tok exit_pass msgnorm_milli` line
+note per token (the new row's passes and message norm), then `ADAPTSAMP n fnv`, AX and AH over the
+note new rows. A token 0 ends it.
+fn cmdadsamp to void
+if ne oargc 10
+exit 2
+end
+ockloop 2
+nn = oargu 4
+v = get og 0
+if or le v 256 gt nn 4096
+exit 2
+end
+obload 7 v
+oadset oargu 8 oargu 9
+oadzero
+put okv 0 0
+put og 9 0
+ocpush 0
+np = obprompt 6
+for i ulong np
+ocpush get obtk i
+end
+oadsrun oargu 3 nn oargu 5
+oadclr
+end
+
+fn oadsrun st ulong nn ulong tm ulong to void
+ng = ulong 0
+for g ulong nn
+c = osstep st tm
+if ne tm 0
+st = add st 11400714819323198485
+end
+t = sub get og 9 1
+oadacc t 1
+oadfnv c
+oputc 65
+oputc 83
+kvline g add t 1 c get onlxp t long mul get onlmn t 1000.0
+ng = add ng 1
+if eq c 0
+break
+end
+ocpush c
+end
+oputs9 ng
+oadprint
+end
+
+fn oputs9 ng ulong to void
+oputc 65
+oputc 68
+oputc 65
+oputc 80
+oputc 84
+oputc 83
+oputc 65
+oputc 77
+oputc 80
+oputc 32
+oputu ng
+oputc 32
+oputx get oadk 0
+oputc 10
+oflush
+end
+
+note adaptcmp CK N PROMPT MERGES THRESH GAIN: kvcmp with the adaptive loop. Pass 1 (ofwdi then olast)
+note prints `AI step ct t0 tok exit_pass`; pass 2 (ofwd 0 then olast) prints `AF step ct tok ndiff
+note xdiff`, ndiff = logits whose bits differ from pass 1's, xdiff = 1 when the telemetry of the CT
+note rows (exit passes, message norm bits, pass-0 delta bits) differs. Last
+note `ADAPTCMP N ndiff xdiff inc_ns full_ns`, AX and AH over the final context; exit 43 when ndiff or
+note xdiff is not 0.
+fn cmdadcmp to void
+if ne oargc 8
+exit 2
+end
+ockloop 2
+nn = oargu 3
+v = get og 0
+if or le v 256 or gt nn 4096 gt mul nn v 1048576
+exit 2
+end
+obload 5 v
+oadset oargu 6 oargu 7
+put okvs 0 0
+put okvs 1 0
+put okvs 2 0
+put oadx 0 0
+kvstart
+for s ulong nn
+kvpert s nn
+c = oadinc s
+ocpush c
+end
+kvstart
+for s2 ulong nn
+kvpert s2 nn
+oadfull s2
+ocpush get okvk s2
+end
+oadzero
+oadacc 0 get og 9
+oadcline nn
+oadprint
+oadclr
+if or gt get okvs 2 0 gt get oadx 0 0
+exit 43
+end
+end
+
+fn oadcline nn ulong to void
+oputc 65
+oputc 68
+oputc 65
+oputc 80
+oputc 84
+oputc 67
+oputc 77
+oputc 80
+oputc 32
+oputu nn
+oadsp get okvs 2
+oadsp get oadx 0
+oadsp get okvs 0
+oadsp get okvs 1
+oputc 10
+oflush
+end
+
+fn oadsp v ulong to void
+oputc 32
+oputu v
+end
+
+note FNV-1a 64 of the telemetry of rows 0 .. n - 1
+fn oadrowh n ulong to ulong
+oadzero
+oadacc 0 n
+ret get oadk 0
+end
+
+fn oadinc s ulong to ulong
+a = onsnow
+t0 = ofwdi
+olast
+e = sub onsnow a
+put okvs 0 add get okvs 0 e
+c = oargmax
+kvkeep s
+put okvk s c
+ct = get og 9
+put oadhs s oadrowh ct
+oputc 65
+oputc 73
+kvline s ct t0 c long get onlxp sub ct 1
+ret c
+end
+
+fn oadfull s ulong to void
+a = onsnow
+lf = ofwd 0
+olast
+e = sub onsnow a
+put okvs 1 add get okvs 1 e
+nd = kvdiff s
+put okvs 2 add get okvs 2 nd
+ct = get og 9
+xd = ulong 0
+if ne oadrowh ct get oadhs s
+xd = 1
+end
+put oadx 0 add get oadx 0 xd
+oputc 65
+oputc 70
+kvline s ct oargmax nd long xd
 end
 
 note logits of the last context position into TMP[0..V) (oa)

@@ -143,6 +143,18 @@ text sknlhfn "hf_norm_milli"
 text sknlfnv "fnv64"
 text sknlv14 "vec_1e4"
 text sknlshm "schema"
+text sknlxth "exit_thresh_micro"
+text sknlxgn "msg_gain_micro"
+text sknlxlm "ltp_msg"
+text sknlxp "exit_pass"
+text sknlxmn "msg_norm_milli"
+text sknlxlo "loop_exit"
+text sknlxrw "rows"
+text sknlxex "exited"
+text sknlxps "exit_passes"
+text sknlxms "msg_norms_milli"
+text sknlxmo "ltp0_msg"
+text sknlxal "adaptive_loop"
 text senl_id "{\"error\":{\"code\":\"ltp0_identity_mismatch\",\"message\":\"LTP0 producer model_id does not match loaded checkpoint\"}}"
 text senl_dm "{\"error\":{\"code\":\"ltp0_dim_mismatch\",\"message\":\"LTP0 vector dimension does not match model D\"}}"
 text senl_ck "{\"error\":{\"code\":\"ltp0_checksum_mismatch\",\"message\":\"LTP0 FNV-1a-64 checksum mismatch\"}}"
@@ -306,6 +318,8 @@ global svnl_ent ulong 128
 global svnl_surp ulong 128
 global svnl_prob ulong 128
 global svnl_ex ulong 128
+global svnl_xp ulong 128
+global svnl_mn ulong 128
 global svnl_vec long 384
 global svnl_cfg ulong 16
 
@@ -2842,6 +2856,8 @@ svwt ob sknlnp
 js_wulong ob get og 59
 svwt ob sknllv
 js_wulong ob get og 56
+svwt ob sknlxal
+js_wulong ob 1
 js_wobje ob
 m = js_wdone ob
 if lt m 0
@@ -3079,6 +3095,10 @@ svwt ob sknlsm
 js_wulong ob get svnl_surp i
 svwt ob sknlex
 js_wulong ob get svnl_ex i
+svwt ob sknlxp
+js_wulong ob get svnl_xp i
+svwt ob sknlxmn
+js_wulong ob get svnl_mn i
 js_wobje ob
 end
 js_warre ob
@@ -3197,6 +3217,7 @@ put svnl_surp g svnlclamp_milli get onlf 3
 put svnl_prob g svnlclamp_milli get onlf 4
 exu = get onlc 8
 put svnl_ex g exu
+svnl_rec_x g
 totex = add totex exu
 if eq c 0
 break
@@ -3231,6 +3252,8 @@ js_wsbuf ob wb 8192 get sv 13
 svnl_emit_toks ob ng
 svnl_emit_diag ob
 svnl_emit_ltp0 ob
+svnl_emit_loop ob
+svnl_emit_msg ob
 js_wobje ob
 m = js_wdone ob
 if lt m 0
@@ -3266,7 +3289,128 @@ onlreset
 ret lrc
 end
 svnl_load_cfg bd tp
+svnl_load_x bd tp
 ret 0
+end
+
+note ======== Adaptive loop fields of /v1/neuralese/trace (model.om onlx, docs/LOOP.md)
+note Request: exit_thresh_micro (a row leaves the looped core once its normalized pass delta is
+note below it, times 1e6; 0 off), msg_gain_micro (inter-pass message gain times 1e6; 0 off),
+note ltp_msg (1: a verified ltp_vec becomes every row's pass-0 message instead of the ltp_layer
+note injection). The hooks always run for telemetry and change no value with both 0. Reply: per
+note token exit_pass and msg_norm_milli, loop_exit (np, controls, rows, exited, exit_passes and
+note msg_norms_milli of the last forward's rows) and ltp0_msg, the last row's message as an LTP0
+note vector that a later request can hand back as ltp_vec with ltp_msg 1.
+fn svnl_load_x bd view uchar 983040 tp view uint 262144 to void
+put svnl_cfg 13 0
+put onlx 0 svnloptu bd tp sknlxth 0
+put onlx 1 svnloptu bd tp sknlxgn 0
+put onlx 6 1
+lm = svnloptu bd tp sknlxlm 0
+if and ne lm 0 ne get onlc 6 0
+put onlx 2 1
+put onlc 6 0
+end
+end
+
+note the core passes row t ran in the last forward (1 without a loop; NP on the chip path, which
+note runs every pass: the hooks are CPU-only)
+fn svnlxp t ulong to ulong
+if le get og 59 1
+ret 1
+end
+if ne get ogpu 0 0
+ret get og 59
+end
+ret get onlxp t
+end
+
+note token g came from row CT - 1 of the forward just run: its passes and message norm, and the
+note rows of that forward in svnl_cfg[13]
+fn svnl_rec_x g ulong to void
+ct = get og 9
+put svnl_cfg 13 ct
+t = sub ct 1
+put svnl_xp g svnlxp t
+put svnl_mn g svnlclamp_milli get onlmn t
+end
+
+fn svnl_emit_loop ob edit uchar 409600 to void
+ct = get svnl_cfg 13
+svwt ob sknlxlo
+js_wobj ob
+svwt ob sknlnp
+js_wulong ob get og 59
+svwt ob sknlxth
+js_wulong ob get onlx 0
+svwt ob sknlxgn
+js_wulong ob get onlx 1
+svwt ob sknlxlm
+js_wulong ob get onlx 2
+svwt ob sknlxrw
+js_wulong ob ct
+svwt ob sknlxex
+js_wulong ob svnl_nexit ct
+svnl_emit_xarr ob ct
+js_wobje ob
+end
+
+fn svnl_nexit ct ulong to ulong
+n = ulong 0
+for t ulong ct
+if lt svnlxp t get og 59
+n = add n 1
+end
+end
+ret n
+end
+
+fn svnl_emit_xarr ob edit uchar 409600 ct ulong to void
+svwt ob sknlxps
+js_warr ob
+for t ulong ct
+js_wulong ob svnlxp t
+end
+js_warre ob
+svwt ob sknlxms
+js_warr ob
+for t2 ulong ct
+js_wulong ob svnlclamp_milli get onlmn t2
+end
+js_warre ob
+end
+
+note the last row's inter-pass message as an LTP0 vector (values times 1e4, FNV-1a 64 as ltp_fnv64)
+fn svnl_emit_msg ob edit uchar 409600 to void
+d = get og 2
+ct = get svnl_cfg 13
+if eq ct 0
+ret
+end
+r = mul sub ct 1 d
+for i ulong d
+put svnl_vec i long mul get onlmsg add r i 10000.0
+end
+fh = svnlfnv d
+svwt ob sknlxmo
+js_wobj ob
+svwt ob sknlshm
+svwt ob svnlscm
+svwt ob sknlmid
+svmidw ob
+svwt ob sknldim
+js_wulong ob d
+svwt ob sknlxmn
+js_wulong ob svnlclamp_milli get onlmn sub ct 1
+svwt ob sknlfnv
+svnlwhex ob fh
+svwt ob sknlv14
+js_warr ob
+for j ulong d
+js_wlong ob get svnl_vec j
+end
+js_warre ob
+js_wobje ob
 end
 
 fn svnltrace cs edit ulong 320 io edit uchar 131072 bd edit uchar 983040 wb edit uchar 1073664 sv edit ulong 64 to long
