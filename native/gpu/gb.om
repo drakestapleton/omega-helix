@@ -354,9 +354,19 @@ end
 oputc 10
 ok = and eq get gbcst 1 0 gt get gbcst 0 0
 cv = eq and get gbcst 4 6 6
-cv = and cv ne and get gbcst 3 8 0
+cv = and cv gbcz3
 cv = and cv eq get gbcst 5 3
 gbvd 48 and ok cv
+end
+
+note gbcmp's cz 3 coverage: a BF16 causal score GEMM (S = Q K^T or DP = DO U^T, m = n = T) runs only
+note on the 64 x 64 tile, so it is required only when T is a multiple of 64; at T 32 (the small shape
+note of docs/LOOP.md) both stay f32 and the requirement could never be met
+fn gbcz3 to bool
+if ne rem get og 1 64 0
+ret true
+end
+ret ne and get gbcst 3 8 0
 end
 
 note gbcmp2 bound: tolb = n_c (2u + u^2), u = 2^-8, n_c = 10 L + 3 BF16 GEMMs on a step's longest
@@ -368,7 +378,8 @@ nc = f64 add mul 10 get og 56 3
 ret mul nc add div 1.0f64 128.0f64 div 1.0f64 65536.0f64
 end
 
-note gcmp2's fail bits under gkbf 1: 1 non-finite, 2 rho >= tolb, 4 rel1 >= tolb, 8 |dloss| >= tolb loss
+note gcmp2's fail bits under gkbf 1: 1 non-finite, 2 rho >= tolb, 4 rel1 >= tolb, 8 |dloss| >= tolb loss,
+note 16 and 32 the per-tensor check (gbtens)
 fn gbc2fl lg f64 l0 f64 rho f64 nf ulong to ulong
 tb = gbtolb
 fl = ulong 0
@@ -384,7 +395,171 @@ end
 if not lt gbabs sub lg l0 mul tb gbabs l0
 fl = or fl 8
 end
-ret fl
+ret or fl gbtens get og 8
+end
+
+note gbcmp2's per-tensor check. gbtolb is a normwise bound over the whole gradient that grows with the
+note applications (0.65 at 8, 1.28 at 16): it cannot catch a wrong gradient. For every parameter
+note tensor k (0 wte, 1 wpe, 2 the final gain, then g1 wq wk wv wo g2 w1 w2 of each parameter layer)
+note the chip gradient x is compared with K0 (CPU f64, its own ReLU mask, omv[P, 2P)) and K1 (CPU f64,
+note the chip's ReLU mask, GRD): cos = x.y / (|x| |y|) and rel = |x - y| / |y|. Fail bit 16: a
+note cosine below GBCOS 0.995; 32: a rel at or above GBREL 0.1 = sqrt(2 (1 - 0.995)), the normwise
+note error at which an error perpendicular to y alone brings the cosine down to 0.995. rel catches
+note what the cosine cannot: a gradient that keeps its direction and loses scale, as in mutant lg,
+note where a core w2 keeps one of its NP passes.
+const GBCOS f64 0.995
+const GBREL f64 0.1
+note gbta: sums over the tensor in flight, 0 x.y0 1 x.x 2 y0.y0 3 |x - y0|^2 4 x.y1 5 y1.y1
+note 6 |x - y1|^2; gbtw: 0 least cos0, 1 largest rel0, 2 least cos1, 3 largest rel1, 4 tensor of
+note rel0, 5 tensor of rel1; gbtf: the fail bits
+global gbta f64 7
+global gbtw f64 6
+global gbtf ulong 1
+fn gbtens p ulong to ulong
+put gbtf 0 0
+put gbtw 0 2.0f64
+put gbtw 1 0.0f64
+put gbtw 2 2.0f64
+put gbtw 3 0.0f64
+put gbtw 4 0.0f64
+put gbtw 5 0.0f64
+for k ulong gbtn
+gbt1 k p
+end
+ret get gbtf 0
+end
+
+fn gbtn to ulong
+ret add 3 mul 8 get og 5
+end
+
+note offset of tensor j inside a parameter layer (model.om opg1 .. opw2); j 8 is the layer's end
+fn gbjo j ulong to ulong
+d = get og 2
+dd = mul d d
+if eq j 0
+ret 0
+end
+if le j 5
+ret add d mul sub j 1 dd
+end
+if eq j 6
+ret add mul 2 d mul 4 dd
+end
+if eq j 7
+ret add add mul 2 d mul 4 dd mul d get og 4
+end
+ret get og 32
+end
+
+note first parameter of tensor k, and (w 1) the one after its last
+fn gbtb k ulong w ulong to ulong
+if eq k 0
+ret mul w get og 30
+end
+if eq k 1
+ret get og add 30 w
+end
+if eq k 2
+ret add get og 33 mul w get og 2
+end
+q = sub k 3
+ret add opg1 div q 8 gbjo add rem q 8 w
+end
+
+fn gbt1 k ulong p ulong to void
+for j ulong 7
+put gbta j 0.0f64
+end
+i = gbtb k 0
+e = gbtb k 1
+while lt i e bound 9223372036854775807
+gbta1 i p
+i = add i 1
+end
+gbtacc k
+end
+
+fn gbta1 i ulong p ulong to void
+x = omvg i
+y = omvg add p i
+z = ocsg i
+put gbta 0 add get gbta 0 mul x y
+put gbta 1 add get gbta 1 mul x x
+put gbta 2 add get gbta 2 mul y y
+y = sub x y
+put gbta 3 add get gbta 3 mul y y
+put gbta 4 add get gbta 4 mul x z
+put gbta 5 add get gbta 5 mul z z
+z = sub x z
+put gbta 6 add get gbta 6 mul z z
+end
+
+note cosine x.y / sqrt(x.x y.y): 1 when both are zero, 0 when one is
+fn gbcsn xy f64 xx f64 yy f64 to f64
+if and eq xx 0.0f64 eq yy 0.0f64
+ret 1.0f64
+end
+d = fsqrt mul xx yy
+if gt d 0.0f64
+ret div xy d
+end
+ret 0.0f64
+end
+
+fn gbtacc k ulong to void
+c0 = gbcsn get gbta 0 get gbta 1 get gbta 2
+c1 = gbcsn get gbta 4 get gbta 1 get gbta 5
+r0 = gbrat fsqrt get gbta 3 fsqrt get gbta 2
+r1 = gbrat fsqrt get gbta 6 fsqrt get gbta 5
+if or not ge c0 GBCOS not ge c1 GBCOS
+put gbtf 0 or get gbtf 0 16
+end
+if or not lt r0 GBREL not lt r1 GBREL
+put gbtf 0 or get gbtf 0 32
+end
+gbtlo 0 c0
+gbthi 1 r0 k
+gbtlo 2 c1
+gbthi 3 r1 k
+end
+
+note gbtw[j] = x when x is below it (j 0, 2: the least cosines)
+fn gbtlo j ulong x f64 to void
+if lt x get gbtw j
+put gbtw j x
+end
+end
+
+note gbtw[j] = x when x is above it (j 1, 3: the largest rels), and its tensor k in gbtw[4 + j / 2]
+fn gbthi j ulong x f64 k ulong to void
+if gt x get gbtw j
+put gbtw j x
+put gbtw add 4 div j 2 f64 k
+end
+end
+
+note `GBT tensors cos0_e9 rel0_e9 k0 cos1_e9 rel1_e9 k1 bits`
+fn gbtpr to void
+oputc 71
+oputc 66
+oputc 84
+oputc 32
+oputu gbtn
+for h ulong 2
+gbtp1 h
+end
+oputc 32
+oputu get gbtf 0
+oputc 10
+end
+
+fn gbtp1 h ulong to void
+o = mul h 2
+gg2pe ggclp get gbtw o
+gg2pe ggclp get gbtw add o 1
+oputc 32
+oputu ulong get gbtw add 4 h
 end
 
 note cosine of the chip gradient (omv[0, p)) and K0 (omv[p, 2p))
@@ -414,7 +589,8 @@ put gbcq 1 add get gbcq 1 mul x x
 put gbcq 2 add get gbcq 2 mul y y
 end
 
-note gbcmp2's line `GB2 L n_c tolb_e9 cos_e9 rel0_e9 rel1_e9 dlossrel_e9` and verdict (exit 49)
+note gbcmp2's line `GB2 L n_c tolb_e9 cos_e9 rel0_e9 rel1_e9 dlossrel_e9`, the per-tensor line `GBT`
+note (gbtpr) and verdict (exit 49)
 fn gbc2vd lg f64 l0 f64 fl ulong to void
 cs = gbcos get og 8
 oputc 71
@@ -435,6 +611,7 @@ oputl rmic mul gg2rl 2 1000.0f64
 oputc 32
 oputl rmic mul ggclp div gbabs sub lg l0 gbabs l0 1000.0f64
 oputc 10
+gbtpr
 gbvd 49 eq fl 0
 end
 
@@ -444,7 +621,8 @@ put gkbf 0 1
 ggcmp2
 end
 
-note gtrainb: gtrainf with gkbf 1 (geval stays f32)
+note gtrainb CK TRAIN UNTIL EVERY [FREEZE_LAYERS]: gtrainf with gkbf 1 (geval stays f32); the frozen
+note core (gg.om ggfz) is the same on BF16: the frozen layers launch no BF16 GEMM at all
 fn gbtrain to void
 put gkbf 0 1
 ggtrainf
