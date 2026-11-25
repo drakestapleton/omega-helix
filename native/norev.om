@@ -1,0 +1,7 @@
+note norev.om: stub for x86 / UEFI targets without dynamic enlarge * globals.
+fn rev_cli to int
+exit 2
+end
+fn rev_ollm_cmd to int
+exit 2
+end

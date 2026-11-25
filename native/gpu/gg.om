@@ -2897,5 +2897,19 @@ if eq w 113668228801127
 gbfrag
 ret true
 end
+if eq w 418346528103
+gm_r = gm_selftest
+if ne gm_r 0
+exit gm_r
+end
+ret true
+end
+if eq w 474365654119
+gt_r = gt_selftest
+if ne gt_r 0
+exit gt_r
+end
+ret true
+end
 ret false
 end

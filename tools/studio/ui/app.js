@@ -1391,6 +1391,203 @@
       const id = $("distill-run-select").value;
       if (id) { loadDistillDetail(id); subscribeDistillEvents(id); }
     });
+
+    bindThemeAndRemote();
+  }
+
+  /* ---------------- Theme Toggle (dark-mode-toggle) & Remote / SSH Dialog ---------------- */
+  function bindThemeAndRemote() {
+    const meta = document.querySelector('meta[name="color-scheme"]');
+    const storageKey = "omega-studio-color-scheme";
+    const sysDark = () => window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const syncMeta = () => {
+      let saved = null;
+      try { saved = localStorage.getItem(storageKey); } catch (_) {}
+      if (meta) meta.setAttribute("content", saved === "light" || saved === "dark" ? saved : "light dark");
+      const effDark = saved === "dark" || (saved !== "light" && sysDark());
+      const btn = $("theme-toggle");
+      if (btn) btn.setAttribute("aria-label", effDark ? "Switch to light theme" : "Switch to starry dark theme");
+    };
+    syncMeta();
+    const tBtn = $("theme-toggle");
+    if (tBtn) {
+      tBtn.addEventListener("click", () => {
+        sfx.tap();
+        let saved = null;
+        try { saved = localStorage.getItem(storageKey); } catch (_) {}
+        const currentDark = saved === "dark" || (saved !== "light" && sysDark());
+        const target = currentDark ? "light" : "dark";
+        const systemTarget = sysDark() ? "dark" : "light";
+        try {
+          if (target === systemTarget) localStorage.removeItem(storageKey);
+          else localStorage.setItem(storageKey, target);
+        } catch (_) {}
+        syncMeta();
+      });
+    }
+    window.addEventListener("storage", (ev) => { if (ev.key === storageKey) syncMeta(); });
+
+    const dlg = $("remote-ssh-dialog");
+    if (!dlg) return;
+
+    dlg.addEventListener("close", () => { dlg.returnValue = ""; });
+
+    // Feature-detected progressive enhancement fallbacks for commandfor and closedby="any"
+    if (!("commandForElement" in HTMLButtonElement.prototype)) {
+      $("btn-remote-ssh")?.addEventListener("click", () => { dlg.showModal(); refreshRemotes(); });
+      $("btn-ssh-close")?.addEventListener("click", () => { dlg.close("cancel"); });
+    } else {
+      $("btn-remote-ssh")?.addEventListener("click", () => { refreshRemotes(); });
+    }
+    if (!("closedBy" in HTMLDialogElement.prototype)) {
+      let pressedOut = false;
+      const outside = (e) => {
+        const r = dlg.getBoundingClientRect();
+        return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+      };
+      dlg.addEventListener("pointerdown", (e) => { pressedOut = outside(e); });
+      dlg.addEventListener("pointerup", (e) => { if (pressedOut && outside(e)) dlg.close(); });
+    }
+
+    $("btn-ssh-refresh")?.addEventListener("click", () => { sfx.tap(); refreshRemotes(); });
+    $("btn-ssh-probe")?.addEventListener("click", () => {
+      const host = $("ssh-target").value.trim();
+      const rport = Number($("ssh-rport").value || 18420);
+      if (!host) { toast("Enter an SSH target first.", "err"); return; }
+      probeSshHost(host, rport);
+    });
+    $("ssh-connect-form")?.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const host = $("ssh-target").value.trim();
+      const rport = Number($("ssh-rport").value || 18420);
+      const bootstrap = Boolean($("ssh-bootstrap")?.checked);
+      if (!host) { toast("Enter an SSH target.", "err"); return; }
+      connectSshHost(host, rport, bootstrap);
+    });
+  }
+
+  async function refreshRemotes() {
+    const res = await api("/api/remotes");
+    if (!res.ok) return;
+    const hostsBox = $("ssh-hosts-list");
+    const tunBox = $("ssh-tunnels-list");
+    const lbl = $("remote-ssh-label");
+    const pill = $("btn-remote-ssh");
+    const tunnels = res.active_tunnels || [];
+    const aliveCount = tunnels.filter((t) => t.alive).length;
+    if (lbl) lbl.textContent = aliveCount > 0 ? `Remote SSH (${aliveCount})` : "Remote / SSH";
+    if (pill) pill.classList.toggle("pill-remote-on", aliveCount > 0);
+    if ($("ssh-snippet-box") && res.server_pairing) {
+      $("ssh-snippet-box").textContent = `${res.server_pairing.headless_cmd}\n${res.server_pairing.ssh_forward_hint}`;
+    }
+
+    if (hostsBox) {
+      hostsBox.replaceChildren();
+      const hosts = res.ssh_hosts || [];
+      if (!hosts.length) {
+        hostsBox.appendChild(el("p", "muted small", "No hosts found in ~/.ssh/config yet. Enter user@host above."));
+      } else {
+        hosts.forEach((h) => {
+          const row = el("div", "ssh-row");
+          const meta = el("div", "ssh-row-meta");
+          meta.appendChild(el("strong", "", h.name));
+          meta.appendChild(el("span", "muted small mono", `${h.user ? h.user + "@" : ""}${h.hostname}:${h.port || 22}`));
+          const acts = el("div", "ssh-row-actions");
+          const bProbe = el("button", "btn btn-ghost btn-sm", "Probe");
+          bProbe.type = "button";
+          bProbe.addEventListener("click", () => {
+            $("ssh-target").value = h.target;
+            probeSshHost(h.target, Number($("ssh-rport").value || 18420));
+          });
+          const bConn = el("button", "btn btn-primary btn-sm", "Connect");
+          bConn.type = "button";
+          bConn.addEventListener("click", () => {
+            $("ssh-target").value = h.target;
+            connectSshHost(h.target, Number($("ssh-rport").value || 18420), Boolean($("ssh-bootstrap")?.checked));
+          });
+          acts.append(bProbe, bConn);
+          row.append(meta, acts);
+          hostsBox.appendChild(row);
+        });
+      }
+    }
+
+    if (tunBox) {
+      tunBox.replaceChildren();
+      if (!tunnels.length) {
+        tunBox.appendChild(el("p", "muted small", "No active SSH tunnels."));
+      } else {
+        tunnels.forEach((t) => {
+          const row = el("div", "ssh-row");
+          const meta = el("div", "ssh-row-meta");
+          const rs = t.remote_system || {};
+          const tag = rs.has_gb10 ? "GB10 GPU" : (rs.os || "CPU");
+          meta.appendChild(el("strong", "", `${t.host} (${tag})`));
+          meta.appendChild(el("span", "muted small mono", `${t.local_url} -> remote:${t.remote_port}`));
+          const acts = el("div", "ssh-row-actions");
+          const aOpen = el("a", "btn btn-primary btn-sm", "Open Studio ↗");
+          aOpen.href = t.open_url;
+          aOpen.target = "_blank";
+          aOpen.rel = "noopener";
+          const bDisc = el("button", "btn btn-danger btn-sm", "Disconnect");
+          bDisc.type = "button";
+          bDisc.addEventListener("click", () => disconnectSshHost(t.id));
+          acts.append(aOpen, bDisc);
+          row.append(meta, acts);
+          tunBox.appendChild(row);
+        });
+      }
+    }
+  }
+
+  async function probeSshHost(host, rport) {
+    const st = $("ssh-probe-status");
+    if (st) st.textContent = `Probing ${host} over SSH…`;
+    const res = await api("/api/remotes/probe", { method: "POST", body: { host, remote_port: rport } });
+    if (!res.ok) {
+      if (st) st.textContent = `Probe failed: ${res.error || "unreachable"}`;
+      toast(`SSH probe failed: ${res.error || host}`, "err");
+      sfx.err();
+      return;
+    }
+    const gpu = res.has_gb10 ? "GB10 GPU detected" : "CPU only";
+    const srv = res.studio_running ? `Studio running on :${rport}` : `Studio stopped (will auto-start)`;
+    if (st) st.textContent = `${res.hostname} · ${res.os} ${res.arch} · ${gpu} · ${srv}`;
+    sfx.assign();
+  }
+
+  async function connectSshHost(host, rport, bootstrap) {
+    const btn = $("btn-ssh-connect");
+    const st = $("ssh-probe-status");
+    if (btn) btn.disabled = true;
+    if (st) st.textContent = `Establishing SSH tunnel to ${host}…`;
+    try {
+      const res = await api("/api/remotes/connect", {
+        method: "POST",
+        body: { host, remote_port: rport, bootstrap },
+      });
+      if (!res.ok) {
+        if (st) st.textContent = `Connect failed: ${res.error || "error"}`;
+        toast(res.error || "SSH connect failed", "err");
+        sfx.err();
+        return;
+      }
+      const tun = res.tunnel;
+      if (st) st.textContent = `Connected: ${tun.open_url}`;
+      toast(`SSH tunnel ready -> ${tun.host} (${tun.local_url})`, "ok");
+      sfx.milestone();
+      await refreshRemotes();
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function disconnectSshHost(id) {
+    const res = await api("/api/remotes/disconnect", { method: "POST", body: { id } });
+    if (res.ok) {
+      toast("SSH tunnel disconnected.");
+      await refreshRemotes();
+    }
   }
 
   let distillEs = null;
@@ -1571,7 +1768,7 @@
     renderDag("dag-svg", null);
     renderDag("forge-dag", null);
     bindEvents();
-    await Promise.all([loadSystem(), loadCatalog(), refreshEstimate(), refreshRuns()]);
+    await Promise.all([loadSystem(), loadCatalog(), refreshEstimate(), refreshRuns(), refreshRemotes()]);
   }
 
   document.addEventListener("DOMContentLoaded", boot);

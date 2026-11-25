@@ -1,0 +1,4088 @@
+note SPDX-License-Identifier: Apache-2.0
+note native/omg.om: Canonical Binary OMG Semantic Graph Engine (Pillar 8).
+note Pure seeded-OM-2 implementation:
+note   1. V=256 Canonical OMG Graph Vocabulary (u16 stream) with De Bruijn REF_0..REF_63,
+note      base-16 constant chunks (NIB_0..NIB_15), small literals (LIT_0..LIT_31), and OMG_MACRO.
+note   2. De Bruijn canonical .om <-> OMG roundtrip (omg_parse_om, omg_encode_stream, omg_decode_om).
+note   3. Deterministic 64-bit FNV-1a & 256-bit SEMANTIC_ID (omg_semantic_id) + OMGC binary corpus
+note      packer with semantic deduplication (omg_corpus_add, omg_pack_corpus).
+note   4. O(1) Bitmask-Enforced Validity (omg_valid_mask, omg_step, omg_validate) for gsamp.
+note   5. Macro dictionary indexed by 64-bit SEMANTIC_ID (omg_macro_register, omg_macro_expand).
+note   6. Built-in omg_selftest + V=256 vs V=4096 metrics reporter (omg_report_metrics).
+
+const OMG_VOCAB ulong 256
+const OMG_MAX_TOKS ulong 16384
+const OMG_MAX_SRC ulong 65536
+const OMG_MAX_CORP ulong 524288
+const OMG_MAX_LIVE ulong 64
+const OMG_MAX_FNS ulong 28
+const OMG_MAX_MACS ulong 32
+const OMG_MAX_ESTK ulong 128
+const OMG_MAX_BSTK ulong 32
+
+note ---- Token Vocabulary (V = 256) ----
+const OMG_EOF ulong 0
+const OMG_BEGIN ulong 1
+const OMG_END_UNIT ulong 2
+const OMG_FN ulong 3
+const OMG_FN_MAIN ulong 4
+const OMG_PARAM ulong 5
+const OMG_BODY ulong 6
+const OMG_END ulong 7
+const OMG_LET ulong 8
+const OMG_SET ulong 9
+const OMG_RET ulong 10
+const OMG_IF ulong 11
+const OMG_ELSE ulong 12
+const OMG_WHILE ulong 13
+const OMG_FOR ulong 14
+const OMG_BREAK ulong 15
+const OMG_CONTINUE ulong 16
+const OMG_NEW ulong 17
+const OMG_TRAP ulong 18
+const OMG_EXIT ulong 19
+const OMG_CALL_VOID ulong 20
+const OMG_MACRO ulong 21
+const OMG_PUT ulong 22
+
+note Types (24..37)
+const OMG_TY_VOID ulong 24
+const OMG_TY_BOOL ulong 25
+const OMG_TY_U8 ulong 26
+const OMG_TY_U16 ulong 27
+const OMG_TY_U32 ulong 28
+const OMG_TY_U64 ulong 29
+const OMG_TY_I8 ulong 30
+const OMG_TY_I16 ulong 31
+const OMG_TY_I32 ulong 32
+const OMG_TY_I64 ulong 33
+const OMG_TY_F32 ulong 34
+const OMG_TY_F64 ulong 35
+const OMG_TY_VIEW ulong 36
+const OMG_TY_EDIT ulong 37
+
+note Opcodes (40..71)
+const OMG_OP_ADD ulong 40
+const OMG_OP_SUB ulong 41
+const OMG_OP_MUL ulong 42
+const OMG_OP_DIV ulong 43
+const OMG_OP_REM ulong 44
+const OMG_OP_AND ulong 45
+const OMG_OP_OR ulong 46
+const OMG_OP_XOR ulong 47
+const OMG_OP_SHL ulong 48
+const OMG_OP_SHR ulong 49
+const OMG_OP_ROTR ulong 50
+const OMG_OP_ROTL ulong 51
+const OMG_OP_FMIN ulong 52
+const OMG_OP_FMAX ulong 53
+const OMG_OP_EQ ulong 54
+const OMG_OP_NE ulong 55
+const OMG_OP_LT ulong 56
+const OMG_OP_LE ulong 57
+const OMG_OP_GT ulong 58
+const OMG_OP_GE ulong 59
+const OMG_OP_NEG ulong 60
+const OMG_OP_NOT ulong 61
+const OMG_OP_FSQRT ulong 62
+const OMG_OP_FABS ulong 63
+const OMG_OP_LEN ulong 64
+const OMG_OP_GET ulong 65
+const OMG_OP_FMA ulong 66
+const OMG_OP_CAST ulong 67
+const OMG_OP_BITCAST ulong 68
+const OMG_OP_CALL ulong 69
+const OMG_OP_TRUE ulong 70
+const OMG_OP_FALSE ulong 71
+
+note Constants (76..99)
+const OMG_CONST_U8 ulong 76
+const OMG_CONST_U16 ulong 77
+const OMG_CONST_U32 ulong 78
+const OMG_CONST_U64 ulong 79
+const OMG_CONST_NEG8 ulong 80
+const OMG_CONST_I64 ulong 81
+const OMG_CONST_F32 ulong 82
+const OMG_CONST_F64 ulong 83
+const OMG_NIB_BASE ulong 84
+const OMG_LIT_BASE ulong 100
+const OMG_FN_BASE ulong 132
+const OMG_REF_BASE ulong 160
+const OMG_MAC_BASE ulong 224
+
+note Expectation stack kinds
+const OMG_EK_UNIT_HDR ulong 1
+const OMG_EK_TOP ulong 2
+const OMG_EK_FN_RET ulong 3
+const OMG_EK_FN_PARAM ulong 4
+const OMG_EK_PARAM_TY ulong 5
+const OMG_EK_PARAM_EL ulong 6
+const OMG_EK_STMT ulong 7
+const OMG_EK_EXPR ulong 8
+const OMG_EK_LET_TY ulong 9
+const OMG_EK_LET_PUSH ulong 10
+const OMG_EK_SET_REF ulong 11
+const OMG_EK_CMP_TY ulong 12
+const OMG_EK_CAST_SRC ulong 13
+const OMG_EK_BITCAST_SRC ulong 14
+const OMG_EK_CALL_FN ulong 15
+const OMG_EK_CALL_VOID_FN ulong 16
+const OMG_EK_ARR_ANY ulong 17
+const OMG_EK_ARR_OF ulong 18
+const OMG_EK_ARR_WRITE ulong 19
+const OMG_EK_ARR_WRITE_OF ulong 20
+const OMG_EK_NIB ulong 21
+const OMG_EK_FOR_TY ulong 22
+const OMG_EK_FOR_PUSH ulong 23
+const OMG_EK_NEW_TY ulong 24
+const OMG_EK_NEW_LEN ulong 25
+const OMG_EK_NEW_PUSH ulong 26
+const OMG_EK_BOUND ulong 27
+const OMG_EK_TRAP_N ulong 28
+const OMG_EK_MAC_SLOT ulong 29
+const OMG_EK_EXPR_NZ ulong 30
+const OMG_EK_EXPR_SH ulong 31
+const OMG_EK_EXPR_IDX ulong 32
+
+note Block kinds
+const OMG_BK_FN ulong 1
+const OMG_BK_IF ulong 2
+const OMG_BK_ELSE ulong 3
+const OMG_BK_WHILE ulong 4
+const OMG_BK_FOR ulong 5
+
+note ---- Global State ----
+global omg_toks ushort 16384
+global omg_ntok ulong 1
+global omg_exp_buf ushort 16384
+global omg_nexp ulong 1
+global omg_mask uchar 256
+global omg_src uchar 65536
+global omg_nsrc ulong 1
+global omg_dec uchar 65536
+global omg_ndec ulong 1
+global omg_corpus uchar 524288
+global omg_ncorp ulong 1
+global omg_corp_nrec ulong 1
+global omg_corp_ntok ulong 1
+global omg_corp_ids ulong 4096
+global omg_corp_offs ulong 4096
+global omg_corp_lens ulong 4096
+global omg_corp_toks ushort 262144
+global omg_sem_hash ulong 4
+
+note Validator / FSM state
+note omg_st: 0 estk_sp, 1 bstk_sp, 2 n_live, 3 n_fns, 4 cur_fn, 5 cur_ret, 6 cur_pslots,
+note 7 loop_depth, 8 scope_depth, 9 estk_min, 10 has_main, 11 max_live_cap,
+note 12 allow_fwd, 13 err_code, 14 err_pos, 15 cur_new_len, 16 cur_for_ty, 17 unit_done,
+note 18 cur_let_ty, 19 cur_fn_is_main, 20 gen_mode
+global omg_st ulong 24
+
+global omg_ek ulong 128
+global omg_et ulong 128
+global omg_ea ulong 128
+global omg_bk ulong 32
+global omg_be ulong 32
+global omg_bt ulong 32
+global omg_bs ulong 32
+
+note De Bruijn binding environment
+note omg_ev_arr: 0 scalar, 1 view arr, 2 edit/local writable arr
+global omg_ev_ty ulong 64
+global omg_ev_sc ulong 64
+global omg_ev_mut ulong 64
+global omg_ev_arr ulong 64
+global omg_ev_el ulong 64
+global omg_ev_len ulong 64
+
+note Function table (max 32 fns, max 6 params each)
+global omg_fn_ret ulong 32
+global omg_fn_np ulong 32
+global omg_fn_pt ulong 192
+global omg_fn_pk ulong 192
+global omg_fn_pe ulong 192
+global omg_fn_done ulong 32
+global omg_fn_main ulong 32
+global omg_fn_noff ulong 32
+global omg_fn_nlen ulong 32
+
+note Macro dictionary (max 32 macros, 4096 token pool)
+global omg_mac_cnt ulong 1
+global omg_mac_id ulong 32
+global omg_mac_kind ulong 32
+global omg_mac_out ulong 32
+global omg_mac_nin ulong 32
+global omg_mac_in ulong 128
+global omg_mac_off ulong 32
+global omg_mac_len ulong 32
+global omg_mac_pool ushort 4096
+global omg_mac_pcur ulong 1
+global omg_mac_tmp_in ulong 4
+global omg_mac_tmp_tok ushort 256
+global omg_mac_tmp_len ulong 1
+
+note Parser symbol table & line scratch
+global omg_sym_off ulong 64
+global omg_sym_len ulong 64
+global omg_ltok_off ulong 64
+global omg_ltok_len ulong 64
+global omg_nltok ulong 1
+global omg_ppos ulong 1
+global omg_line_buf uchar 512
+global omg_line_n ulong 1
+global omg_cst_off ulong 32
+global omg_cst_len ulong 32
+global omg_cst_ty ulong 32
+global omg_cst_val ulong 32
+global omg_ncst ulong 1
+global omg_dec_vid ulong 64
+global omg_dec_nvid ulong 1
+global omg_dec_cur ulong 1
+
+note ---- Small Type & Width Predicates ----
+
+fn omg_is_num t ulong to bool
+  ret and ge t OMG_TY_U8 le t OMG_TY_F64
+end
+
+fn omg_is_int t ulong to bool
+  ret and ge t OMG_TY_U8 le t OMG_TY_I64
+end
+
+fn omg_is_uint t ulong to bool
+  ret and ge t OMG_TY_U8 le t OMG_TY_U64
+end
+
+fn omg_is_sint t ulong to bool
+  ret and ge t OMG_TY_I8 le t OMG_TY_I64
+end
+
+fn omg_is_flt t ulong to bool
+  ret or eq t OMG_TY_F32 eq t OMG_TY_F64
+end
+
+fn omg_is_scalar t ulong to bool
+  ret and ge t OMG_TY_BOOL le t OMG_TY_F64
+end
+
+fn omg_type_bits t ulong to ulong
+  if or eq t OMG_TY_U8 eq t OMG_TY_I8
+    ret 8
+  end
+  if or eq t OMG_TY_U16 eq t OMG_TY_I16
+    ret 16
+  end
+  if or or eq t OMG_TY_U32 eq t OMG_TY_I32 eq t OMG_TY_F32
+    ret 32
+  end
+  if or or eq t OMG_TY_U64 eq t OMG_TY_I64 eq t OMG_TY_F64
+    ret 64
+  end
+  ret 0
+end
+
+note ---- Stack Helpers ----
+
+fn omg_ek_has_tok k ulong to bool
+  if or eq k OMG_EK_STMT or eq k OMG_EK_LET_PUSH or eq k OMG_EK_FOR_PUSH eq k OMG_EK_NEW_PUSH
+    ret false
+  end
+  ret true
+end
+
+fn omg_epush k ulong t ulong a ulong to void
+  sp = get omg_st 0
+  if ge sp OMG_MAX_ESTK
+    put omg_st 13 101
+    ret
+  end
+  put omg_ek sp k
+  put omg_et sp t
+  put omg_ea sp a
+  put omg_st 0 add sp 1
+  if omg_ek_has_tok k
+    put omg_st 9 add get omg_st 9 1
+  end
+end
+
+fn omg_epop to void
+  sp = get omg_st 0
+  if eq sp 0
+    ret
+  end
+  sp = sub sp 1
+  k = get omg_ek sp
+  put omg_st 0 sp
+  if omg_ek_has_tok k
+    if gt get omg_st 9 0
+      put omg_st 9 sub get omg_st 9 1
+    end
+  end
+end
+
+fn omg_bpush k ulong to void
+  sp = get omg_st 1
+  if ge sp OMG_MAX_BSTK
+    put omg_st 13 102
+    ret
+  end
+  put omg_bk sp k
+  put omg_be sp 0
+  put omg_bt sp 0
+  put omg_bs sp get omg_st 2
+  put omg_st 1 add sp 1
+end
+
+fn omg_env_push_len ty ulong mut ulong arr ulong el ulong alen ulong to void
+  n = get omg_st 2
+  if ge n OMG_MAX_LIVE
+    put omg_st 13 103
+    ret
+  end
+  put omg_ev_ty n ty
+  put omg_ev_sc n get omg_st 8
+  put omg_ev_mut n mut
+  put omg_ev_arr n arr
+  put omg_ev_el n el
+  put omg_ev_len n alen
+  put omg_st 2 add n 1
+end
+
+fn omg_env_push ty ulong mut ulong arr ulong el ulong to void
+  omg_env_push_len ty mut arr el 0
+end
+
+fn omg_env_pop_to base ulong to void
+  if lt base get omg_st 2
+    put omg_st 2 base
+  end
+end
+
+fn omg_init to void
+  for i ulong 24
+    put omg_st i 0
+  end
+  put omg_st 11 OMG_MAX_LIVE
+  put omg_st 12 1
+  omg_epush OMG_EK_UNIT_HDR 0 0
+end
+
+fn omg_init_gen to void
+  omg_init
+  put omg_st 11 3
+  put omg_st 12 0
+  put omg_st 20 1
+end
+
+fn omg_init_parse to void
+  omg_init
+end
+
+fn omg_fn_satisfied to bool
+  if eq get omg_st 5 OMG_TY_VOID
+    ret true
+  end
+  if eq get omg_be 0 1
+    ret true
+  end
+  bsp = get omg_st 1
+  if eq bsp 0
+    ret true
+  end
+  i = sub bsp 1
+  if eq get omg_be i 0
+    ret false
+  end
+  while gt i 0 bound 32
+    if or ne get omg_bk i OMG_BK_ELSE ne get omg_bt i 1
+      ret false
+    end
+    i = sub i 1
+  end
+  ret true
+end
+
+note Minimum tokens needed to close all currently open blocks + ret + END_UNIT in O(1)
+fn omg_close_cost to ulong
+  bsp = get omg_st 1
+  if eq bsp 0
+    if eq get omg_st 17 1
+      ret 0
+    end
+    if and ne get omg_st 20 0 eq get omg_st 10 0
+      ret 6
+    end
+    ret 1
+  end
+  cost = add bsp 1
+  if not omg_fn_satisfied
+    cost = add cost 2
+  end
+  if and ne get omg_st 20 0 eq get omg_st 10 0
+    cost = add cost 5
+  end
+  ret cost
+end
+
+fn omg_avail left ulong cc ulong extra ulong to ulong
+  need = add cc extra
+  if le left need
+    ret 0
+  end
+  ret sub left need
+end
+
+note Count if env has at least one variable/array matching criteria
+fn omg_has_var t ulong to bool
+  n = get omg_st 2
+  for i ulong n
+    if and eq get omg_ev_arr i 0 eq get omg_ev_ty i t
+      ret true
+    end
+  end
+  ret false
+end
+
+fn omg_has_mut_var to bool
+  n = get omg_st 2
+  for i ulong n
+    if and eq get omg_ev_arr i 0 eq get omg_ev_mut i 1
+      ret true
+    end
+  end
+  ret false
+end
+
+fn omg_has_arr_any to bool
+  n = get omg_st 2
+  for i ulong n
+    if ne get omg_ev_arr i 0
+      ret true
+    end
+  end
+  ret false
+end
+
+fn omg_has_arr_el el ulong wr ulong to bool
+  n = get omg_st 2
+  for i ulong n
+    ak = get omg_ev_arr i
+    if ne ak 0
+      if or eq wr 0 eq ak 2
+        if eq get omg_ev_el i el
+          ret true
+        end
+      end
+    end
+  end
+  ret false
+end
+
+fn omg_has_arr_write to bool
+  n = get omg_st 2
+  for i ulong n
+    if eq get omg_ev_arr i 2
+      ret true
+    end
+  end
+  ret false
+end
+
+fn omg_fn_callable f ulong to bool
+  np = get omg_fn_np f
+  for p ulong np
+    pk = get omg_fn_pk add mul f 6 p
+    if ne pk 0
+      pe = get omg_fn_pe add mul f 6 p
+      wr = ulong 0
+      if eq pk 2
+        wr = 1
+      end
+      if not omg_has_arr_el pe wr
+        ret false
+      end
+    end
+  end
+  ret true
+end
+
+fn omg_has_fn_ret t ulong avail ulong to bool
+  nf = get omg_st 3
+  af = get omg_st 12
+  for f ulong nf
+    if or ne af 0 eq get omg_fn_done f 1
+      if eq get omg_fn_ret f t
+        if ge avail add 1 get omg_fn_np f
+          if omg_fn_callable f
+            ret true
+          end
+        end
+      end
+    end
+  end
+  ret false
+end
+
+fn omg_has_macro kind ulong out_t ulong left ulong cc ulong to bool
+  mc = get omg_mac_cnt 0
+  for m ulong mc
+    if and eq get omg_mac_kind m kind eq get omg_mac_out m out_t
+      need = add add cc get omg_mac_nin m 2
+      if ge left need
+        ret true
+      end
+    end
+  end
+  ret false
+end
+
+note ---- O(1) Bitmask-Enforced Validity ----
+
+fn omg_mask_clear to void
+  for i ulong OMG_VOCAB
+    put omg_mask i 0
+  end
+end
+
+fn omg_allow tok ulong to void
+  if lt tok OMG_VOCAB
+    put omg_mask tok 1
+  end
+end
+
+fn omg_allow_range lo ulong hi ulong to void
+  i = lo
+  while le i hi bound 256
+    put omg_mask i 1
+    i = add i 1
+  end
+end
+
+fn omg_mask_refs_ty t ulong to void
+  n = get omg_st 2
+  for k ulong n
+    idx = sub sub n 1 k
+    if and eq get omg_ev_arr idx 0 eq get omg_ev_ty idx t
+      omg_allow add OMG_REF_BASE k
+    end
+  end
+end
+
+fn omg_mask_refs_arr el ulong wr ulong to void
+  n = get omg_st 2
+  for k ulong n
+    idx = sub sub n 1 k
+    ak = get omg_ev_arr idx
+    if ne ak 0
+      if or eq wr 0 eq ak 2
+        if or eq el 0 eq get omg_ev_el idx el
+          omg_allow add OMG_REF_BASE k
+        end
+      end
+    end
+  end
+end
+
+fn omg_mask_expr t ulong left ulong cc ulong kind ulong to void
+  estk_other = ulong 0
+  if gt get omg_st 9 0
+    estk_other = sub get omg_st 9 1
+  end
+  avail = omg_avail left cc estk_other
+  if eq kind OMG_EK_EXPR_IDX
+    omg_mask_refs_ty OMG_TY_U64
+    if gt t 0
+      omg_allow_range OMG_LIT_BASE add OMG_LIT_BASE sub t 1
+    end
+    ret
+  end
+  if and ne get omg_st 20 0 ge get omg_st 21 3
+    avail = 1
+  end
+  if eq t OMG_TY_BOOL
+    omg_allow OMG_OP_TRUE
+    omg_allow OMG_OP_FALSE
+    omg_mask_refs_ty OMG_TY_BOOL
+    if ge avail 2
+      omg_allow OMG_OP_NOT
+    end
+    if ge avail 3
+      omg_allow OMG_OP_AND
+      omg_allow OMG_OP_OR
+      omg_allow OMG_OP_XOR
+    end
+    if ge avail 4
+      omg_allow_range OMG_OP_EQ OMG_OP_GE
+    end
+    if ge avail 2
+      if omg_has_fn_ret OMG_TY_BOOL sub avail 1
+        omg_allow OMG_OP_CALL
+      end
+    end
+    if omg_has_macro 0 OMG_TY_BOOL left add cc estk_other
+      omg_allow OMG_MACRO
+    end
+    ret
+  end
+  note Numeric scalar type t
+  omg_mask_refs_ty t
+  if eq kind OMG_EK_EXPR_NZ
+    omg_allow_range add OMG_LIT_BASE 1 add OMG_LIT_BASE 31
+    if ge avail 3
+      if or or eq t OMG_TY_U8 eq t OMG_TY_U16 or eq t OMG_TY_U32 eq t OMG_TY_U64
+        omg_allow OMG_CONST_U8
+      end
+      if or or eq t OMG_TY_I16 eq t OMG_TY_I32 eq t OMG_TY_I64
+        omg_allow OMG_CONST_U8
+        omg_allow OMG_CONST_NEG8
+      end
+    end
+    if ge avail 5
+      if or or eq t OMG_TY_U16 eq t OMG_TY_U32 or eq t OMG_TY_U64 or eq t OMG_TY_I32 eq t OMG_TY_I64
+        omg_allow OMG_CONST_U16
+      end
+    end
+    if ge avail 9
+      if or or eq t OMG_TY_U32 eq t OMG_TY_U64 eq t OMG_TY_I64
+        omg_allow OMG_CONST_U32
+      end
+      if eq t OMG_TY_F32
+        omg_allow OMG_CONST_F32
+      end
+    end
+    if ge avail 17
+      if eq t OMG_TY_U64
+        omg_allow OMG_CONST_U64
+      end
+      if eq t OMG_TY_I64
+        omg_allow OMG_CONST_I64
+      end
+      if eq t OMG_TY_F64
+        omg_allow OMG_CONST_F64
+      end
+    end
+    ret
+  end
+  if eq kind OMG_EK_EXPR_SH
+    bw = omg_type_bits t
+    hi = add OMG_LIT_BASE 31
+    if lt bw 32
+      hi = add OMG_LIT_BASE sub bw 1
+    end
+    omg_allow_range OMG_LIT_BASE hi
+    ret
+  end
+  omg_allow_range OMG_LIT_BASE add OMG_LIT_BASE 31
+  if ge avail 3
+    if or or eq t OMG_TY_U8 eq t OMG_TY_U16 or eq t OMG_TY_U32 eq t OMG_TY_U64
+      omg_allow OMG_CONST_U8
+    end
+    if or or eq t OMG_TY_I16 eq t OMG_TY_I32 eq t OMG_TY_I64
+      omg_allow OMG_CONST_U8
+      omg_allow OMG_CONST_NEG8
+    end
+  end
+  if ge avail 5
+    if or or eq t OMG_TY_U16 eq t OMG_TY_U32 or eq t OMG_TY_U64 or eq t OMG_TY_I32 eq t OMG_TY_I64
+      omg_allow OMG_CONST_U16
+    end
+  end
+  if ge avail 9
+    if or or eq t OMG_TY_U32 eq t OMG_TY_U64 eq t OMG_TY_I64
+      omg_allow OMG_CONST_U32
+    end
+    if eq t OMG_TY_F32
+      omg_allow OMG_CONST_F32
+    end
+  end
+  if ge avail 17
+    if eq t OMG_TY_U64
+      omg_allow OMG_CONST_U64
+    end
+    if eq t OMG_TY_I64
+      omg_allow OMG_CONST_I64
+    end
+    if eq t OMG_TY_F64
+      omg_allow OMG_CONST_F64
+    end
+  end
+  if ge avail 2
+    omg_allow OMG_OP_NEG
+    if omg_is_flt t
+      omg_allow OMG_OP_FSQRT
+      omg_allow OMG_OP_FABS
+    end
+    if and eq t OMG_TY_U64 omg_has_arr_any
+      omg_allow OMG_OP_LEN
+    end
+    if omg_has_fn_ret t sub avail 1
+      omg_allow OMG_OP_CALL
+    end
+  end
+  if ge avail 3
+    omg_allow OMG_OP_ADD
+    omg_allow OMG_OP_SUB
+    omg_allow OMG_OP_MUL
+    omg_allow OMG_OP_DIV
+    omg_allow OMG_OP_CAST
+    if ge omg_type_bits t 32
+      omg_allow OMG_OP_BITCAST
+    end
+    if omg_is_int t
+      omg_allow OMG_OP_REM
+      omg_allow OMG_OP_AND
+      omg_allow OMG_OP_OR
+      omg_allow OMG_OP_XOR
+      omg_allow OMG_OP_SHL
+      omg_allow OMG_OP_SHR
+      if omg_is_uint t
+        omg_allow OMG_OP_ROTR
+        omg_allow OMG_OP_ROTL
+      end
+    end
+    if omg_is_flt t
+      omg_allow OMG_OP_FMIN
+      omg_allow OMG_OP_FMAX
+    end
+    if omg_has_arr_el t 0
+      omg_allow OMG_OP_GET
+    end
+  end
+  if and omg_is_flt t ge avail 4
+    omg_allow OMG_OP_FMA
+  end
+  if omg_has_macro 0 t left add cc estk_other
+    if or eq get omg_st 20 0 lt get omg_st 21 2
+      omg_allow OMG_MACRO
+    end
+  end
+end
+
+fn omg_ret_closes_fn top ulong to bool
+  if eq get omg_st 5 OMG_TY_VOID
+    ret false
+  end
+  i = top
+  while gt i 0 bound 32
+    if or ne get omg_bk i OMG_BK_ELSE ne get omg_bt i 1
+      ret false
+    end
+    i = sub i 1
+  end
+  ret eq get omg_be 0 0
+end
+
+fn omg_mask_stmt_open left ulong cc ulong bk ulong to void
+  if eq bk OMG_BK_FN
+    if eq get omg_st 5 OMG_TY_VOID
+      omg_allow OMG_END
+    end
+  else
+    omg_allow OMG_END
+    if eq bk OMG_BK_IF
+      if ge left add cc 1
+        omg_allow OMG_ELSE
+      end
+    end
+  end
+  rn = ulong 1
+  if ne get omg_st 5 OMG_TY_VOID
+    rn = 2
+  end
+  if omg_ret_closes_fn sub get omg_st 1 1
+    if ge left cc
+      omg_allow OMG_RET
+    end
+  else
+    if ge left add cc rn
+      omg_allow OMG_RET
+    end
+  end
+  if gt get omg_st 7 0
+    if ge left add cc 1
+      omg_allow OMG_BREAK
+      omg_allow OMG_CONTINUE
+    end
+  end
+  nl = get omg_st 2
+  cap = get omg_st 11
+  if lt nl cap
+    if ge left add cc 3
+      omg_allow OMG_LET
+    end
+    if eq get omg_st 8 0
+      if ge left add cc 4
+        omg_allow OMG_NEW
+      end
+    end
+  end
+  max_b = sub OMG_MAX_BSTK 1
+  if ne get omg_st 20 0
+    max_b = 3
+  end
+  if ge left add cc 3
+    if omg_has_mut_var
+      omg_allow OMG_SET
+    end
+    if lt get omg_st 1 max_b
+      omg_allow OMG_IF
+      if ge left add cc 4
+        omg_allow OMG_WHILE
+        if lt nl cap
+          omg_allow OMG_FOR
+        end
+      end
+    end
+  end
+  if ge left add cc 4
+    if omg_has_arr_write
+      omg_allow OMG_PUT
+    end
+  end
+  if gt left add cc 1
+    if omg_has_fn_ret OMG_TY_VOID sub sub left cc 1
+      omg_allow OMG_CALL_VOID
+    end
+  end
+  if omg_has_macro 1 OMG_TY_VOID left cc
+    omg_allow OMG_MACRO
+  end
+end
+
+fn omg_mask_stmt left ulong cc ulong to void
+  bsp = get omg_st 1
+  if eq bsp 0
+    ret
+  end
+  top = sub bsp 1
+  bk = get omg_bk top
+  if eq get omg_be top 1
+    if eq bk OMG_BK_IF
+      if ge left add cc 1
+        omg_allow OMG_ELSE
+      end
+    end
+    omg_allow OMG_END
+    ret
+  end
+  omg_mask_stmt_open left cc bk
+end
+
+fn omg_mask_call_fn t ulong left ulong cc ulong to void
+  nf = get omg_st 3
+  af = get omg_st 12
+  eo = ulong 0
+  if gt get omg_st 9 0
+    eo = sub get omg_st 9 1
+  end
+  avail = omg_avail left cc eo
+  for f ulong nf
+    if or ne af 0 eq get omg_fn_done f 1
+      if eq get omg_fn_ret f t
+        np = get omg_fn_np f
+        if ge avail add 1 np
+          if omg_fn_callable f
+            omg_allow add OMG_FN_BASE f
+          end
+        end
+      end
+    end
+  end
+end
+
+fn omg_mask_mac_slot t ulong left ulong cc ulong to void
+  mc = get omg_mac_cnt 0
+  eo = ulong 0
+  if gt get omg_st 9 0
+    eo = sub get omg_st 9 1
+  end
+  avail = omg_avail left cc eo
+  kind = ulong 0
+  if eq t OMG_TY_VOID
+    kind = 1
+  end
+  for m ulong mc
+    if and eq get omg_mac_kind m kind eq get omg_mac_out m t
+      if ge avail add 1 get omg_mac_nin m
+        omg_allow add OMG_MAC_BASE m
+      end
+    end
+  end
+end
+
+fn omg_mask_set_ref to void
+  n = get omg_st 2
+  for rk ulong n
+    idx = sub sub n 1 rk
+    if eq get omg_ev_arr idx 0
+      if eq get omg_ev_mut idx 1
+        omg_allow add OMG_REF_BASE rk
+      end
+    end
+  end
+end
+
+fn omg_mask_cast_src t ulong to void
+  for ct ulong 10
+    ty = add OMG_TY_U8 ct
+    if ne ty t
+      omg_allow ty
+    end
+  end
+end
+
+fn omg_mask_bitcast_src t ulong to void
+  bw = omg_type_bits t
+  for ct ulong 10
+    ty = add OMG_TY_U8 ct
+    if ne ty t
+      if eq omg_type_bits ty bw
+        omg_allow ty
+      end
+    end
+  end
+end
+
+fn omg_valid_mask_aux k ulong t ulong left ulong cc ulong to void
+  if eq k OMG_EK_LET_TY
+    omg_allow_range OMG_TY_BOOL OMG_TY_F64
+    ret
+  end
+  if eq k OMG_EK_SET_REF
+    omg_mask_set_ref
+    ret
+  end
+  if eq k OMG_EK_CMP_TY
+    omg_allow_range OMG_TY_BOOL OMG_TY_F64
+    ret
+  end
+  if eq k OMG_EK_CAST_SRC
+    omg_mask_cast_src t
+    ret
+  end
+  if eq k OMG_EK_BITCAST_SRC
+    omg_mask_bitcast_src t
+    ret
+  end
+  if or eq k OMG_EK_CALL_FN eq k OMG_EK_CALL_VOID_FN
+    omg_mask_call_fn t left cc
+    ret
+  end
+  if eq k OMG_EK_ARR_ANY
+    omg_mask_refs_arr 0 0
+    ret
+  end
+  if eq k OMG_EK_ARR_OF
+    omg_mask_refs_arr t 0
+    ret
+  end
+  if eq k OMG_EK_ARR_WRITE
+    omg_mask_refs_arr 0 1
+    ret
+  end
+  if eq k OMG_EK_ARR_WRITE_OF
+    omg_mask_refs_arr t 1
+    ret
+  end
+  if eq k OMG_EK_NIB
+    omg_allow_range OMG_NIB_BASE add OMG_NIB_BASE 15
+    ret
+  end
+  if eq k OMG_EK_FOR_TY
+    omg_allow_range OMG_TY_U8 OMG_TY_I64
+    ret
+  end
+  if eq k OMG_EK_NEW_TY
+    omg_allow_range OMG_TY_U8 OMG_TY_F64
+    ret
+  end
+  if eq k OMG_EK_NEW_LEN
+    omg_allow_range add OMG_LIT_BASE 1 add OMG_LIT_BASE 16
+    ret
+  end
+  if eq k OMG_EK_BOUND
+    omg_allow_range add OMG_LIT_BASE 1 add OMG_LIT_BASE 31
+    eo2 = ulong 0
+    if gt get omg_st 9 0
+      eo2 = sub get omg_st 9 1
+    end
+    avail = omg_avail left cc eo2
+    if ge avail 3
+      omg_allow OMG_CONST_U8
+    end
+    if ge avail 5
+      omg_allow OMG_CONST_U16
+    end
+    if ge avail 9
+      omg_allow OMG_CONST_U32
+    end
+    ret
+  end
+  if eq k OMG_EK_TRAP_N
+    omg_allow_range add OMG_LIT_BASE 1 add OMG_LIT_BASE 14
+    ret
+  end
+  if eq k OMG_EK_MAC_SLOT
+    omg_mask_mac_slot t left cc
+  end
+end
+
+fn omg_valid_mask left ulong to void
+  omg_mask_clear
+  sp = get omg_st 0
+  if eq sp 0
+    omg_allow OMG_EOF
+    ret
+  end
+  top = sub sp 1
+  k = get omg_ek top
+  t = get omg_et top
+  cc = omg_close_cost
+  if eq k OMG_EK_UNIT_HDR
+    omg_allow OMG_BEGIN
+    ret
+  end
+  if eq k OMG_EK_TOP
+    if gt get omg_st 3 0
+      if or eq get omg_st 20 0 eq get omg_st 10 1
+        omg_allow OMG_END_UNIT
+      end
+    end
+    if and lt get omg_st 3 OMG_MAX_FNS ge left 5
+      if or eq get omg_st 20 0 or eq get omg_st 10 1 ge left 12
+        omg_allow OMG_FN
+      end
+      if eq get omg_st 10 0
+        omg_allow OMG_FN_MAIN
+      end
+    end
+    ret
+  end
+  if eq k OMG_EK_FN_RET
+    omg_allow OMG_TY_VOID
+    need_nv = ulong 6
+    if and ne get omg_st 20 0 eq get omg_st 10 0
+      need_nv = 11
+    end
+    if ge left need_nv
+      omg_allow_range OMG_TY_BOOL OMG_TY_F64
+    end
+    ret
+  end
+  if eq k OMG_EK_FN_PARAM
+    omg_allow OMG_BODY
+    if and lt get omg_st 6 6 ge left add cc 3
+      omg_allow OMG_PARAM
+    end
+    ret
+  end
+  if eq k OMG_EK_PARAM_TY
+    omg_allow_range OMG_TY_BOOL OMG_TY_F64
+    if and le add get omg_st 6 2 6 ge left add cc 3
+      omg_allow OMG_TY_VIEW
+      omg_allow OMG_TY_EDIT
+    end
+    ret
+  end
+  if eq k OMG_EK_PARAM_EL
+    omg_allow_range OMG_TY_U8 OMG_TY_F64
+    ret
+  end
+  if eq k OMG_EK_STMT
+    omg_mask_stmt left cc
+    ret
+  end
+  if or or eq k OMG_EK_EXPR eq k OMG_EK_EXPR_NZ or eq k OMG_EK_EXPR_SH eq k OMG_EK_EXPR_IDX
+    omg_mask_expr t left cc k
+    ret
+  end
+  omg_valid_mask_aux k t left cc
+end
+
+note ---- O(1) State Transition (omg_step) ----
+
+fn omg_push_nibs cnt ulong to void
+  for i ulong cnt
+    omg_epush OMG_EK_NIB 0 0
+  end
+end
+
+fn omg_step_expr_op tok ulong t ulong to void
+  if and ge tok OMG_OP_ADD le tok OMG_OP_CALL
+    put omg_st 21 add get omg_st 21 1
+  end
+  if eq tok OMG_OP_NOT
+    omg_epush OMG_EK_EXPR t 0
+    ret
+  end
+  if or eq tok OMG_OP_NEG or eq tok OMG_OP_FSQRT eq tok OMG_OP_FABS
+    omg_epush OMG_EK_EXPR t 0
+    ret
+  end
+  if eq tok OMG_OP_LEN
+    omg_epush OMG_EK_ARR_ANY 0 0
+    ret
+  end
+  if eq tok OMG_OP_GET
+    omg_epush OMG_EK_EXPR OMG_TY_U64 0
+    omg_epush OMG_EK_ARR_OF t 1
+    ret
+  end
+  if eq tok OMG_OP_FMA
+    omg_epush OMG_EK_EXPR t 0
+    omg_epush OMG_EK_EXPR t 0
+    omg_epush OMG_EK_EXPR t 0
+    ret
+  end
+  if eq tok OMG_OP_CAST
+    omg_epush OMG_EK_CAST_SRC t 0
+    ret
+  end
+  if eq tok OMG_OP_BITCAST
+    omg_epush OMG_EK_BITCAST_SRC t 0
+    ret
+  end
+  if eq tok OMG_OP_CALL
+    omg_epush OMG_EK_CALL_FN t 0
+    ret
+  end
+  if and ge tok OMG_OP_EQ le tok OMG_OP_GE
+    omg_epush OMG_EK_CMP_TY 0 0
+    ret
+  end
+  if or eq tok OMG_OP_DIV eq tok OMG_OP_REM
+    omg_epush OMG_EK_EXPR_NZ t 0
+    omg_epush OMG_EK_EXPR t 0
+    ret
+  end
+  if or or eq tok OMG_OP_SHL eq tok OMG_OP_SHR or eq tok OMG_OP_ROTR eq tok OMG_OP_ROTL
+    omg_epush OMG_EK_EXPR_SH t 0
+    omg_epush OMG_EK_EXPR t 0
+    ret
+  end
+  if and ge tok OMG_OP_ADD le tok OMG_OP_FMAX
+    omg_epush OMG_EK_EXPR t 0
+    omg_epush OMG_EK_EXPR t 0
+    ret
+  end
+  if or eq tok OMG_CONST_U8 eq tok OMG_CONST_NEG8
+    omg_push_nibs 2
+    ret
+  end
+  if eq tok OMG_CONST_U16
+    omg_push_nibs 4
+    ret
+  end
+  if or eq tok OMG_CONST_U32 eq tok OMG_CONST_F32
+    omg_push_nibs 8
+    ret
+  end
+  if or or eq tok OMG_CONST_U64 eq tok OMG_CONST_I64 eq tok OMG_CONST_F64
+    omg_push_nibs 16
+    ret
+  end
+  if eq tok OMG_MACRO
+    put omg_st 21 add get omg_st 21 2
+    omg_epush OMG_EK_MAC_SLOT t 0
+    ret
+  end
+end
+
+fn omg_close_block to void
+  bsp = sub get omg_st 1 1
+  bk = get omg_bk bsp
+  ended = get omg_be bsp
+  then_e = get omg_bt bsp
+  base = get omg_bs bsp
+  omg_env_pop_to base
+  put omg_st 1 bsp
+  if eq bk OMG_BK_FN
+    cf = get omg_st 4
+    put omg_fn_done cf 1
+    put omg_st 8 0
+    put omg_st 7 0
+    omg_epush OMG_EK_TOP 0 0
+    ret
+  end
+  if gt get omg_st 8 0
+    put omg_st 8 sub get omg_st 8 1
+  end
+  if or eq bk OMG_BK_WHILE eq bk OMG_BK_FOR
+    if gt get omg_st 7 0
+      put omg_st 7 sub get omg_st 7 1
+    end
+  end
+  if eq bk OMG_BK_ELSE
+    if and eq then_e 1 eq ended 1
+      if gt bsp 0
+        put omg_be sub bsp 1 1
+      end
+    end
+  end
+end
+
+fn omg_step_stmt tok ulong to void
+  put omg_st 21 0
+  bsp = sub get omg_st 1 1
+  if eq tok OMG_END
+    omg_epop
+    omg_close_block
+    ret
+  end
+  if eq tok OMG_ELSE
+    omg_env_pop_to get omg_bs bsp
+    put omg_bt bsp get omg_be bsp
+    put omg_be bsp 0
+    put omg_bk bsp OMG_BK_ELSE
+    ret
+  end
+  if eq tok OMG_RET
+    put omg_be bsp 1
+    rt = get omg_st 5
+    if ne rt OMG_TY_VOID
+      omg_epush OMG_EK_EXPR rt 0
+    end
+    ret
+  end
+  if or eq tok OMG_BREAK eq tok OMG_CONTINUE
+    put omg_be bsp 1
+    ret
+  end
+  if eq tok OMG_TRAP
+    put omg_be bsp 1
+    omg_epush OMG_EK_TRAP_N 0 0
+    ret
+  end
+  if eq tok OMG_EXIT
+    put omg_be bsp 1
+    omg_epush OMG_EK_EXPR OMG_TY_I32 0
+    ret
+  end
+  if eq tok OMG_LET
+    omg_epush OMG_EK_LET_TY 0 0
+    ret
+  end
+  if eq tok OMG_SET
+    omg_epush OMG_EK_SET_REF 0 0
+    ret
+  end
+  if eq tok OMG_IF
+    omg_bpush OMG_BK_IF
+    put omg_st 8 add get omg_st 8 1
+    omg_epush OMG_EK_STMT 0 0
+    omg_epush OMG_EK_EXPR OMG_TY_BOOL 0
+    ret
+  end
+  if eq tok OMG_WHILE
+    omg_bpush OMG_BK_WHILE
+    put omg_st 8 add get omg_st 8 1
+    put omg_st 7 add get omg_st 7 1
+    omg_epush OMG_EK_STMT 0 0
+    omg_epush OMG_EK_BOUND 0 0
+    omg_epush OMG_EK_EXPR OMG_TY_BOOL 0
+    ret
+  end
+  if eq tok OMG_FOR
+    omg_bpush OMG_BK_FOR
+    put omg_st 8 add get omg_st 8 1
+    put omg_st 7 add get omg_st 7 1
+    omg_epush OMG_EK_STMT 0 0
+    omg_epush OMG_EK_FOR_TY 0 0
+    ret
+  end
+  if eq tok OMG_NEW
+    omg_epush OMG_EK_NEW_TY 0 0
+    ret
+  end
+  if eq tok OMG_PUT
+    omg_epush OMG_EK_EXPR 0 0
+    omg_epush OMG_EK_EXPR OMG_TY_U64 0
+    omg_epush OMG_EK_ARR_WRITE 0 0
+    ret
+  end
+  if eq tok OMG_CALL_VOID
+    omg_epush OMG_EK_CALL_VOID_FN OMG_TY_VOID 0
+    ret
+  end
+  if eq tok OMG_MACRO
+    omg_epush OMG_EK_MAC_SLOT OMG_TY_VOID 0
+    ret
+  end
+end
+
+fn omg_push_call_args f ulong to void
+  np = get omg_fn_np f
+  for i ulong np
+    p = sub sub np 1 i
+    pk = get omg_fn_pk add mul f 6 p
+    pt = get omg_fn_pt add mul f 6 p
+    pe = get omg_fn_pe add mul f 6 p
+    if eq pk 0
+      omg_epush OMG_EK_EXPR pt 0
+    else
+      if eq pk 1
+        omg_epush OMG_EK_ARR_OF pe 0
+      else
+        omg_epush OMG_EK_ARR_WRITE_OF pe 0
+      end
+    end
+  end
+end
+
+fn omg_drain_hooks to void
+  while gt get omg_st 0 0 bound 128
+    sp = get omg_st 0
+    k = get omg_ek sub sp 1
+    if eq k OMG_EK_LET_PUSH
+      ty = get omg_et sub sp 1
+      omg_epop
+      omg_env_push ty 1 0 0
+    else
+      if eq k OMG_EK_FOR_PUSH
+        ty = get omg_et sub sp 1
+        omg_epop
+        omg_env_push ty 0 0 0
+      else
+        if eq k OMG_EK_NEW_PUSH
+          ty = get omg_et sub sp 1
+          omg_epop
+          omg_env_push_len ty 0 2 ty get omg_st 15
+        else
+          break
+        end
+      end
+    end
+  end
+end
+
+fn omg_step_fn_sig k ulong tok ulong to long
+  if eq k OMG_EK_FN_RET
+    omg_epop
+    cf = get omg_st 4
+    put omg_fn_ret cf tok
+    put omg_st 5 tok
+    omg_epush OMG_EK_FN_PARAM 0 0
+    ret 0
+  end
+  if eq k OMG_EK_FN_PARAM
+    if eq tok OMG_BODY
+      omg_epop
+      omg_epush OMG_EK_STMT 0 0
+      ret 0
+    end
+    omg_epush OMG_EK_PARAM_TY 0 0
+    ret 0
+  end
+  if eq k OMG_EK_PARAM_TY
+    omg_epop
+    cf = get omg_st 4
+    np = get omg_fn_np cf
+    if or eq tok OMG_TY_VIEW eq tok OMG_TY_EDIT
+      pk = ulong 1
+      if eq tok OMG_TY_EDIT
+        pk = 2
+      end
+      put omg_fn_pk add mul cf 6 np pk
+      put omg_st 6 add get omg_st 6 2
+      omg_epush OMG_EK_PARAM_EL 0 pk
+    else
+      put omg_fn_pk add mul cf 6 np 0
+      put omg_fn_pt add mul cf 6 np tok
+      put omg_fn_np cf add np 1
+      put omg_st 6 add get omg_st 6 1
+      omg_env_push tok 1 0 0
+    end
+    ret 0
+  end
+  if eq k OMG_EK_PARAM_EL
+    pk = get omg_ea sub get omg_st 0 1
+    omg_epop
+    cf = get omg_st 4
+    np = get omg_fn_np cf
+    pt = OMG_TY_VIEW
+    if eq pk 2
+      pt = OMG_TY_EDIT
+    end
+    put omg_fn_pt add mul cf 6 np pt
+    put omg_fn_pe add mul cf 6 np tok
+    put omg_fn_np cf add np 1
+    omg_env_push pt 0 pk tok
+    ret 0
+  end
+  ret -1
+end
+
+fn omg_step_decl_aux k ulong tok ulong to long
+  if eq k OMG_EK_LET_TY
+    omg_epop
+    omg_epush OMG_EK_LET_PUSH tok 0
+    omg_epush OMG_EK_EXPR tok 0
+    ret 0
+  end
+  if eq k OMG_EK_SET_REF
+    omg_epop
+    rk = sub tok OMG_REF_BASE
+    idx = sub sub get omg_st 2 1 rk
+    ty = get omg_ev_ty idx
+    omg_epush OMG_EK_EXPR ty 0
+    ret 0
+  end
+  if eq k OMG_EK_CMP_TY
+    omg_epop
+    omg_epush OMG_EK_EXPR tok 0
+    omg_epush OMG_EK_EXPR tok 0
+    ret 0
+  end
+  if or eq k OMG_EK_CAST_SRC eq k OMG_EK_BITCAST_SRC
+    omg_epop
+    omg_epush OMG_EK_EXPR tok 0
+    ret 0
+  end
+  if eq k OMG_EK_FOR_TY
+    omg_epop
+    omg_epush OMG_EK_FOR_PUSH tok 0
+    omg_epush OMG_EK_EXPR tok 0
+    ret 0
+  end
+  if eq k OMG_EK_NEW_TY
+    omg_epop
+    omg_epush OMG_EK_NEW_PUSH tok 0
+    omg_epush OMG_EK_EXPR tok 0
+    omg_epush OMG_EK_NEW_LEN 0 0
+    ret 0
+  end
+  if eq k OMG_EK_NEW_LEN
+    omg_epop
+    put omg_st 15 sub tok OMG_LIT_BASE
+    ret 0
+  end
+  if eq k OMG_EK_BOUND
+    omg_epop
+    if eq tok OMG_CONST_U8
+      omg_push_nibs 2
+    else
+      if eq tok OMG_CONST_U16
+        omg_push_nibs 4
+      else
+        if eq tok OMG_CONST_U32
+          omg_push_nibs 8
+        end
+      end
+    end
+    ret 0
+  end
+  if eq k OMG_EK_TRAP_N
+    omg_epop
+    ret 0
+  end
+  ret -1
+end
+
+fn omg_step tok ulong to long
+  sp = get omg_st 0
+  if eq sp 0
+    if eq tok OMG_EOF
+      ret 0
+    end
+    ret 1
+  end
+  top = sub sp 1
+  k = get omg_ek top
+  t = get omg_et top
+  if eq k OMG_EK_UNIT_HDR
+    if ne tok OMG_BEGIN
+      ret 2
+    end
+    omg_epop
+    omg_epush OMG_EK_TOP 0 0
+    ret 0
+  end
+  if eq k OMG_EK_TOP
+    omg_epop
+    if eq tok OMG_END_UNIT
+      put omg_st 17 1
+      ret 0
+    end
+    cf = get omg_st 3
+    put omg_st 3 add cf 1
+    put omg_st 4 cf
+    put omg_st 2 0
+    put omg_st 6 0
+    put omg_st 8 0
+    put omg_st 7 0
+    put omg_fn_np cf 0
+    put omg_fn_done cf 0
+    if eq tok OMG_FN_MAIN
+      put omg_fn_main cf 1
+      put omg_fn_ret cf OMG_TY_I32
+      put omg_st 5 OMG_TY_I32
+      put omg_st 10 1
+      omg_bpush OMG_BK_FN
+      omg_epush OMG_EK_STMT 0 0
+    else
+      put omg_fn_main cf 0
+      put omg_fn_ret cf OMG_TY_VOID
+      put omg_st 5 OMG_TY_VOID
+      omg_bpush OMG_BK_FN
+      omg_epush OMG_EK_FN_RET 0 0
+    end
+    ret 0
+  end
+  if eq k OMG_EK_STMT
+    omg_step_stmt tok
+    omg_drain_hooks
+    ret 0
+  end
+  if or or eq k OMG_EK_EXPR eq k OMG_EK_EXPR_NZ or eq k OMG_EK_EXPR_SH eq k OMG_EK_EXPR_IDX
+    omg_epop
+    omg_step_expr_op tok t
+    omg_drain_hooks
+    ret 0
+  end
+  if or or eq k OMG_EK_FN_RET eq k OMG_EK_FN_PARAM or eq k OMG_EK_PARAM_TY eq k OMG_EK_PARAM_EL
+    rc = omg_step_fn_sig k tok
+    omg_drain_hooks
+    ret rc
+  end
+  if or eq k OMG_EK_CALL_FN eq k OMG_EK_CALL_VOID_FN
+    omg_epop
+    f = sub tok OMG_FN_BASE
+    omg_push_call_args f
+    omg_drain_hooks
+    ret 0
+  end
+  if eq k OMG_EK_ARR_WRITE
+    omg_epop
+    rk = sub tok OMG_REF_BASE
+    idx = sub sub get omg_st 2 1 rk
+    el = get omg_ev_el idx
+    alen = get omg_ev_len idx
+    sp_now = get omg_st 0
+    put omg_et sub sp_now 2 el
+    if gt alen 0
+      put omg_ek sub sp_now 1 OMG_EK_EXPR_IDX
+      put omg_et sub sp_now 1 alen
+    end
+    omg_drain_hooks
+    ret 0
+  end
+  if eq k OMG_EK_ARR_OF
+    is_get = get omg_ea sub get omg_st 0 1
+    omg_epop
+    if eq is_get 1
+      rk2 = sub tok OMG_REF_BASE
+      idx2 = sub sub get omg_st 2 1 rk2
+      alen2 = get omg_ev_len idx2
+      if gt alen2 0
+        sp_now2 = get omg_st 0
+        put omg_ek sub sp_now2 1 OMG_EK_EXPR_IDX
+        put omg_et sub sp_now2 1 alen2
+      end
+    end
+    omg_drain_hooks
+    ret 0
+  end
+  if or eq k OMG_EK_ARR_ANY eq k OMG_EK_ARR_WRITE_OF
+    omg_epop
+    omg_drain_hooks
+    ret 0
+  end
+  if eq k OMG_EK_NIB
+    omg_epop
+    omg_drain_hooks
+    ret 0
+  end
+  if eq k OMG_EK_MAC_SLOT
+    omg_epop
+    m = sub tok OMG_MAC_BASE
+    nin = get omg_mac_nin m
+    for mi ulong nin
+      p = sub sub nin 1 mi
+      it = get omg_mac_in add mul m 4 p
+      omg_epush OMG_EK_EXPR it 0
+    end
+    omg_drain_hooks
+    ret 0
+  end
+  rc2 = omg_step_decl_aux k tok
+  omg_drain_hooks
+  ret rc2
+end
+
+fn omg_validate to long
+  n = get omg_ntok 0
+  if eq n 0
+    ret 10
+  end
+  omg_init
+  for i ulong n
+    tok = ulong get omg_toks i
+    if ge tok OMG_VOCAB
+      put omg_st 13 11
+      put omg_st 14 i
+      ret 11
+    end
+    omg_valid_mask sub n i
+    if eq get omg_mask tok 0
+      put omg_st 13 12
+      put omg_st 14 i
+      ret 12
+    end
+    rc = omg_step tok
+    if ne rc 0
+      put omg_st 13 13
+      put omg_st 14 i
+      ret 13
+    end
+    if ne get omg_st 13 0
+      put omg_st 14 i
+      ret long get omg_st 13
+    end
+  end
+  if or ne get omg_st 0 0 ne get omg_st 1 0
+    ret 14
+  end
+  if eq get omg_st 17 0
+    ret 15
+  end
+  ret 0
+end
+
+note ---- Macro Dictionary & Expansion ----
+
+fn omg_mac_hash kind ulong out_t ulong nin ulong mlen ulong to ulong
+  h = ulong 14695981039346656037
+  h = mul xor h kind 1099511628211
+  h = mul xor h out_t 1099511628211
+  h = mul xor h nin 1099511628211
+  for i ulong nin
+    h = mul xor h get omg_mac_tmp_in i 1099511628211
+  end
+  for j ulong mlen
+    h = mul xor h ulong get omg_mac_tmp_tok j 1099511628211
+  end
+  ret h
+end
+
+fn omg_macro_lookup sem_id ulong to ulong
+  mc = get omg_mac_cnt 0
+  for m ulong mc
+    if eq get omg_mac_id m sem_id
+      ret m
+    end
+  end
+  ret 65535
+end
+
+fn omg_macro_register kind ulong out_t ulong nin ulong to long
+  mlen = get omg_mac_tmp_len 0
+  if or gt nin 4 eq mlen 0
+    ret -1
+  end
+  sid = omg_mac_hash kind out_t nin mlen
+  ex = omg_macro_lookup sid
+  if ne ex 65535
+    ret long ex
+  end
+  mc = get omg_mac_cnt 0
+  if ge mc OMG_MAX_MACS
+    ret -2
+  end
+  pcur = get omg_mac_pcur 0
+  if gt add pcur mlen 4096
+    ret -3
+  end
+  put omg_mac_id mc sid
+  put omg_mac_kind mc kind
+  put omg_mac_out mc out_t
+  put omg_mac_nin mc nin
+  for i ulong nin
+    put omg_mac_in add mul mc 4 i get omg_mac_tmp_in i
+  end
+  put omg_mac_off mc pcur
+  put omg_mac_len mc mlen
+  for j ulong mlen
+    put omg_mac_pool add pcur j get omg_mac_tmp_tok j
+  end
+  put omg_mac_pcur 0 add pcur mlen
+  put omg_mac_cnt 0 add mc 1
+  ret long mc
+end
+
+note Measure token span of one complete expression starting at omg_toks[pos]
+fn omg_expr_span pos ulong lim ulong to ulong
+  need = ulong 1
+  p = pos
+  while and gt need 0 lt p lim bound 4096
+    tk = ulong get omg_toks p
+    p = add p 1
+    need = sub need 1
+    if or eq tk OMG_OP_NOT or eq tk OMG_OP_NEG or eq tk OMG_OP_FSQRT or eq tk OMG_OP_FABS eq tk OMG_OP_LEN
+      need = add need 1
+    else
+      if or eq tk OMG_OP_CAST eq tk OMG_OP_BITCAST
+        p = add p 1
+        need = add need 1
+      else
+        if and ge tk OMG_OP_EQ le tk OMG_OP_GE
+          p = add p 1
+          need = add need 2
+        else
+          if eq tk OMG_OP_FMA
+            need = add need 3
+          else
+            if eq tk OMG_OP_CALL
+              if lt p lim
+                fn_i = sub ulong get omg_toks p OMG_FN_BASE
+                p = add p 1
+                if lt fn_i OMG_MAX_FNS
+                  need = add need get omg_fn_np fn_i
+                end
+              end
+            else
+              if and ge tk OMG_OP_ADD le tk OMG_OP_FMAX
+                need = add need 2
+              else
+                if eq tk OMG_OP_GET
+                  need = add need 2
+                else
+                  if or eq tk OMG_CONST_U8 eq tk OMG_CONST_NEG8
+                    p = add p 2
+                  else
+                    if eq tk OMG_CONST_U16
+                      p = add p 4
+                    else
+                      if or eq tk OMG_CONST_U32 eq tk OMG_CONST_F32
+                        p = add p 8
+                      else
+                        if or or eq tk OMG_CONST_U64 eq tk OMG_CONST_I64 eq tk OMG_CONST_F64
+                          p = add p 16
+                        else
+                          if eq tk OMG_MACRO
+                            if lt p lim
+                              mc = sub ulong get omg_toks p OMG_MAC_BASE
+                              p = add p 1
+                              if lt mc OMG_MAX_MACS
+                                need = add need get omg_mac_nin mc
+                              end
+                            end
+                          end
+                        end
+                      end
+                    end
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  ret sub p pos
+end
+
+fn omg_exp_emit tok ulong to void
+  ne_ = get omg_nexp 0
+  if lt ne_ OMG_MAX_TOKS
+    put omg_exp_buf ne_ ushort tok
+    put omg_nexp 0 add ne_ 1
+  end
+end
+
+global omg_aoff ulong 4
+global omg_alen ulong 4
+
+fn omg_expand_stmt_args m ulong nin ulong to void
+  for li ulong nin
+    omg_exp_emit OMG_LET
+    omg_exp_emit get omg_mac_in add mul m 4 li
+    ao = get omg_aoff li
+    al = get omg_alen li
+    for k ulong al
+      xt = ulong get omg_toks add ao k
+      if and ge xt OMG_REF_BASE lt xt add OMG_REF_BASE 64
+        xt = add xt li
+      end
+      omg_exp_emit xt
+    end
+  end
+end
+
+fn omg_expand_copy_arg idx ulong to void
+  ao = get omg_aoff idx
+  al = get omg_alen idx
+  for k ulong al
+    omg_exp_emit ulong get omg_toks add ao k
+  end
+end
+
+fn omg_mac_expr_delta tk ulong to ulong
+  if or eq tk OMG_OP_NOT or eq tk OMG_OP_NEG or eq tk OMG_OP_FSQRT or eq tk OMG_OP_FABS eq tk OMG_OP_LEN
+    ret 1
+  end
+  if or eq tk OMG_OP_CAST eq tk OMG_OP_BITCAST
+    ret 1
+  end
+  if eq tk OMG_OP_FMA
+    ret 3
+  end
+  if or and ge tk OMG_OP_ADD le tk OMG_OP_FMAX or and ge tk OMG_OP_EQ le tk OMG_OP_GE eq tk OMG_OP_GET
+    ret 2
+  end
+  ret 0
+end
+
+global omg_mac_lst ulong 3
+
+fn omg_mac_let_step mt ulong to void
+  st_ = get omg_mac_lst 1
+  if eq st_ 1
+    put omg_mac_lst 1 2
+    put omg_mac_lst 2 1
+    ret
+  end
+  if eq st_ 2
+    if or eq mt OMG_OP_CAST eq mt OMG_OP_BITCAST
+      put omg_mac_lst 1 3
+    else
+      if and ge mt OMG_OP_EQ le mt OMG_OP_GE
+        put omg_mac_lst 1 3
+      end
+    end
+    nd = add sub get omg_mac_lst 2 1 omg_mac_expr_delta mt
+    put omg_mac_lst 2 nd
+    if eq nd 0
+      put omg_mac_lst 1 0
+      put omg_mac_lst 0 add get omg_mac_lst 0 1
+    end
+    ret
+  end
+  if eq st_ 3
+    put omg_mac_lst 1 2
+    ret
+  end
+  if eq mt OMG_LET
+    put omg_mac_lst 1 1
+  end
+end
+
+fn omg_expand_body m ulong nin ulong to void
+  moff = get omg_mac_off m
+  mlen = get omg_mac_len m
+  kind = get omg_mac_kind m
+  put omg_mac_lst 0 0
+  put omg_mac_lst 1 0
+  put omg_mac_lst 2 0
+  for mi ulong mlen
+    mt = ulong get omg_mac_pool add moff mi
+    if ge mt 256
+      idx = sub mt 256
+      if eq kind 0
+        omg_expand_copy_arg idx
+      else
+        ld = get omg_mac_lst 0
+        omg_exp_emit add OMG_REF_BASE add ld sub sub nin 1 idx
+      end
+    else
+      omg_exp_emit mt
+    end
+    omg_mac_let_step mt
+  end
+end
+
+fn omg_expand_one m ulong pos ulong n ulong to ulong
+  p = pos
+  nin = get omg_mac_nin m
+  for ai ulong nin
+    sp = omg_expr_span p n
+    put omg_aoff ai p
+    put omg_alen ai sp
+    p = add p sp
+  end
+  if eq get omg_mac_kind m 1
+    omg_exp_emit OMG_IF
+    omg_exp_emit OMG_OP_TRUE
+    omg_expand_stmt_args m nin
+    omg_expand_body m nin
+    omg_exp_emit OMG_END
+  else
+    omg_expand_body m nin
+  end
+  ret p
+end
+
+fn omg_macro_expand to long
+  for pass_i ulong 8
+    n = get omg_ntok 0
+    has_mac = false
+    for c ulong n
+      if eq ulong get omg_toks c OMG_MACRO
+        has_mac = true
+        break
+      end
+    end
+    if not has_mac
+      ret 0
+    end
+    put omg_nexp 0 0
+    p = ulong 0
+    while lt p n bound 16384
+      tk = ulong get omg_toks p
+      if ne tk OMG_MACRO
+        omg_exp_emit tk
+        p = add p 1
+        continue
+      end
+      if ge add p 1 n
+        ret -1
+      end
+      m = sub ulong get omg_toks add p 1 OMG_MAC_BASE
+      if ge m get omg_mac_cnt 0
+        ret -2
+      end
+      p = omg_expand_one m add p 2 n
+    end
+    ne2 = get omg_nexp 0
+    for z ulong ne2
+      put omg_toks z get omg_exp_buf z
+    end
+    put omg_ntok 0 ne2
+  end
+  ret 0
+end
+
+note ---- Semantic ID (64-bit FNV-1a + 256-bit digest) & OMGC Corpus Packer ----
+
+fn omg_semantic_id to ulong
+  rc_exp = omg_macro_expand
+  n = get omg_ntok 0
+  h0 = ulong 14695981039346656037
+  h1 = ulong 7309815423918472513
+  h2 = ulong 11400714819323198485
+  h3 = ulong 13787848793156543929
+  for i ulong n
+    t = ulong get omg_toks i
+    lo = and t 255
+    hi = shr t 8
+    h0 = mul xor h0 lo 1099511628211
+    h0 = mul xor h0 hi 1099511628211
+    h1 = smx xor h1 add mul i 65537 t
+    h2 = mul xor h2 add t mul i 131 10723151780598845931
+    h3 = smx xor h3 xor mul t 2654435761 h0
+  end
+  put omg_sem_hash 0 h0
+  put omg_sem_hash 1 h1
+  put omg_sem_hash 2 h2
+  put omg_sem_hash 3 h3
+  ret h0
+end
+
+fn omg_encode_stream to ulong
+  n = get omg_ntok 0
+  for i ulong n
+    t = ulong get omg_toks i
+    o = mul i 2
+    if lt add o 1 OMG_MAX_CORP
+      put omg_corpus o uchar and t 255
+      put omg_corpus add o 1 uchar and shr t 8 255
+    end
+  end
+  put omg_ncorp 0 mul n 2
+  ret mul n 2
+end
+
+fn omg_corp_reset to void
+  put omg_ncorp 0 0
+  put omg_corp_nrec 0 0
+  put omg_corp_ntok 0 0
+end
+
+fn omg_corp_put4 pos ulong v ulong to void
+  for k ulong 4
+    put omg_corpus add pos k uchar and shr v mul k 8 255
+  end
+end
+
+fn omg_corp_put8 pos ulong v ulong to void
+  for k ulong 8
+    put omg_corpus add pos k uchar and shr v mul k 8 255
+  end
+end
+
+note Add current omg_toks to corpus with semantic deduplication; returns 1 added, 0 duplicate, -1 full
+fn omg_corpus_add to long
+  sid = omg_semantic_id
+  nr = get omg_corp_nrec 0
+  for r ulong nr
+    if eq get omg_corp_ids r sid
+      ret 0
+    end
+  end
+  nt = get omg_ntok 0
+  ct = get omg_corp_ntok 0
+  if or ge nr 4096 gt add ct nt 262144
+    ret -1
+  end
+  for i ulong nt
+    put omg_corp_toks add ct i get omg_toks i
+  end
+  put omg_corp_ids nr sid
+  put omg_corp_offs nr ct
+  put omg_corp_lens nr nt
+  put omg_corp_nrec 0 add nr 1
+  put omg_corp_ntok 0 add ct nt
+  ret 1
+end
+
+note Pack OMGC binary corpus header + directory + u16 records into omg_corpus
+note Layout: [u32 "OMGC", u32 ver=1, u32 n_rec, u32 total_toks] (16 bytes)
+note + n_rec * [u64 sem_id, u32 tok_off, u32 tok_len] (16 bytes each)
+note + total_toks * u16 LE tokens
+fn omg_pack_corpus to ulong
+  nr = get omg_corp_nrec 0
+  total_t = get omg_corp_ntok 0
+  hdr_sz = add 16 mul nr 16
+  if gt add hdr_sz mul total_t 2 OMG_MAX_CORP
+    ret 0
+  end
+  note "OMGC" LE = 0x43474d4f
+  omg_corp_put4 0 0x43474d4f
+  omg_corp_put4 4 1
+  omg_corp_put4 8 nr
+  omg_corp_put4 12 total_t
+  for r ulong nr
+    ro = add 16 mul r 16
+    omg_corp_put8 ro get omg_corp_ids r
+    omg_corp_put4 add ro 8 get omg_corp_offs r
+    omg_corp_put4 add ro 12 get omg_corp_lens r
+  end
+  for i ulong total_t
+    tk = ulong get omg_corp_toks i
+    bo = add hdr_sz mul i 2
+    put omg_corpus bo uchar and tk 255
+    put omg_corpus add bo 1 uchar and shr tk 8 255
+  end
+  put omg_ncorp 0 add hdr_sz mul total_t 2
+  ret get omg_ncorp 0
+end
+
+note ---- .om Source Parser (omg_parse_om) ----
+
+fn omg_emit tok ulong to void
+  n = get omg_ntok 0
+  if lt n OMG_MAX_TOKS
+    put omg_toks n ushort tok
+    put omg_ntok 0 add n 1
+  end
+end
+
+fn omg_tok_eq off ulong tlen ulong s view uchar * to bool
+  if ne tlen len s
+    ret false
+  end
+  for i ulong tlen
+    if ne get omg_src add off i get s i
+      ret false
+    end
+  end
+  ret true
+end
+
+fn omg_tok_eq2 aoff ulong alen ulong boff ulong blen ulong to bool
+  if ne alen blen
+    ret false
+  end
+  for i ulong alen
+    if ne get omg_src add aoff i get omg_src add boff i
+      ret false
+    end
+  end
+  ret true
+end
+
+text omg_s_note "note"
+text omg_s_om2 "om2"
+text omg_s_target "target"
+text omg_s_fn "fn"
+text omg_s_export "export"
+text omg_s_to "to"
+text omg_s_inline "inline"
+text omg_s_main "main"
+text omg_s_end "end"
+text omg_s_if "if"
+text omg_s_else "else"
+text omg_s_while "while"
+text omg_s_bound "bound"
+text omg_s_for "for"
+text omg_s_unroll "unroll"
+text omg_s_break "break"
+text omg_s_continue "continue"
+text omg_s_ret "ret"
+text omg_s_trap "trap"
+text omg_s_exit "exit"
+text omg_s_put "put"
+text omg_s_new "new"
+text omg_s_view "view"
+text omg_s_edit "edit"
+text omg_s_eq_sign "="
+text omg_s_star "*"
+text omg_s_true "true"
+text omg_s_false "false"
+text omg_s_void "void"
+text omg_s_bool "bool"
+text omg_s_uchar "uchar"
+text omg_s_u8 "u8"
+text omg_s_ushort "ushort"
+text omg_s_u16 "u16"
+text omg_s_uint "uint"
+text omg_s_u32 "u32"
+text omg_s_ulong "ulong"
+text omg_s_u64 "u64"
+text omg_s_byte "byte"
+text omg_s_i8 "i8"
+text omg_s_short "short"
+text omg_s_i16 "i16"
+text omg_s_int "int"
+text omg_s_i32 "i32"
+text omg_s_long "long"
+text omg_s_i64 "i64"
+text omg_s_f32 "f32"
+text omg_s_f64 "f64"
+text omg_s_add "add"
+text omg_s_sub "sub"
+text omg_s_mul "mul"
+text omg_s_div "div"
+text omg_s_rem "rem"
+text omg_s_and "and"
+text omg_s_or "or"
+text omg_s_xor "xor"
+text omg_s_shl "shl"
+text omg_s_shr "shr"
+text omg_s_rotr "rotr"
+text omg_s_rotl "rotl"
+text omg_s_fmin "fmin"
+text omg_s_fmax "fmax"
+text omg_s_eq "eq"
+text omg_s_ne "ne"
+text omg_s_lt "lt"
+text omg_s_le "le"
+text omg_s_gt "gt"
+text omg_s_ge "ge"
+text omg_s_neg "neg"
+text omg_s_not "not"
+text omg_s_fsqrt "fsqrt"
+text omg_s_fabs "fabs"
+text omg_s_len "len"
+text omg_s_get "get"
+text omg_s_fma "fma"
+text omg_s_bitcast "bitcast"
+
+fn omg_parse_type off ulong tlen ulong to ulong
+  if omg_tok_eq off tlen omg_s_void
+    ret OMG_TY_VOID
+  end
+  if omg_tok_eq off tlen omg_s_bool
+    ret OMG_TY_BOOL
+  end
+  if or omg_tok_eq off tlen omg_s_uchar omg_tok_eq off tlen omg_s_u8
+    ret OMG_TY_U8
+  end
+  if or omg_tok_eq off tlen omg_s_ushort omg_tok_eq off tlen omg_s_u16
+    ret OMG_TY_U16
+  end
+  if or omg_tok_eq off tlen omg_s_uint omg_tok_eq off tlen omg_s_u32
+    ret OMG_TY_U32
+  end
+  if or omg_tok_eq off tlen omg_s_ulong omg_tok_eq off tlen omg_s_u64
+    ret OMG_TY_U64
+  end
+  if or omg_tok_eq off tlen omg_s_byte omg_tok_eq off tlen omg_s_i8
+    ret OMG_TY_I8
+  end
+  if or omg_tok_eq off tlen omg_s_short omg_tok_eq off tlen omg_s_i16
+    ret OMG_TY_I16
+  end
+  if or omg_tok_eq off tlen omg_s_int omg_tok_eq off tlen omg_s_i32
+    ret OMG_TY_I32
+  end
+  if or omg_tok_eq off tlen omg_s_long omg_tok_eq off tlen omg_s_i64
+    ret OMG_TY_I64
+  end
+  if omg_tok_eq off tlen omg_s_f32
+    ret OMG_TY_F32
+  end
+  if omg_tok_eq off tlen omg_s_f64
+    ret OMG_TY_F64
+  end
+  ret 0
+end
+
+fn omg_parse_op off ulong tlen ulong to ulong
+  if omg_tok_eq off tlen omg_s_add
+    ret OMG_OP_ADD
+  end
+  if omg_tok_eq off tlen omg_s_sub
+    ret OMG_OP_SUB
+  end
+  if omg_tok_eq off tlen omg_s_mul
+    ret OMG_OP_MUL
+  end
+  if omg_tok_eq off tlen omg_s_div
+    ret OMG_OP_DIV
+  end
+  if omg_tok_eq off tlen omg_s_rem
+    ret OMG_OP_REM
+  end
+  if omg_tok_eq off tlen omg_s_and
+    ret OMG_OP_AND
+  end
+  if omg_tok_eq off tlen omg_s_or
+    ret OMG_OP_OR
+  end
+  if omg_tok_eq off tlen omg_s_xor
+    ret OMG_OP_XOR
+  end
+  if omg_tok_eq off tlen omg_s_shl
+    ret OMG_OP_SHL
+  end
+  if omg_tok_eq off tlen omg_s_shr
+    ret OMG_OP_SHR
+  end
+  if omg_tok_eq off tlen omg_s_rotr
+    ret OMG_OP_ROTR
+  end
+  if omg_tok_eq off tlen omg_s_rotl
+    ret OMG_OP_ROTL
+  end
+  if omg_tok_eq off tlen omg_s_fmin
+    ret OMG_OP_FMIN
+  end
+  if omg_tok_eq off tlen omg_s_fmax
+    ret OMG_OP_FMAX
+  end
+  if omg_tok_eq off tlen omg_s_eq
+    ret OMG_OP_EQ
+  end
+  if omg_tok_eq off tlen omg_s_ne
+    ret OMG_OP_NE
+  end
+  if omg_tok_eq off tlen omg_s_lt
+    ret OMG_OP_LT
+  end
+  if omg_tok_eq off tlen omg_s_le
+    ret OMG_OP_LE
+  end
+  if omg_tok_eq off tlen omg_s_gt
+    ret OMG_OP_GT
+  end
+  if omg_tok_eq off tlen omg_s_ge
+    ret OMG_OP_GE
+  end
+  if omg_tok_eq off tlen omg_s_neg
+    ret OMG_OP_NEG
+  end
+  if omg_tok_eq off tlen omg_s_not
+    ret OMG_OP_NOT
+  end
+  if omg_tok_eq off tlen omg_s_fsqrt
+    ret OMG_OP_FSQRT
+  end
+  if omg_tok_eq off tlen omg_s_fabs
+    ret OMG_OP_FABS
+  end
+  if omg_tok_eq off tlen omg_s_len
+    ret OMG_OP_LEN
+  end
+  if omg_tok_eq off tlen omg_s_get
+    ret OMG_OP_GET
+  end
+  if omg_tok_eq off tlen omg_s_fma
+    ret OMG_OP_FMA
+  end
+  if omg_tok_eq off tlen omg_s_bitcast
+    ret OMG_OP_BITCAST
+  end
+  ret 0
+end
+
+fn omg_find_var off ulong tlen ulong to long
+  n = get omg_st 2
+  for k ulong n
+    idx = sub sub n 1 k
+    if omg_tok_eq2 off tlen get omg_sym_off idx get omg_sym_len idx
+      ret long idx
+    end
+  end
+  ret -1
+end
+
+fn omg_find_fn off ulong tlen ulong to long
+  nf = get omg_st 3
+  for f ulong nf
+    if omg_tok_eq2 off tlen get omg_fn_noff f get omg_fn_nlen f
+      ret long f
+    end
+  end
+  ret -1
+end
+
+fn omg_is_ws c ulong to bool
+  ret or or eq c 32 eq c 9 eq c 13
+end
+
+fn omg_tok_line a ulong b ulong to ulong
+  put omg_nltok 0 0
+  p = a
+  while lt p b bound 4096
+    while lt p b bound 4096
+      ch = ulong get omg_src p
+      if and not omg_is_ws ch and ne ch 40 ne ch 41
+        break
+      end
+      p = add p 1
+    end
+    if ge p b
+      break
+    end
+    st = p
+    while lt p b bound 4096
+      ch2 = ulong get omg_src p
+      if or omg_is_ws ch2 or eq ch2 40 eq ch2 41
+        break
+      end
+      p = add p 1
+    end
+    nt = get omg_nltok 0
+    if lt nt 64
+      put omg_ltok_off nt st
+      put omg_ltok_len nt sub p st
+      put omg_nltok 0 add nt 1
+    end
+  end
+  ret get omg_nltok 0
+end
+
+fn omg_next_line cur ulong to ulong
+  n = get omg_nsrc 0
+  p = cur
+  while lt p n bound 65536
+    if eq ulong get omg_src p 10
+      ret add p 1
+    end
+    p = add p 1
+  end
+  ret n
+end
+
+fn omg_line_end cur ulong to ulong
+  n = get omg_nsrc 0
+  p = cur
+  while lt p n bound 65536
+    if eq ulong get omg_src p 10
+      ret p
+    end
+    p = add p 1
+  end
+  ret n
+end
+
+fn omg_is_num_lit off ulong tlen ulong to bool
+  if eq tlen 0
+    ret false
+  end
+  c0 = ulong get omg_src off
+  if eq c0 45
+    if eq tlen 1
+      ret false
+    end
+    c1 = ulong get omg_src add off 1
+    ret and ge c1 48 le c1 57
+  end
+  ret and ge c0 48 le c0 57
+end
+
+fn omg_is_flt_lit off ulong tlen ulong to bool
+  if not omg_is_num_lit off tlen
+    ret false
+  end
+  if ge tlen 2
+    if and eq ulong get omg_src off 48 eq ulong get omg_src add off 1 120
+      ret false
+    end
+  end
+  for i ulong tlen
+    if eq ulong get omg_src add off i 46
+      ret true
+    end
+  end
+  ret false
+end
+
+fn omg_parse_u64 off ulong tlen ulong to ulong
+  if ge tlen 3
+    if and eq ulong get omg_src off 48 eq ulong get omg_src add off 1 120
+      v = ulong 0
+      for i ulong sub tlen 2
+        ch = ulong get omg_src add add off 2 i
+        d = ulong 0
+        if and ge ch 48 le ch 57
+          d = sub ch 48
+        else
+          d = add sub ch 97 10
+        end
+        v = or shl v 4 d
+      end
+      ret v
+    end
+  end
+  v2 = ulong 0
+  for j ulong tlen
+    c = ulong get omg_src add off j
+    if and ge c 48 le c 57
+      v2 = add mul v2 10 sub c 48
+    end
+  end
+  ret v2
+end
+
+fn omg_parse_i64 off ulong tlen ulong to long
+  if eq ulong get omg_src off 45
+    u = omg_parse_u64 add off 1 sub tlen 1
+    if eq u 9223372036854775808
+      ret -9223372036854775808
+    end
+    ret neg long u
+  end
+  ret long omg_parse_u64 off tlen
+end
+
+fn omg_parse_f64 off ulong tlen ulong to f64
+  negf = false
+  st = ulong 0
+  if eq ulong get omg_src off 45
+    negf = true
+    st = 1
+  end
+  end_i = tlen
+  if ge tlen 3
+    if eq ulong get omg_src sub add off tlen 3 102
+      end_i = sub tlen 3
+    end
+  end
+  ip = 0.0f64
+  fp = 0.0f64
+  divp = 1.0f64
+  dot = false
+  i = st
+  while lt i end_i bound 64
+    ch = ulong get omg_src add off i
+    if eq ch 46
+      dot = true
+    else
+      if and ge ch 48 le ch 57
+        dg = f64 sub ch 48
+        if not dot
+          ip = add mul ip 10.0f64 dg
+        else
+          divp = mul divp 10.0f64
+          fp = add fp div dg divp
+        end
+      end
+    end
+    i = add i 1
+  end
+  res = add ip fp
+  if negf
+    res = neg res
+  end
+  ret res
+end
+
+fn omg_emit_nibs val ulong cnt ulong to void
+  for i ulong cnt
+    sh = mul sub sub cnt 1 i 4
+    nib = and shr val sh 15
+    omg_emit add OMG_NIB_BASE nib
+  end
+end
+
+fn omg_emit_int_const v long ty ulong to void
+  if and ge v 0 le v 31
+    omg_emit add OMG_LIT_BASE ulong v
+    ret
+  end
+  if and lt v 0 ge v -256
+    omg_emit OMG_CONST_NEG8
+    omg_emit_nibs ulong sub neg v 1 2
+    ret
+  end
+  if omg_is_sint ty
+    omg_emit OMG_CONST_I64
+    omg_emit_nibs ulong v 16
+    ret
+  end
+  u = ulong v
+  if le u 255
+    omg_emit OMG_CONST_U8
+    omg_emit_nibs u 2
+    ret
+  end
+  if le u 65535
+    omg_emit OMG_CONST_U16
+    omg_emit_nibs u 4
+    ret
+  end
+  if le u 4294967295
+    omg_emit OMG_CONST_U32
+    omg_emit_nibs u 8
+    ret
+  end
+  omg_emit OMG_CONST_U64
+  omg_emit_nibs u 16
+end
+
+fn omg_emit_flt_const fv f64 ty ulong to void
+  if eq ty OMG_TY_F32
+    note Check exact small int 0..31
+    iv = long fv
+    if and eq fv f64 iv and ge iv 0 le iv 31
+      omg_emit add OMG_LIT_BASE ulong iv
+      ret
+    end
+    bits32 = ulong bitcast uint f32 fv
+    omg_emit OMG_CONST_F32
+    omg_emit_nibs bits32 8
+    ret
+  end
+  iv2 = long fv
+  if and eq fv f64 iv2 and ge iv2 0 le iv2 31
+    omg_emit add OMG_LIT_BASE ulong iv2
+    ret
+  end
+  bits64 = bitcast ulong fv
+  omg_emit OMG_CONST_F64
+  omg_emit_nibs bits64 16
+end
+
+fn omg_infer_call_args f ulong p0 ulong to ulong
+  nt = get omg_nltok 0
+  np = get omg_fn_np f
+  p = p0
+  for ai ulong np
+    if lt p nt
+      aoff = get omg_ltok_off p
+      atl = get omg_ltok_len p
+      if or omg_tok_eq aoff atl omg_s_view omg_tok_eq aoff atl omg_s_edit
+        p = add p 2
+        continue
+      end
+    end
+    p = omg_infer_expr p
+  end
+  put omg_st 18 get omg_fn_ret f
+  ret p
+end
+
+note Infer type and token end of expression starting at ltok[idx]; writes type to omg_st[18]
+fn omg_infer_expr idx ulong to ulong
+  nt = get omg_nltok 0
+  if ge idx nt
+    put omg_st 18 0
+    ret idx
+  end
+  off = get omg_ltok_off idx
+  tl = get omg_ltok_len idx
+  if or omg_tok_eq off tl omg_s_true omg_tok_eq off tl omg_s_false
+    put omg_st 18 OMG_TY_BOOL
+    ret add idx 1
+  end
+  ty = omg_parse_type off tl
+  if ne ty 0
+    nx = omg_infer_expr add idx 1
+    put omg_st 18 ty
+    ret nx
+  end
+  op = omg_parse_op off tl
+  if eq op OMG_OP_BITCAST
+    if lt add idx 1 nt
+      bty = omg_parse_type get omg_ltok_off add idx 1 get omg_ltok_len add idx 1
+      nx = omg_infer_expr add idx 2
+      put omg_st 18 bty
+      ret nx
+    end
+  end
+  if eq op OMG_OP_LEN
+    put omg_st 18 OMG_TY_U64
+    ret add idx 2
+  end
+  if eq op OMG_OP_GET
+    if lt add idx 1 nt
+      vi = omg_find_var get omg_ltok_off add idx 1 get omg_ltok_len add idx 1
+      el = ulong 0
+      if ge vi 0
+        el = get omg_ev_el ulong vi
+      end
+      nx = omg_infer_expr add idx 2
+      put omg_st 18 el
+      ret nx
+    end
+  end
+  if and ge op OMG_OP_EQ le op OMG_OP_GE
+    nx1 = omg_infer_expr add idx 1
+    nx2 = omg_infer_expr nx1
+    put omg_st 18 OMG_TY_BOOL
+    ret nx2
+  end
+  if eq op OMG_OP_NOT
+    nx = omg_infer_expr add idx 1
+    put omg_st 18 OMG_TY_BOOL
+    ret nx
+  end
+  if or eq op OMG_OP_NEG or eq op OMG_OP_FSQRT eq op OMG_OP_FABS
+    ret omg_infer_expr add idx 1
+  end
+  if eq op OMG_OP_FMA
+    nx1 = omg_infer_expr add idx 1
+    t1 = get omg_st 18
+    nx2 = omg_infer_expr nx1
+    t2 = get omg_st 18
+    nx3 = omg_infer_expr nx2
+    t3 = get omg_st 18
+    if eq t1 0
+      t1 = t2
+    end
+    if eq t1 0
+      t1 = t3
+    end
+    put omg_st 18 t1
+    ret nx3
+  end
+  if and ge op OMG_OP_ADD le op OMG_OP_FMAX
+    nx1 = omg_infer_expr add idx 1
+    t1 = get omg_st 18
+    nx2 = omg_infer_expr nx1
+    t2 = get omg_st 18
+    if eq t1 0
+      t1 = t2
+    end
+    put omg_st 18 t1
+    ret nx2
+  end
+  vi2 = omg_find_var off tl
+  if ge vi2 0
+    put omg_st 18 get omg_ev_ty ulong vi2
+    ret add idx 1
+  end
+  fi = omg_find_fn off tl
+  if ge fi 0
+    ret omg_infer_call_args ulong fi add idx 1
+  end
+  if omg_is_flt_lit off tl
+    if and ge tl 3 eq ulong get omg_src sub add off tl 3 102
+      if eq ulong get omg_src sub add off tl 2 51
+        put omg_st 18 OMG_TY_F32
+        ret add idx 1
+      end
+    end
+    put omg_st 18 OMG_TY_F64
+    ret add idx 1
+  end
+  put omg_st 18 0
+  ret add idx 1
+end
+
+fn omg_parse_call_args f ulong p0 ulong to ulong
+  nt = get omg_nltok 0
+  np = get omg_fn_np f
+  p = p0
+  for ai ulong np
+    pk = get omg_fn_pk add mul f 6 ai
+    if ne pk 0
+      if lt p nt
+        poff = get omg_ltok_off p
+        ptl = get omg_ltok_len p
+        if or omg_tok_eq poff ptl omg_s_view omg_tok_eq poff ptl omg_s_edit
+          p = add p 1
+        end
+      end
+      avi = omg_find_var get omg_ltok_off p get omg_ltok_len p
+      if ge avi 0
+        omg_emit add OMG_REF_BASE sub sub get omg_st 2 1 ulong avi
+      end
+      p = add p 1
+    else
+      p = omg_parse_expr p get omg_fn_pt add mul f 6 ai
+    end
+  end
+  ret p
+end
+
+fn omg_parse_expr idx ulong exp_ty ulong to ulong
+  nt = get omg_nltok 0
+  if ge idx nt
+    ret idx
+  end
+  off = get omg_ltok_off idx
+  tl = get omg_ltok_len idx
+  if omg_tok_eq off tl omg_s_true
+    omg_emit OMG_OP_TRUE
+    ret add idx 1
+  end
+  if omg_tok_eq off tl omg_s_false
+    omg_emit OMG_OP_FALSE
+    ret add idx 1
+  end
+  ty = omg_parse_type off tl
+  if ne ty 0
+    nx_c = omg_infer_expr add idx 1
+    src_t = get omg_st 18
+    if or eq src_t 0 eq src_t ty
+      ret omg_parse_expr add idx 1 ty
+    end
+    omg_emit OMG_OP_CAST
+    omg_emit src_t
+    ret omg_parse_expr add idx 1 src_t
+  end
+  op = omg_parse_op off tl
+  if eq op OMG_OP_BITCAST
+    if and eq exp_ty OMG_TY_F64 lt add idx 3 nt
+      bo1 = get omg_ltok_off add idx 2
+      bl1 = get omg_ltok_len add idx 2
+      bo2 = get omg_ltok_off add idx 3
+      bl2 = get omg_ltok_len add idx 3
+      if and omg_tok_eq bo1 bl1 omg_s_ulong omg_is_num_lit bo2 bl2
+        bits64 = omg_parse_u64 bo2 bl2
+        omg_emit OMG_CONST_F64
+        omg_emit_nibs bits64 16
+        ret add idx 4
+      end
+    end
+    if and eq exp_ty OMG_TY_F32 lt add idx 3 nt
+      bo3 = get omg_ltok_off add idx 2
+      bl3 = get omg_ltok_len add idx 2
+      bo4 = get omg_ltok_off add idx 3
+      bl4 = get omg_ltok_len add idx 3
+      if and omg_tok_eq bo3 bl3 omg_s_uint omg_is_num_lit bo4 bl4
+        bits32 = omg_parse_u64 bo4 bl4
+        omg_emit OMG_CONST_F32
+        omg_emit_nibs bits32 8
+        ret add idx 4
+      end
+    end
+    nx = omg_infer_expr add idx 2
+    src_t2 = get omg_st 18
+    omg_emit OMG_OP_BITCAST
+    omg_emit src_t2
+    ret omg_parse_expr add idx 2 src_t2
+  end
+  if eq op OMG_OP_LEN
+    omg_emit OMG_OP_LEN
+    aoff = get omg_ltok_off add idx 1
+    atl = get omg_ltok_len add idx 1
+    vi = omg_find_var aoff atl
+    if ge vi 0
+      rk = sub sub get omg_st 2 1 ulong vi
+      omg_emit add OMG_REF_BASE rk
+    end
+    ret add idx 2
+  end
+  if eq op OMG_OP_GET
+    omg_emit OMG_OP_GET
+    aoff2 = get omg_ltok_off add idx 1
+    atl2 = get omg_ltok_len add idx 1
+    vi2 = omg_find_var aoff2 atl2
+    if ge vi2 0
+      rk2 = sub sub get omg_st 2 1 ulong vi2
+      omg_emit add OMG_REF_BASE rk2
+    end
+    ret omg_parse_expr add idx 2 OMG_TY_U64
+  end
+  if and ge op OMG_OP_EQ le op OMG_OP_GE
+    nx1 = omg_infer_expr add idx 1
+    t1 = get omg_st 18
+    if eq t1 0
+      nx2_ = omg_infer_expr nx1
+      t1 = get omg_st 18
+    end
+    if eq t1 0
+      t1 = OMG_TY_U64
+    end
+    omg_emit op
+    omg_emit t1
+    p1 = omg_parse_expr add idx 1 t1
+    ret omg_parse_expr p1 t1
+  end
+  if or eq op OMG_OP_NOT or eq op OMG_OP_NEG or eq op OMG_OP_FSQRT eq op OMG_OP_FABS
+    omg_emit op
+    ret omg_parse_expr add idx 1 exp_ty
+  end
+  if eq op OMG_OP_FMA
+    omg_emit op
+    p1 = omg_parse_expr add idx 1 exp_ty
+    p2 = omg_parse_expr p1 exp_ty
+    ret omg_parse_expr p2 exp_ty
+  end
+  if and ge op OMG_OP_ADD le op OMG_OP_FMAX
+    omg_emit op
+    p1 = omg_parse_expr add idx 1 exp_ty
+    ret omg_parse_expr p1 exp_ty
+  end
+  vi3 = omg_find_var off tl
+  if ge vi3 0
+    rk3 = sub sub get omg_st 2 1 ulong vi3
+    omg_emit add OMG_REF_BASE rk3
+    ret add idx 1
+  end
+  fi = omg_find_fn off tl
+  if ge fi 0
+    f = ulong fi
+    omg_emit OMG_OP_CALL
+    omg_emit add OMG_FN_BASE f
+    ret omg_parse_call_args f add idx 1
+  end
+  if omg_is_flt_lit off tl
+    fv = omg_parse_f64 off tl
+    omg_emit_flt_const fv exp_ty
+    ret add idx 1
+  end
+  if omg_is_num_lit off tl
+    if omg_is_flt exp_ty
+      iv = omg_parse_i64 off tl
+      omg_emit_flt_const f64 iv exp_ty
+    else
+      iv2 = omg_parse_i64 off tl
+      omg_emit_int_const iv2 exp_ty
+    end
+    ret add idx 1
+  end
+  ret add idx 1
+end
+
+fn omg_scan_fn_param cf ulong p ulong to ulong
+  np = get omg_fn_np cf
+  p2o = get omg_ltok_off add p 1
+  p2l = get omg_ltok_len add p 1
+  if or omg_tok_eq p2o p2l omg_s_view omg_tok_eq p2o p2l omg_s_edit
+    pk = ulong 1
+    if omg_tok_eq p2o p2l omg_s_edit
+      pk = 2
+    end
+    el = omg_parse_type get omg_ltok_off add p 2 get omg_ltok_len add p 2
+    put omg_fn_pk add mul cf 6 np pk
+    put omg_fn_pe add mul cf 6 np el
+    pt = OMG_TY_VIEW
+    if eq pk 2
+      pt = OMG_TY_EDIT
+    end
+    put omg_fn_pt add mul cf 6 np pt
+    put omg_fn_np cf add np 1
+    ret add p 4
+  end
+  ty = omg_parse_type p2o p2l
+  put omg_fn_pk add mul cf 6 np 0
+  put omg_fn_pt add mul cf 6 np ty
+  put omg_fn_pe add mul cf 6 np 0
+  put omg_fn_np cf add np 1
+  ret add p 2
+end
+
+fn omg_scan_fn_sig to void
+  nt = get omg_nltok 0
+  i = ulong 0
+  if omg_tok_eq get omg_ltok_off 0 get omg_ltok_len 0 omg_s_export
+    i = 1
+  end
+  if or ge add i 1 nt not omg_tok_eq get omg_ltok_off i get omg_ltok_len i omg_s_fn
+    ret
+  end
+  cf = get omg_st 3
+  if ge cf OMG_MAX_FNS
+    ret
+  end
+  noff = get omg_ltok_off add i 1
+  nlen = get omg_ltok_len add i 1
+  put omg_fn_noff cf noff
+  put omg_fn_nlen cf nlen
+  put omg_fn_np cf 0
+  put omg_fn_done cf 1
+  put omg_fn_main cf 0
+  p = add i 2
+  while lt p nt bound 64
+    po = get omg_ltok_off p
+    pl = get omg_ltok_len p
+    if omg_tok_eq po pl omg_s_to
+      p = add p 1
+      break
+    end
+    if lt add p 1 nt
+      p = omg_scan_fn_param cf p
+      continue
+    end
+    p = add p 1
+  end
+  rt = OMG_TY_VOID
+  if lt p nt
+    rt = omg_parse_type get omg_ltok_off p get omg_ltok_len p
+  end
+  put omg_fn_ret cf rt
+  if and omg_tok_eq noff nlen omg_s_main and eq get omg_fn_np cf 0 eq rt OMG_TY_I32
+    put omg_fn_main cf 1
+  end
+  put omg_st 3 add cf 1
+end
+
+fn omg_parse_fn_hdr f ulong to void
+  put omg_st 2 0
+  put omg_st 8 0
+  put omg_st 7 0
+  put omg_st 4 f
+  put omg_st 5 get omg_fn_ret f
+  if eq get omg_fn_main f 1
+    omg_emit OMG_FN_MAIN
+    put omg_st 19 1
+    ret
+  end
+  put omg_st 19 0
+  omg_emit OMG_FN
+  omg_emit get omg_fn_ret f
+  nt = get omg_nltok 0
+  i = ulong 0
+  if omg_tok_eq get omg_ltok_off 0 get omg_ltok_len 0 omg_s_export
+    i = 1
+  end
+  p = add i 2
+  pi = ulong 0
+  while lt p nt bound 64
+    po = get omg_ltok_off p
+    pl = get omg_ltok_len p
+    if omg_tok_eq po pl omg_s_to
+      break
+    end
+    omg_emit OMG_PARAM
+    pk = get omg_fn_pk add mul f 6 pi
+    if eq pk 0
+      pt = get omg_fn_pt add mul f 6 pi
+      omg_emit pt
+      nl = get omg_st 2
+      put omg_sym_off nl po
+      put omg_sym_len nl pl
+      omg_env_push pt 1 0 0
+      p = add p 2
+    else
+      if eq pk 1
+        omg_emit OMG_TY_VIEW
+      else
+        omg_emit OMG_TY_EDIT
+      end
+      el = get omg_fn_pe add mul f 6 pi
+      omg_emit el
+      nl = get omg_st 2
+      put omg_sym_off nl po
+      put omg_sym_len nl pl
+      pt2 = OMG_TY_VIEW
+      if eq pk 2
+        pt2 = OMG_TY_EDIT
+      end
+      omg_env_push pt2 0 pk el
+      p = add p 4
+    end
+    pi = add pi 1
+  end
+  omg_emit OMG_BODY
+end
+
+fn omg_parse_assign o0 ulong l0 ulong to void
+  if omg_tok_eq get omg_ltok_off 2 get omg_ltok_len 2 omg_s_new
+    el2 = omg_parse_type get omg_ltok_off 3 get omg_ltok_len 3
+    nval = omg_parse_u64 get omg_ltok_off 4 get omg_ltok_len 4
+    omg_emit OMG_NEW
+    omg_emit el2
+    omg_emit add OMG_LIT_BASE nval
+    nx_nw = omg_parse_expr 5 el2
+    nl2 = get omg_st 2
+    put omg_sym_off nl2 o0
+    put omg_sym_len nl2 l0
+    omg_env_push el2 0 2 el2
+    ret
+  end
+  vi2 = omg_find_var o0 l0
+  if ge vi2 0
+    rk2 = sub sub get omg_st 2 1 ulong vi2
+    vt = get omg_ev_ty ulong vi2
+    omg_emit OMG_SET
+    omg_emit add OMG_REF_BASE rk2
+    nx_st = omg_parse_expr 2 vt
+  else
+    nx_in = omg_infer_expr 2
+    rt = get omg_st 18
+    if eq rt 0
+      rt = OMG_TY_U64
+    end
+    omg_emit OMG_LET
+    omg_emit rt
+    nx_lt = omg_parse_expr 2 rt
+    nl3 = get omg_st 2
+    put omg_sym_off nl3 o0
+    put omg_sym_len nl3 l0
+    omg_env_push rt 1 0 0
+  end
+end
+
+fn omg_parse_stmt to void
+  nt = get omg_nltok 0
+  if eq nt 0
+    ret
+  end
+  o0 = get omg_ltok_off 0
+  l0 = get omg_ltok_len 0
+  if omg_tok_eq o0 l0 omg_s_end
+    sd = get omg_st 8
+    if gt sd 0
+      omg_env_pop_to get omg_bs sd
+      if or eq get omg_bk sd OMG_BK_WHILE eq get omg_bk sd OMG_BK_FOR
+        if gt get omg_st 7 0
+          put omg_st 7 sub get omg_st 7 1
+        end
+      end
+      put omg_st 8 sub sd 1
+      omg_emit OMG_END
+    else
+      omg_emit OMG_END
+      put omg_st 13 0
+      put omg_st 19 0
+      put omg_st 1 0
+    end
+    ret
+  end
+  if omg_tok_eq o0 l0 omg_s_else
+    sd = get omg_st 8
+    omg_env_pop_to get omg_bs sd
+    omg_emit OMG_ELSE
+    ret
+  end
+  if omg_tok_eq o0 l0 omg_s_if
+    omg_emit OMG_IF
+    nx_if = omg_parse_expr 1 OMG_TY_BOOL
+    sd = add get omg_st 8 1
+    put omg_st 8 sd
+    put omg_bk sd OMG_BK_IF
+    put omg_bs sd get omg_st 2
+    ret
+  end
+  if omg_tok_eq o0 l0 omg_s_while
+    omg_emit OMG_WHILE
+    p = omg_parse_expr 1 OMG_TY_BOOL
+    bnd = ulong 1000000
+    if lt add p 1 nt
+      if omg_tok_eq get omg_ltok_off p get omg_ltok_len p omg_s_bound
+        bnd = omg_parse_u64 get omg_ltok_off add p 1 get omg_ltok_len add p 1
+      end
+    end
+    omg_emit_int_const long bnd OMG_TY_U64
+    sd = add get omg_st 8 1
+    put omg_st 8 sd
+    put omg_bk sd OMG_BK_WHILE
+    put omg_bs sd get omg_st 2
+    put omg_st 7 add get omg_st 7 1
+    ret
+  end
+  if omg_tok_eq o0 l0 omg_s_for
+    vo = get omg_ltok_off 1
+    vl = get omg_ltok_len 1
+    ft = omg_parse_type get omg_ltok_off 2 get omg_ltok_len 2
+    omg_emit OMG_FOR
+    omg_emit ft
+    nx_for = omg_parse_expr 3 ft
+    sd = add get omg_st 8 1
+    put omg_st 8 sd
+    put omg_bk sd OMG_BK_FOR
+    put omg_bs sd get omg_st 2
+    put omg_st 7 add get omg_st 7 1
+    nl = get omg_st 2
+    put omg_sym_off nl vo
+    put omg_sym_len nl vl
+    omg_env_push ft 0 0 0
+    ret
+  end
+  if omg_tok_eq o0 l0 omg_s_break
+    omg_emit OMG_BREAK
+    ret
+  end
+  if omg_tok_eq o0 l0 omg_s_continue
+    omg_emit OMG_CONTINUE
+    ret
+  end
+  if omg_tok_eq o0 l0 omg_s_ret
+    omg_emit OMG_RET
+    if ne get omg_st 5 OMG_TY_VOID
+      nx_ret = omg_parse_expr 1 get omg_st 5
+    end
+    ret
+  end
+  if omg_tok_eq o0 l0 omg_s_trap
+    omg_emit OMG_TRAP
+    tv = omg_parse_u64 get omg_ltok_off 1 get omg_ltok_len 1
+    omg_emit add OMG_LIT_BASE tv
+    ret
+  end
+  if omg_tok_eq o0 l0 omg_s_exit
+    omg_emit OMG_EXIT
+    nx_ex = omg_parse_expr 1 OMG_TY_I32
+    ret
+  end
+  if omg_tok_eq o0 l0 omg_s_put
+    vi = omg_find_var get omg_ltok_off 1 get omg_ltok_len 1
+    if ge vi 0
+      rk = sub sub get omg_st 2 1 ulong vi
+      el = get omg_ev_el ulong vi
+      omg_emit OMG_PUT
+      omg_emit add OMG_REF_BASE rk
+      p = omg_parse_expr 2 OMG_TY_U64
+      nx_put = omg_parse_expr p el
+    end
+    ret
+  end
+  if ge nt 3
+    if omg_tok_eq get omg_ltok_off 1 get omg_ltok_len 1 omg_s_eq_sign
+      omg_parse_assign o0 l0
+      ret
+    end
+  end
+  fi = omg_find_fn o0 l0
+  if ge fi 0
+    f = ulong fi
+    omg_emit OMG_CALL_VOID
+    omg_emit add OMG_FN_BASE f
+    nx_cv = omg_parse_call_args f 1
+  end
+end
+
+fn omg_parse_om to long
+  omg_init_parse
+  put omg_ntok 0 0
+  n = get omg_nsrc 0
+  note Pass 1: scan all fn signatures
+  p = ulong 0
+  while lt p n bound 65536
+    le_ = omg_line_end p
+    nt = omg_tok_line p le_
+    if gt nt 0
+      o0 = get omg_ltok_off 0
+      l0 = get omg_ltok_len 0
+      if or omg_tok_eq o0 l0 omg_s_fn omg_tok_eq o0 l0 omg_s_export
+        omg_scan_fn_sig
+      end
+    end
+    p = omg_next_line p
+  end
+  if eq get omg_st 3 0
+    ret -1
+  end
+  note Pass 2: emit canonical OMG stream
+  omg_emit OMG_BEGIN
+  p = ulong 0
+  in_fn = false
+  fn_idx = ulong 0
+  while lt p n bound 65536
+    le2 = omg_line_end p
+    nt2 = omg_tok_line p le2
+    if gt nt2 0
+      o0 = get omg_ltok_off 0
+      l0 = get omg_ltok_len 0
+      if or or omg_tok_eq o0 l0 omg_s_note omg_tok_eq o0 l0 omg_s_om2 omg_tok_eq o0 l0 omg_s_target
+        p = omg_next_line p
+        continue
+      end
+      if not in_fn
+        if or omg_tok_eq o0 l0 omg_s_fn omg_tok_eq o0 l0 omg_s_export
+          omg_parse_fn_hdr fn_idx
+          fn_idx = add fn_idx 1
+          in_fn = true
+          put omg_st 1 1
+        end
+      else
+        if and eq get omg_st 8 0 omg_tok_eq o0 l0 omg_s_end
+          omg_emit OMG_END
+          in_fn = false
+        else
+          omg_parse_stmt
+        end
+      end
+    end
+    p = omg_next_line p
+  end
+  omg_emit OMG_END_UNIT
+  ret omg_validate
+end
+
+note ---- OMG -> .om Text Decoder (omg_decode_om) ----
+
+fn omg_dc c ulong to void
+  p = get omg_ndec 0
+  if lt p 65536
+    put omg_dec p uchar and c 255
+    put omg_ndec 0 add p 1
+  end
+end
+
+fn omg_ds s view uchar * to void
+  for i ulong len s
+    omg_dc ulong get s i
+  end
+end
+
+fn omg_du v ulong to void
+  d = new uchar 24 0
+  n = ulong 0
+  x = v
+  while true bound 21
+    put d n uchar add rem x 10 48
+    n = add n 1
+    x = div x 10
+    if eq x 0
+      break
+    end
+  end
+  for i ulong n
+    omg_dc ulong get d sub sub n 1 i
+  end
+end
+
+fn omg_dl v long to void
+  if lt v 0
+    omg_dc 45
+    if eq v -9223372036854775808
+      omg_du 9223372036854775808
+    else
+      omg_du ulong neg v
+    end
+  else
+    omg_du ulong v
+  end
+end
+
+fn omg_d_indent d ulong to void
+  for i ulong d
+    omg_dc 32
+    omg_dc 32
+  end
+end
+
+fn omg_d_type ty ulong to void
+  if eq ty OMG_TY_VOID
+    omg_ds omg_s_void
+    ret
+  end
+  if eq ty OMG_TY_BOOL
+    omg_ds omg_s_bool
+    ret
+  end
+  if eq ty OMG_TY_U8
+    omg_ds omg_s_uchar
+    ret
+  end
+  if eq ty OMG_TY_U16
+    omg_ds omg_s_ushort
+    ret
+  end
+  if eq ty OMG_TY_U32
+    omg_ds omg_s_uint
+    ret
+  end
+  if eq ty OMG_TY_U64
+    omg_ds omg_s_ulong
+    ret
+  end
+  if eq ty OMG_TY_I8
+    omg_ds omg_s_byte
+    ret
+  end
+  if eq ty OMG_TY_I16
+    omg_ds omg_s_short
+    ret
+  end
+  if eq ty OMG_TY_I32
+    omg_ds omg_s_int
+    ret
+  end
+  if eq ty OMG_TY_I64
+    omg_ds omg_s_long
+    ret
+  end
+  if eq ty OMG_TY_F32
+    omg_ds omg_s_f32
+    ret
+  end
+  if eq ty OMG_TY_F64
+    omg_ds omg_s_f64
+  end
+end
+
+fn omg_d_op op ulong to void
+  if eq op OMG_OP_ADD
+    omg_ds omg_s_add
+  end
+  if eq op OMG_OP_SUB
+    omg_ds omg_s_sub
+  end
+  if eq op OMG_OP_MUL
+    omg_ds omg_s_mul
+  end
+  if eq op OMG_OP_DIV
+    omg_ds omg_s_div
+  end
+  if eq op OMG_OP_REM
+    omg_ds omg_s_rem
+  end
+  if eq op OMG_OP_AND
+    omg_ds omg_s_and
+  end
+  if eq op OMG_OP_OR
+    omg_ds omg_s_or
+  end
+  if eq op OMG_OP_XOR
+    omg_ds omg_s_xor
+  end
+  if eq op OMG_OP_SHL
+    omg_ds omg_s_shl
+  end
+  if eq op OMG_OP_SHR
+    omg_ds omg_s_shr
+  end
+  if eq op OMG_OP_ROTR
+    omg_ds omg_s_rotr
+  end
+  if eq op OMG_OP_ROTL
+    omg_ds omg_s_rotl
+  end
+  if eq op OMG_OP_FMIN
+    omg_ds omg_s_fmin
+  end
+  if eq op OMG_OP_FMAX
+    omg_ds omg_s_fmax
+  end
+  if eq op OMG_OP_EQ
+    omg_ds omg_s_eq
+  end
+  if eq op OMG_OP_NE
+    omg_ds omg_s_ne
+  end
+  if eq op OMG_OP_LT
+    omg_ds omg_s_lt
+  end
+  if eq op OMG_OP_LE
+    omg_ds omg_s_le
+  end
+  if eq op OMG_OP_GT
+    omg_ds omg_s_gt
+  end
+  if eq op OMG_OP_GE
+    omg_ds omg_s_ge
+  end
+  if eq op OMG_OP_NEG
+    omg_ds omg_s_neg
+  end
+  if eq op OMG_OP_NOT
+    omg_ds omg_s_not
+  end
+  if eq op OMG_OP_FSQRT
+    omg_ds omg_s_fsqrt
+  end
+  if eq op OMG_OP_FABS
+    omg_ds omg_s_fabs
+  end
+  if eq op OMG_OP_LEN
+    omg_ds omg_s_len
+  end
+  if eq op OMG_OP_GET
+    omg_ds omg_s_get
+  end
+  if eq op OMG_OP_FMA
+    omg_ds omg_s_fma
+  end
+end
+
+fn omg_d_next to ulong
+  p = get omg_dec_cur 0
+  if ge p get omg_ntok 0
+    ret OMG_EOF
+  end
+  put omg_dec_cur 0 add p 1
+  ret ulong get omg_toks p
+end
+
+fn omg_d_nibs cnt ulong to ulong
+  v = ulong 0
+  for i ulong cnt
+    t = omg_d_next
+    nib = sub t OMG_NIB_BASE
+    v = or shl v 4 nib
+  end
+  ret v
+end
+
+fn omg_d_var slot ulong to void
+  omg_dc 118
+  omg_du get omg_dec_vid slot
+end
+
+fn omg_d_fn_name f ulong to void
+  if eq get omg_fn_main f 1
+    omg_ds omg_s_main
+  else
+    omg_dc 102
+    omg_du f
+  end
+end
+
+fn omg_d_expr exp_ty ulong need_ty ulong to void
+  tk = omg_d_next
+  if eq tk OMG_OP_TRUE
+    omg_ds omg_s_true
+    ret
+  end
+  if eq tk OMG_OP_FALSE
+    omg_ds omg_s_false
+    ret
+  end
+  if and ge tk OMG_REF_BASE lt tk add OMG_REF_BASE 64
+    rk = sub tk OMG_REF_BASE
+    nl = get omg_st 2
+    slot = sub sub nl 1 rk
+    omg_d_var slot
+    ret
+  end
+  if and ge tk OMG_LIT_BASE lt tk add OMG_LIT_BASE 32
+    lv = sub tk OMG_LIT_BASE
+    if omg_is_flt exp_ty
+      omg_du lv
+      omg_dc 46
+      omg_dc 48
+      omg_d_type exp_ty
+    else
+      if ne need_ty 0
+        omg_d_type exp_ty
+        omg_dc 32
+      end
+      omg_du lv
+    end
+    ret
+  end
+  if eq tk OMG_CONST_NEG8
+    v = omg_d_nibs 2
+    if ne need_ty 0
+      omg_d_type exp_ty
+      omg_dc 32
+    end
+    omg_dc 45
+    omg_du add v 1
+    ret
+  end
+  if or eq tk OMG_CONST_U8 or eq tk OMG_CONST_U16 or eq tk OMG_CONST_U32 eq tk OMG_CONST_U64
+    cnt = ulong 2
+    if eq tk OMG_CONST_U16
+      cnt = 4
+    end
+    if eq tk OMG_CONST_U32
+      cnt = 8
+    end
+    if eq tk OMG_CONST_U64
+      cnt = 16
+    end
+    v = omg_d_nibs cnt
+    if ne need_ty 0
+      omg_d_type exp_ty
+      omg_dc 32
+    end
+    omg_du v
+    ret
+  end
+  if eq tk OMG_CONST_I64
+    v = omg_d_nibs 16
+    if ne need_ty 0
+      omg_d_type exp_ty
+      omg_dc 32
+    end
+    omg_dl bitcast long v
+    ret
+  end
+  if eq tk OMG_CONST_F32
+    v = omg_d_nibs 8
+    omg_ds omg_s_bitcast
+    omg_dc 32
+    omg_ds omg_s_f32
+    omg_dc 32
+    omg_ds omg_s_uint
+    omg_dc 32
+    omg_du v
+    ret
+  end
+  if eq tk OMG_CONST_F64
+    v = omg_d_nibs 16
+    omg_ds omg_s_bitcast
+    omg_dc 32
+    omg_ds omg_s_f64
+    omg_dc 32
+    omg_ds omg_s_ulong
+    omg_dc 32
+    omg_du v
+    ret
+  end
+  if eq tk OMG_OP_CAST
+    st = omg_d_next
+    omg_d_type exp_ty
+    omg_dc 32
+    omg_d_expr st 1
+    ret
+  end
+  if eq tk OMG_OP_BITCAST
+    st = omg_d_next
+    omg_ds omg_s_bitcast
+    omg_dc 32
+    omg_d_type exp_ty
+    omg_dc 32
+    omg_d_expr st 1
+    ret
+  end
+  if eq tk OMG_OP_CALL
+    f = sub omg_d_next OMG_FN_BASE
+    omg_d_fn_name f
+    np = get omg_fn_np f
+    for ai ulong np
+      omg_dc 32
+      pk = get omg_fn_pk add mul f 6 ai
+      if eq pk 1
+        omg_ds omg_s_view
+        omg_dc 32
+        omg_d_expr OMG_TY_VIEW 0
+      else
+        if eq pk 2
+          omg_ds omg_s_edit
+          omg_dc 32
+          omg_d_expr OMG_TY_EDIT 0
+        else
+          omg_d_expr get omg_fn_pt add mul f 6 ai 1
+        end
+      end
+    end
+    ret
+  end
+  if or eq tk OMG_OP_NOT or eq tk OMG_OP_NEG or eq tk OMG_OP_FSQRT or eq tk OMG_OP_FABS eq tk OMG_OP_LEN
+    omg_d_op tk
+    omg_dc 32
+    omg_d_expr exp_ty 1
+    ret
+  end
+  if eq tk OMG_OP_GET
+    omg_ds omg_s_get
+    omg_dc 32
+    omg_d_expr OMG_TY_VIEW 0
+    omg_dc 32
+    omg_d_expr OMG_TY_U64 0
+    ret
+  end
+  if and ge tk OMG_OP_EQ le tk OMG_OP_GE
+    ct = omg_d_next
+    omg_d_op tk
+    omg_dc 32
+    omg_d_expr ct 1
+    omg_dc 32
+    omg_d_expr ct 1
+    ret
+  end
+  if eq tk OMG_OP_FMA
+    omg_ds omg_s_fma
+    omg_dc 32
+    omg_d_expr exp_ty 1
+    omg_dc 32
+    omg_d_expr exp_ty 1
+    omg_dc 32
+    omg_d_expr exp_ty 1
+    ret
+  end
+  omg_d_op tk
+  omg_dc 32
+  omg_d_expr exp_ty 1
+  omg_dc 32
+  omg_d_expr exp_ty 1
+end
+
+fn omg_d_const_u64_val to ulong
+  tk = omg_d_next
+  if and ge tk OMG_LIT_BASE lt tk add OMG_LIT_BASE 32
+    ret sub tk OMG_LIT_BASE
+  end
+  if eq tk OMG_CONST_U8
+    ret omg_d_nibs 2
+  end
+  if eq tk OMG_CONST_U16
+    ret omg_d_nibs 4
+  end
+  if eq tk OMG_CONST_U32
+    ret omg_d_nibs 8
+  end
+  if eq tk OMG_CONST_U64
+    ret omg_d_nibs 16
+  end
+  ret 1
+end
+
+fn omg_alloc_vid to ulong
+  id = get omg_dec_nvid 0
+  put omg_dec_nvid 0 add id 1
+  ret id
+end
+
+fn omg_decode_fn_body f ulong to void
+  ind = ulong 1
+  done_fn = false
+  while not done_fn bound 8192
+    tk = omg_d_next
+    if or eq tk OMG_EOF eq tk OMG_END_UNIT
+      break
+    end
+    if eq tk OMG_END
+      ind = sub ind 1
+      omg_d_indent ind
+      omg_ds omg_s_end
+      omg_dc 10
+      if eq ind 0
+        done_fn = true
+      else
+        omg_env_pop_to get omg_bs ind
+      end
+      continue
+    end
+    if eq tk OMG_ELSE
+      omg_env_pop_to get omg_bs sub ind 1
+      omg_d_indent sub ind 1
+      omg_ds omg_s_else
+      omg_dc 10
+      continue
+    end
+    omg_d_indent ind
+    if eq tk OMG_RET
+      omg_ds omg_s_ret
+      rt = get omg_fn_ret f
+      if ne rt OMG_TY_VOID
+        omg_dc 32
+        omg_d_expr rt 0
+      end
+      omg_dc 10
+      continue
+    end
+    if eq tk OMG_BREAK
+      omg_ds omg_s_break
+      omg_dc 10
+      continue
+    end
+    if eq tk OMG_CONTINUE
+      omg_ds omg_s_continue
+      omg_dc 10
+      continue
+    end
+    if eq tk OMG_TRAP
+      omg_ds omg_s_trap
+      omg_dc 32
+      tv = sub omg_d_next OMG_LIT_BASE
+      omg_du tv
+      omg_dc 10
+      continue
+    end
+    if eq tk OMG_EXIT
+      omg_ds omg_s_exit
+      omg_dc 32
+      omg_d_expr OMG_TY_I32 0
+      omg_dc 10
+      continue
+    end
+    if eq tk OMG_LET
+      ty = omg_d_next
+      nl = get omg_st 2
+      vid = omg_alloc_vid
+      put omg_dec_vid nl vid
+      omg_dc 118
+      omg_du vid
+      omg_dc 32
+      omg_dc 61
+      omg_dc 32
+      omg_d_expr ty 1
+      omg_dc 10
+      omg_env_push ty 1 0 0
+      continue
+    end
+    if eq tk OMG_SET
+      rk = sub omg_d_next OMG_REF_BASE
+      nl2 = get omg_st 2
+      slot = sub sub nl2 1 rk
+      omg_d_var slot
+      omg_dc 32
+      omg_dc 61
+      omg_dc 32
+      omg_d_expr get omg_ev_ty slot 1
+      omg_dc 10
+      continue
+    end
+    if eq tk OMG_IF
+      omg_ds omg_s_if
+      omg_dc 32
+      omg_d_expr OMG_TY_BOOL 0
+      omg_dc 10
+      put omg_bs ind get omg_st 2
+      ind = add ind 1
+      continue
+    end
+    if eq tk OMG_WHILE
+      omg_ds omg_s_while
+      omg_dc 32
+      omg_d_expr OMG_TY_BOOL 0
+      omg_dc 32
+      omg_ds omg_s_bound
+      omg_dc 32
+      omg_du omg_d_const_u64_val
+      omg_dc 10
+      put omg_bs ind get omg_st 2
+      ind = add ind 1
+      continue
+    end
+    if eq tk OMG_FOR
+      ft = omg_d_next
+      nl3 = get omg_st 2
+      vid2 = omg_alloc_vid
+      put omg_dec_vid nl3 vid2
+      omg_ds omg_s_for
+      omg_dc 32
+      omg_dc 118
+      omg_du vid2
+      omg_dc 32
+      omg_d_type ft
+      omg_dc 32
+      omg_d_expr ft 0
+      omg_dc 10
+      put omg_bs ind get omg_st 2
+      ind = add ind 1
+      omg_env_push ft 0 0 0
+      continue
+    end
+    if eq tk OMG_NEW
+      el = omg_d_next
+      nlen = sub omg_d_next OMG_LIT_BASE
+      nl4 = get omg_st 2
+      vid3 = omg_alloc_vid
+      put omg_dec_vid nl4 vid3
+      omg_dc 118
+      omg_du vid3
+      omg_dc 32
+      omg_dc 61
+      omg_dc 32
+      omg_ds omg_s_new
+      omg_dc 32
+      omg_d_type el
+      omg_dc 32
+      omg_du nlen
+      omg_dc 32
+      omg_d_expr el 0
+      omg_dc 10
+      omg_env_push el 0 2 el
+      continue
+    end
+    if eq tk OMG_PUT
+      rk2 = sub omg_d_next OMG_REF_BASE
+      slot2 = sub sub get omg_st 2 1 rk2
+      omg_ds omg_s_put
+      omg_dc 32
+      omg_d_var slot2
+      omg_dc 32
+      omg_d_expr OMG_TY_U64 0
+      omg_dc 32
+      omg_d_expr get omg_ev_el slot2 0
+      omg_dc 10
+      continue
+    end
+    if eq tk OMG_CALL_VOID
+      cf = sub omg_d_next OMG_FN_BASE
+      omg_d_fn_name cf
+      np = get omg_fn_np cf
+      for ai ulong np
+        omg_dc 32
+        pk = get omg_fn_pk add mul cf 6 ai
+        if eq pk 1
+          omg_ds omg_s_view
+          omg_dc 32
+          omg_d_expr OMG_TY_VIEW 0
+        else
+          if eq pk 2
+            omg_ds omg_s_edit
+            omg_dc 32
+            omg_d_expr OMG_TY_EDIT 0
+          else
+            omg_d_expr get omg_fn_pt add mul cf 6 ai 1
+          end
+        end
+      end
+      omg_dc 10
+      continue
+    end
+  end
+end
+
+fn omg_decode_om to long
+  rc = omg_macro_expand
+  if ne rc 0
+    ret rc
+  end
+  rc2 = omg_validate
+  if ne rc2 0
+    ret rc2
+  end
+  put omg_ndec 0 0
+  put omg_dec_cur 0 0
+  put omg_dec_nvid 0 0
+  omg_ds omg_s_om2
+  omg_dc 10
+  tk0 = omg_d_next
+  if ne tk0 OMG_BEGIN
+    ret -1
+  end
+  f = ulong 0
+  while true bound 64
+    tk = omg_d_next
+    if or eq tk OMG_EOF eq tk OMG_END_UNIT
+      break
+    end
+    put omg_st 2 0
+    put omg_dec_nvid 0 0
+    omg_ds omg_s_fn
+    omg_dc 32
+    if eq tk OMG_FN_MAIN
+      omg_ds omg_s_main
+      omg_dc 32
+      omg_ds omg_s_to
+      omg_dc 32
+      omg_ds omg_s_int
+      omg_dc 10
+      omg_decode_fn_body f
+    else
+      if eq tk OMG_FN
+        rt = omg_d_next
+        omg_d_fn_name f
+        np = get omg_fn_np f
+        for pi ulong np
+          ptok = omg_d_next
+          ty = omg_d_next
+          vid = omg_alloc_vid
+          put omg_dec_vid pi vid
+          omg_dc 32
+          omg_dc 118
+          omg_du vid
+          omg_dc 32
+          if or eq ty OMG_TY_VIEW eq ty OMG_TY_EDIT
+            el = omg_d_next
+            if eq ty OMG_TY_VIEW
+              omg_ds omg_s_view
+            else
+              omg_ds omg_s_edit
+            end
+            omg_dc 32
+            omg_d_type el
+            omg_dc 32
+            omg_dc 42
+            pk = ulong 1
+            if eq ty OMG_TY_EDIT
+              pk = 2
+            end
+            omg_env_push ty 0 pk el
+          else
+            omg_d_type ty
+            omg_env_push ty 1 0 0
+          end
+        end
+        body_tk = omg_d_next
+        omg_dc 32
+        omg_ds omg_s_to
+        omg_dc 32
+        omg_d_type rt
+        omg_dc 10
+        omg_decode_fn_body f
+      end
+    end
+    f = add f 1
+  end
+  ret 0
+end
+
+note ---- Built-in Masked Random/Adversarial Sampler (gsamp-compatible) ----
+
+fn omg_pick_allowed r ulong to ulong
+  cnt = ulong 0
+  for c ulong OMG_VOCAB
+    if eq get omg_mask c 1
+      cnt = add cnt 1
+    end
+  end
+  if eq cnt 0
+    ret OMG_EOF
+  end
+  pick = rem r cnt
+  seen = ulong 0
+  for c2 ulong OMG_VOCAB
+    if eq get omg_mask c2 1
+      if eq seen pick
+        ret c2
+      end
+      seen = add seen 1
+    end
+  end
+  ret OMG_EOF
+end
+
+fn omg_sample_masked seed ulong budget ulong to long
+  if gt budget OMG_MAX_TOKS
+    ret -1
+  end
+  omg_init_gen
+  put omg_ntok 0 0
+  s = seed
+  for step ulong budget
+    left = sub budget step
+    omg_valid_mask left
+    s = smx add s step
+    tok = omg_pick_allowed s
+    if eq tok OMG_EOF
+      break
+    end
+    omg_emit tok
+    rc = omg_step tok
+    if ne rc 0
+      ret -2
+    end
+    if and eq get omg_st 0 0 eq get omg_st 1 0
+      break
+    end
+  end
+  if or ne get omg_st 0 0 ne get omg_st 1 0
+    ret -3
+  end
+  ret 0
+end
+
+note ---- Metrics & Built-in Selftest ----
+
+fn omg_put_str s view uchar * to void
+  for i ulong len s
+    oputc ulong get s i
+  end
+end
+
+text omg_m_hdr "OMG_METRICS V=256 V_BASE=4096 LOGIT_REDUCTION=16x CE_TABLE_BYTES_V256=2048 CE_TABLE_BYTES_V4096=32768\n"
+text omg_st_p1 "OMG_SELFTEST PASS samples="
+text omg_st_p2 " sem_id="
+text omg_st_p3 " ntok="
+text omg_st_p4 " src_bytes="
+text omg_st_p5 "\n"
+
+text omg_ex_a "om2\nnote alpha variant A\nfn scale x ulong k ulong to ulong\n  res = mul x k\n  res = add res 1\n  ret res\nend\nfn main to int\n  a = ulong 7\n  b = scale a 3\n  if gt b 10\n    ret int sub b 10\n  end\n  ret 0\nend\n"
+text omg_ex_b "om2\nnote completely renamed & reformatted\nfn compute_val alpha ulong beta ulong to ulong\n  out_v = mul alpha beta\n  out_v = add out_v 1\n  ret out_v\nend\nfn main to int\n  p = ulong 7\n  q = compute_val p 3\n  if gt q 10\n    ret int sub q 10\n  end\n  ret 0\nend\n"
+
+fn omg_load_text s view uchar * to void
+  n = len s
+  for i ulong n
+    put omg_src i get s i
+  end
+  put omg_nsrc 0 n
+end
+
+fn omg_report_metrics to void
+  omg_put_str omg_m_hdr
+  oflush
+end
+
+fn omg_selftest to ulong
+  omg_corp_reset
+  put omg_mac_cnt 0 0
+  put omg_mac_pcur 0 0
+  note 1. Macro register + deduplication
+  put omg_mac_tmp_in 0 OMG_TY_U64
+  put omg_mac_tmp_tok 0 ushort OMG_OP_ADD
+  put omg_mac_tmp_tok 1 ushort OMG_OP_MUL
+  put omg_mac_tmp_tok 2 ushort 256
+  put omg_mac_tmp_tok 3 ushort add OMG_LIT_BASE 2
+  put omg_mac_tmp_tok 4 ushort add OMG_LIT_BASE 1
+  put omg_mac_tmp_len 0 5
+  m0 = omg_macro_register 0 OMG_TY_U64 1
+  m1 = omg_macro_register 0 OMG_TY_U64 1
+  if or lt m0 0 ne m0 m1
+    ret 1
+  end
+  note 2. Alpha-equivalence parse + SEMANTIC_ID
+  omg_load_text omg_ex_a
+  if ne omg_parse_om 0
+    ret 2
+  end
+  na = get omg_ntok 0
+  sid_a = omg_semantic_id
+  if ne omg_corpus_add 1
+    ret 3
+  end
+  if ne omg_corpus_add 0
+    ret 4
+  end
+  omg_load_text omg_ex_b
+  if ne omg_parse_om 0
+    ret 5
+  end
+  nb = get omg_ntok 0
+  sid_b = omg_semantic_id
+  if or ne na nb ne sid_a sid_b
+    ret 6
+  end
+  note 3. Roundtrip OMG -> .om -> OMG
+  if ne omg_decode_om 0
+    ret 7
+  end
+  nd = get omg_ndec 0
+  for i ulong nd
+    put omg_src i get omg_dec i
+  end
+  put omg_nsrc 0 nd
+  if ne omg_parse_om 0
+    ret 8
+  end
+  if ne omg_semantic_id sid_a
+    ret 9
+  end
+  note 4. 200 masked samples inside selftest + mutant rejection
+  for sd ulong 200
+    if ne omg_sample_masked add 1000 sd 96 0
+      ret 10
+    end
+    if ne omg_validate 0
+      ret 11
+    end
+  end
+  note Mutant: inject invalid token at index 1
+  put omg_toks 1 ushort 254
+  if eq omg_validate 0
+    ret 12
+  end
+  omg_report_metrics
+  omg_put_str omg_st_p1
+  oputu 200
+  omg_put_str omg_st_p2
+  oputx sid_a
+  omg_put_str omg_st_p3
+  oputu na
+  omg_put_str omg_st_p4
+  oputu len omg_ex_a
+  omg_put_str omg_st_p5
+  oflush
+  ret 0
+end
+
+fn cmdomg to void
+  r = omg_selftest
+  if ne r 0
+    exit int r
+  end
+end

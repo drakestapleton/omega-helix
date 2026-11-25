@@ -1,0 +1,1174 @@
+note SPDX-License-Identifier: AGPL-3.0-only
+note native/gpu/ring.om: Pillar 3 - Coherent Grace + Blackwell Split Execution via lock-free shared rings.
+note Pure seeded OM-2 library unit (compose under `om2` or `target a64macos\nom2`).
+note
+note Hardware coherence contract (DGX Spark GB10 / Grace ARM64 + SM121 Blackwell):
+note   - Shared CPU<->GPU ring memory MUST be allocated GPU-uncached (`nvalloc(..., false)`) on GB10
+note     so host CPU polling and GPU completion/descriptor visibility bypass non-coherent GPU L2.
+note   - On CPU simulation (`target a64macos` or host-only checks), the exact same 270,336-byte
+note     page-aligned ring layout is backed by a flat byte buffer (`grg_ring`).
+note   - Every head, tail, and descriptor sequence transition is bracketed by `cpufence` (AArch64 DSB SY)
+note     and bounded spin-wait loops use `cpurelax` (AArch64 YIELD).
+
+const RING_SLOTS ulong 64
+const RING_MASK ulong 63
+const RING_CACHELINE ulong 128
+const RING_HDR_BYTES ulong 1024
+const RING_DESC_OFF ulong 1024
+const RING_DESC_BYTES ulong 64
+const RING_PAYLOAD_OFF ulong 8192
+const RING_SLOT_CAP ulong 4096
+const RING_TOTAL_BYTES ulong 270336
+const RING_NVALLOC_CACHED ulong 0
+const RING_MAGIC ulong 0x4f4d52475f563031
+const RING_VERSION ulong 1
+
+note Cacheline-padded ring header byte offsets (128-byte stride prevents Grace/Blackwell false sharing)
+const RING_OFF_MAGIC ulong 0
+const RING_OFF_VER ulong 8
+const RING_OFF_SLOTS ulong 16
+const RING_OFF_DESC_SZ ulong 24
+const RING_OFF_PAY_OFF ulong 32
+const RING_OFF_PAY_SZ ulong 40
+const RING_OFF_GPU_VA ulong 48
+const RING_OFF_FLAGS ulong 56
+
+note Cacheline 1 (Producer head, claim ticket, epoch)
+const RING_OFF_PROD_HEAD ulong 128
+const RING_OFF_PROD_CLAIM ulong 136
+const RING_OFF_PROD_EPOCH ulong 144
+
+note Cacheline 2 (Consumer tail, claim ticket, verified sequence)
+const RING_OFF_CONS_TAIL ulong 256
+const RING_OFF_CONS_CLAIM ulong 264
+const RING_OFF_CONS_DONE ulong 272
+
+note Cacheline 3 (GPU doorbell shadow, marker, fault latch, verification counters)
+const RING_OFF_DOORBELL ulong 384
+const RING_OFF_MARKER ulong 392
+const RING_OFF_FAULT ulong 400
+const RING_OFF_CHK_OK ulong 408
+const RING_OFF_CHK_BAD ulong 416
+const RING_OFF_W_UPD ulong 424
+const RING_OFF_EPOCH_ID ulong 432
+const RING_OFF_GPU_STEP_ACTIVE ulong 440
+
+note Cacheline 4 (Worker telemetry counters)
+const RING_OFF_BPE_PACKED ulong 512
+const RING_OFF_DK_LOOKUPS ulong 520
+const RING_OFF_MPMC_CONTEND ulong 528
+
+note Ring operation codes and slot flags
+const RING_OP_BPE_PACK ulong 1
+const RING_OP_GPU_FWD_OUT ulong 2
+const RING_OP_DK_LOOKUP ulong 3
+const RING_OP_WEIGHT_UPD ulong 4
+const RING_OP_ARBORIS_MASK ulong 5
+
+const RING_SF_READY ulong 1
+const RING_SF_CHECKED ulong 2
+const RING_SF_VERIFIED ulong 4
+const RING_SF_POISON ulong 8
+
+const RING_ERR_NONE ulong 0
+const RING_ERR_MAGIC ulong 1
+const RING_ERR_CHECKSUM ulong 2
+const RING_ERR_BOUNDS ulong 3
+const RING_ERR_SPOTCHECK ulong 4
+const RING_ERR_TIMEOUT ulong 5
+const RING_ERR_EPOCH_VIOLATION ulong 6
+
+const RING_BPE_MAGIC uint 0x42504531
+const RING_DK_MAGIC ulong 3544415663467285583
+const RING_DK_MAX_POS ulong 256
+const RING_DK_MAX_K ulong 64
+const RING_DK_MAX_V ulong 4096
+const RING_W_CAP ulong 8192
+
+note Page-aligned (66 * 4096 = 270,336 B) coherent ring storage & scratch payload staging
+global grg_ring uchar 270336
+global grg_tmp uchar 4096
+
+note Grace CPU sparse top-K distillation (OLLMDK01) worker tables
+global grg_dk_cfg ulong 8
+global grg_dk_ids ulong 16384
+global grg_dk_probs f64 16384
+global grg_dk_y ulong 256
+global grg_dk_mask uchar 256
+global grg_dk_grad f64 4096
+global grg_dk_pt f64 4096
+global grg_dk_p1 f64 4096
+global grg_dk_stats f64 8
+
+note Grace CPU async master-weight update pools (exact f64 weights + AdamW moments)
+global grg_w_master f64 8192
+global grg_w_bank0 f64 8192
+global grg_w_bank1 f64 8192
+global grg_m_state f64 8192
+global grg_v_state f64 8192
+global grg_adam_p f64 4
+
+note ---- Self-contained Wolfram-verified f64 exp/log (matches math.om, zero cross-unit deps) ----
+
+fn grg_fexp x f64 to f64
+if ne x x
+ret x
+end
+if gt x 709.782712893384
+ret bitcast f64 ulong 9218868437227405312
+end
+if lt x -745.1332191019412
+ret 0.0f64
+end
+kf = mul x 1.4426950408889634
+if ge kf 0.0
+kf = add kf 0.5
+else
+kf = sub kf 0.5
+end
+k = long kf
+fk = f64 k
+r = sub sub x mul fk 0.6931471803691238 mul fk 1.9082149292705877e-10
+p = add mul r 1.6059043836821613e-10 2.08767569878681e-9
+p = add mul p r 2.505210838544172e-8
+p = add mul p r 2.755731922398589e-7
+p = add mul p r 2.7557319223985893e-6
+p = add mul p r 0.0000248015873015873
+p = add mul p r 0.0001984126984126984
+p = add mul p r 0.001388888888888889
+p = add mul p r 0.008333333333333333
+p = add mul p r 0.041666666666666664
+p = add mul p r 0.16666666666666666
+p = add mul p r 0.5
+p = add mul p r 1.0
+p = add mul p r 1.0
+k1 = div k 2
+k2 = sub k k1
+s1 = bitcast f64 shl ulong add k1 1023 52
+s2 = bitcast f64 shl ulong add k2 1023 52
+ret mul mul p s1 s2
+end
+
+fn grg_flog x f64 to f64
+if ne x x
+ret x
+end
+if lt x 0.0
+ret bitcast f64 ulong 9221120237041090560
+end
+if eq x 0.0
+ret bitcast f64 ulong 18442240474082181120
+end
+b = bitcast ulong x
+if eq b 9218868437227405312
+ret x
+end
+e = long 0
+if lt b 4503599627370496
+b = bitcast ulong mul x 18014398509481984.0
+e = long -54
+end
+e = add e sub long shr b 52 1023
+m = bitcast f64 or and b 4503599627370495 4607182418800017408
+if gt m 1.4142135623730951
+m = mul m 0.5
+e = add e 1
+end
+f = sub m 1.0
+s = div f add f 2.0
+z = mul s s
+q = add mul z 0.043478260869565216 0.047619047619047616
+q = add mul q z 0.05263157894736842
+q = add mul q z 0.058823529411764705
+q = add mul q z 0.06666666666666667
+q = add mul q z 0.07692307692307693
+q = add mul q z 0.09090909090909091
+q = add mul q z 0.1111111111111111
+q = add mul q z 0.14285714285714285
+q = add mul q z 0.2
+q = add mul q z 0.3333333333333333
+q = add mul q z 1.0
+lm = mul add s s q
+fe = f64 e
+ret add mul fe 0.6931471803691238 add lm mul fe 1.9082149292705877e-10
+end
+
+note ---- Low-level ring & scratch memory accessors + ARM64 cpufence/cpurelax ----
+
+fn grg_r32 off ulong to uint
+b0 = uint get grg_ring off
+b1 = shl uint get grg_ring add off 1 8
+b2 = shl uint get grg_ring add off 2 16
+b3 = shl uint get grg_ring add off 3 24
+ret or or b0 b1 or b2 b3
+end
+
+fn grg_w32 off ulong v uint to void
+put grg_ring off uchar and v 255
+put grg_ring add off 1 uchar and shr v 8 255
+put grg_ring add off 2 uchar and shr v 16 255
+put grg_ring add off 3 uchar and shr v 24 255
+end
+
+fn grg_r64 off ulong to ulong
+lo = ulong grg_r32 off
+hi = ulong grg_r32 add off 4
+ret or lo shl hi 32
+end
+
+fn grg_w64 off ulong v ulong to void
+grg_w32 off uint and v 0xffffffff
+grg_w32 add off 4 uint shr v 32
+end
+
+fn grg_tr32 off ulong to uint
+b0 = uint get grg_tmp off
+b1 = shl uint get grg_tmp add off 1 8
+b2 = shl uint get grg_tmp add off 2 16
+b3 = shl uint get grg_tmp add off 3 24
+ret or or b0 b1 or b2 b3
+end
+
+fn grg_tw32 off ulong v uint to void
+put grg_tmp off uchar and v 255
+put grg_tmp add off 1 uchar and shr v 8 255
+put grg_tmp add off 2 uchar and shr v 16 255
+put grg_tmp add off 3 uchar and shr v 24 255
+end
+
+fn grg_tr64 off ulong to ulong
+lo = ulong grg_tr32 off
+hi = ulong grg_tr32 add off 4
+ret or lo shl hi 32
+end
+
+fn grg_tw64 off ulong v ulong to void
+grg_tw32 off uint and v 0xffffffff
+grg_tw32 add off 4 uint shr v 32
+end
+
+note Store-release: flush prior payload & descriptor writes before publishing index/doorbell
+fn grg_w64_rel off ulong v ulong to void
+cpufence
+grg_w64 off v
+cpufence
+end
+
+note Load-acquire: read published index/marker then fence before reading payload
+fn grg_r64_acq off ulong to ulong
+v = grg_r64 off
+cpufence
+ret v
+end
+
+note Bounded coherent poll loop using cpurelax (ARM64 YIELD)
+fn grg_poll_ge off ulong want ulong max_spin ulong to bool
+i = ulong 0
+while lt i max_spin bound 1000000
+v = grg_r64_acq off
+if ge v want
+ret true
+end
+cpurelax
+i = add i 1
+end
+ret false
+end
+
+fn grg_fnv64_ring off ulong n ulong to ulong
+h = ulong 0xcbf29ce484222325
+for i ulong n bound 4096
+h = mul xor h ulong get grg_ring add off i 0x100000001b3
+end
+ret h
+end
+
+note ---- Ring descriptor & GPU VA geometry helpers ----
+
+fn grg_desc_off slot ulong to ulong
+ret add RING_DESC_OFF mul and slot RING_MASK RING_DESC_BYTES
+end
+
+fn grg_pay_off slot ulong to ulong
+ret add RING_PAYLOAD_OFF mul and slot RING_MASK RING_SLOT_CAP
+end
+
+fn grg_gpu_desc_va slot ulong to ulong
+base = grg_r64 RING_OFF_GPU_VA
+ret add base grg_desc_off slot
+end
+
+fn grg_gpu_pay_va slot ulong to ulong
+base = grg_r64 RING_OFF_GPU_VA
+ret add base grg_pay_off slot
+end
+
+fn grg_init gpu_va_base ulong mpmc bool cpu_sim bool to void
+for i ulong RING_TOTAL_BYTES bound 270336
+put grg_ring i 0
+end
+grg_w64 RING_OFF_MAGIC RING_MAGIC
+grg_w64 RING_OFF_VER RING_VERSION
+grg_w64 RING_OFF_SLOTS RING_SLOTS
+grg_w64 RING_OFF_DESC_SZ RING_DESC_BYTES
+grg_w64 RING_OFF_PAY_OFF RING_PAYLOAD_OFF
+grg_w64 RING_OFF_PAY_SZ mul RING_SLOTS RING_SLOT_CAP
+grg_w64 RING_OFF_GPU_VA gpu_va_base
+fl = ulong 1
+if mpmc
+fl = or fl 2
+end
+if cpu_sim
+fl = or fl 4
+end
+grg_w64 RING_OFF_FLAGS fl
+for s ulong RING_SLOTS bound 64
+d = grg_desc_off s
+grg_w64 d s
+end
+cpufence
+end
+
+fn grg_valid_hdr to bool
+if ne grg_r64 RING_OFF_MAGIC RING_MAGIC
+ret false
+end
+if ne grg_r64 RING_OFF_VER RING_VERSION
+ret false
+end
+if ne grg_r64 RING_OFF_SLOTS RING_SLOTS
+ret false
+end
+ret eq grg_r64 RING_OFF_FAULT RING_ERR_NONE
+end
+
+fn grg_depth to ulong
+h = grg_r64_acq RING_OFF_PROD_HEAD
+t = grg_r64_acq RING_OFF_CONS_TAIL
+if lt h t
+ret 0
+end
+ret sub h t
+end
+
+fn grg_spsc_can_push to bool
+if not grg_valid_hdr
+ret false
+end
+h = grg_r64_acq RING_OFF_PROD_HEAD
+t = grg_r64_acq RING_OFF_CONS_TAIL
+ret lt sub h t RING_SLOTS
+end
+
+fn grg_spsc_can_pop to bool
+if not grg_valid_hdr
+ret false
+end
+h = grg_r64_acq RING_OFF_PROD_HEAD
+t = grg_r64_acq RING_OFF_CONS_TAIL
+ret gt h t
+end
+
+note Lock-free MPMC/SPSC producer ticket claim (checks Vyukov turn seq == pos)
+fn grg_claim_prod to long
+if not grg_valid_hdr
+ret long -1
+end
+pos = grg_r64_acq RING_OFF_PROD_CLAIM
+d = grg_desc_off pos
+seq = grg_r64_acq d
+if ne seq pos
+c = grg_r64 RING_OFF_MPMC_CONTEND
+grg_w64 RING_OFF_MPMC_CONTEND add c 1
+ret long -1
+end
+grg_w64_rel RING_OFF_PROD_CLAIM add pos 1
+ret long pos
+end
+
+note Lock-free MPMC/SPSC consumer ticket claim (checks Vyukov turn seq == pos + 1)
+fn grg_claim_cons to long
+if not grg_valid_hdr
+ret long -1
+end
+pos = grg_r64_acq RING_OFF_CONS_CLAIM
+d = grg_desc_off pos
+seq = grg_r64_acq d
+if ne seq add pos 1
+ret long -1
+end
+grg_w64_rel RING_OFF_CONS_CLAIM add pos 1
+ret long pos
+end
+
+note Write descriptor fields (broken into two small helpers to stay within 16-reg budget)
+fn grg_write_desc_a d ulong op uint fl uint gpu_va ulong pay_off uint pay_len uint to void
+grg_w32 add d 8 op
+grg_w32 add d 12 fl
+grg_w64 add d 16 gpu_va
+grg_w32 add d 24 pay_off
+grg_w32 add d 28 pay_len
+end
+
+fn grg_write_desc_b d ulong layer_id uint batch_id uint aux0 uint aux1 uint fnv ulong to void
+grg_w32 add d 32 layer_id
+grg_w32 add d 36 batch_id
+grg_w32 add d 40 aux0
+grg_w32 add d 44 aux1
+grg_w64 add d 48 fnv
+grg_w64 add d 56 ulong monons
+end
+
+note Push grg_tmp[0..pay_len) into next free ring slot; returns ticket >= 0 or < 0 on full/fault
+fn grg_stage_copy poff ulong pay_len ulong to void
+for i ulong pay_len bound 4096
+put grg_ring add poff i get grg_tmp i
+end
+end
+
+fn grg_pub_head pos ulong to void
+cur_h = grg_r64_acq RING_OFF_PROD_HEAD
+if gt add pos 1 cur_h
+grg_w64_rel RING_OFF_PROD_HEAD add pos 1
+end
+grg_w64_rel RING_OFF_DOORBELL add pos 1
+if eq and pos RING_MASK RING_MASK
+ep = grg_r64 RING_OFF_PROD_EPOCH
+grg_w64_rel RING_OFF_PROD_EPOCH add ep 1
+end
+end
+
+fn grg_push_meta pay_len ulong meta view uint 5 to long
+if gt pay_len RING_SLOT_CAP
+grg_w64_rel RING_OFF_FAULT RING_ERR_BOUNDS
+ret long -3
+end
+tpos = grg_claim_prod
+if lt tpos 0
+ret tpos
+end
+pos = ulong tpos
+poff = grg_pay_off pos
+grg_stage_copy poff pay_len
+ck = grg_fnv64_ring poff pay_len
+d = grg_desc_off pos
+gva = add grg_r64 RING_OFF_GPU_VA poff
+grg_write_desc_a d get meta 0 uint RING_SF_READY gva uint poff uint pay_len
+grg_write_desc_b d get meta 1 get meta 2 get meta 3 get meta 4 ck
+grg_w64_rel d add pos 1
+grg_pub_head pos
+ret tpos
+end
+
+fn grg_push_tmp op uint layer_id uint batch_id uint aux0 uint aux1 uint pay_len ulong to long
+meta = new uint 5 0
+put meta 0 op
+put meta 1 layer_id
+put meta 2 batch_id
+put meta 3 aux0
+put meta 4 aux1
+ret grg_push_meta pay_len meta
+end
+
+note Pop next ready ring slot into grg_tmp; out_meta[0..10): ticket,op,flags,gpu_va,pay_len,layer,batch,aux0,aux1,fnv
+fn grg_pop_tmp out_meta edit ulong 10 to long
+tpos = grg_claim_cons
+if lt tpos 0
+ret tpos
+end
+pos = ulong tpos
+d = grg_desc_off pos
+plen = ulong grg_r32 add d 28
+if gt plen RING_SLOT_CAP
+grg_w64_rel RING_OFF_FAULT RING_ERR_BOUNDS
+grg_w64_rel d add pos RING_SLOTS
+ret long -3
+end
+poff = grg_pay_off pos
+exp_ck = grg_r64 add d 48
+got_ck = grg_fnv64_ring poff plen
+if ne got_ck exp_ck
+grg_w64_rel RING_OFF_FAULT RING_ERR_CHECKSUM
+grg_w32 add d 12 uint RING_SF_POISON
+grg_w64_rel d add pos RING_SLOTS
+ret long -2
+end
+for i ulong plen bound 4096
+put grg_tmp i get grg_ring add poff i
+end
+put out_meta 0 pos
+put out_meta 1 ulong grg_r32 add d 8
+put out_meta 2 ulong grg_r32 add d 12
+put out_meta 3 grg_r64 add d 16
+put out_meta 4 plen
+put out_meta 5 ulong grg_r32 add d 32
+put out_meta 6 ulong grg_r32 add d 36
+put out_meta 7 ulong grg_r32 add d 40
+put out_meta 8 ulong grg_r32 add d 44
+put out_meta 9 exp_ck
+grg_w64_rel d add pos RING_SLOTS
+cur_t = grg_r64_acq RING_OFF_CONS_TAIL
+if gt add pos 1 cur_t
+grg_w64_rel RING_OFF_CONS_TAIL add pos 1
+end
+grg_w64_rel RING_OFF_CONS_DONE pos
+grg_w64_rel RING_OFF_MARKER add pos 1
+ret tpos
+end
+
+note ---- Concurrent Grace Worker 1: BPE / Batch Packing into Ring Slots ----
+
+note Pack sequence tokens & loss masks into grg_tmp and push RING_OP_BPE_PACK slot.
+note Frame layout: [0..3]=BPE1, [4..7]=ntok, [8..11]=batch_id, [12..15]=layer_id,
+note then ntok u32 tokens, ntok u32 next-targets, ntok u8 masks. Max ntok = 448 (<= 4096 B).
+fn grg_pack_body toks view uint * mask view uchar * ntok ulong to ulong
+y_off = add 16 mul ntok 4
+m_off = add 16 mul ntok 8
+for i ulong ntok bound 448
+grg_tw32 add 16 mul i 4 get toks i
+nxt = uint 0
+if lt add i 1 ntok
+nxt = get toks add i 1
+end
+grg_tw32 add y_off mul i 4 nxt
+put grg_tmp add m_off i get mask i
+end
+ret add m_off ntok
+end
+
+fn grg_pack_batch toks view uint * mask view uchar * batch_id uint layer_id uint to long
+ntok = len toks
+if or eq ntok 0 gt ntok 448
+grg_w64_rel RING_OFF_FAULT RING_ERR_BOUNDS
+ret long -3
+end
+if lt len mask ntok
+grg_w64_rel RING_OFF_FAULT RING_ERR_BOUNDS
+ret long -3
+end
+grg_tw32 0 RING_BPE_MAGIC
+grg_tw32 4 uint ntok
+grg_tw32 8 batch_id
+grg_tw32 12 layer_id
+plen = grg_pack_body toks mask ntok
+ticket = grg_push_tmp uint RING_OP_BPE_PACK layer_id batch_id uint ntok 0 plen
+if ge ticket 0
+cnt = grg_r64 RING_OFF_BPE_PACKED
+grg_w64 RING_OFF_BPE_PACKED add cnt 1
+end
+ret ticket
+end
+
+fn grg_unpack_batch pay_len ulong out_toks edit uint * out_mask edit uchar * out_hdr edit uint 4 to bool
+if lt pay_len 16
+ret false
+end
+if ne grg_tr32 0 RING_BPE_MAGIC
+ret false
+end
+ntok = ulong grg_tr32 4
+if or eq ntok 0 gt ntok 448
+ret false
+end
+need = add 16 mul ntok 9
+if ne pay_len need
+ret false
+end
+if or lt len out_toks ntok lt len out_mask ntok
+ret false
+end
+put out_hdr 0 grg_tr32 0
+put out_hdr 1 uint ntok
+put out_hdr 2 grg_tr32 8
+put out_hdr 3 grg_tr32 12
+t_off = ulong 16
+m_off = add 16 mul ntok 8
+for i ulong ntok bound 448
+put out_toks i grg_tr32 add t_off mul i 4
+put out_mask i get grg_tmp add m_off i
+end
+ret true
+end
+
+note ---- Concurrent Grace Worker 2: Sparse Top-K Distillation (OLLMDK01) Logit Lookup ----
+
+fn grg_dk_init v ulong k ulong t ulong alpha_micro ulong tau_milli ulong to bool
+if or lt v 2 gt v RING_DK_MAX_V
+ret false
+end
+if or eq k 0 gt k RING_DK_MAX_K
+ret false
+end
+if gt k v
+ret false
+end
+if or eq t 0 gt t RING_DK_MAX_POS
+ret false
+end
+if or gt alpha_micro 1000000 eq tau_milli 0
+ret false
+end
+put grg_dk_cfg 0 v
+put grg_dk_cfg 1 k
+put grg_dk_cfg 2 t
+put grg_dk_cfg 3 alpha_micro
+put grg_dk_cfg 4 tau_milli
+ret true
+end
+
+fn grg_dk_set_entry pos ulong j ulong tok_id ulong prob_f32 uint to bool
+if ge pos get grg_dk_cfg 2
+ret false
+end
+if ge j get grg_dk_cfg 1
+ret false
+end
+if ge tok_id get grg_dk_cfg 0
+ret false
+end
+pv = f64 bitcast f32 prob_f32
+if or ne pv pv lt pv 0.0
+ret false
+end
+idx = add mul pos RING_DK_MAX_K j
+put grg_dk_ids idx tok_id
+put grg_dk_probs idx pv
+ret true
+end
+
+fn grg_dk_set_target pos ulong y_tok ulong msk uchar to void
+if lt pos RING_DK_MAX_POS
+put grg_dk_y pos y_tok
+put grg_dk_mask pos msk
+end
+end
+
+fn grg_dk_max stud view f64 * v ulong to f64
+mx = -1.0e300f64
+for c ulong v bound 4096
+x = get stud c
+if gt x mx
+mx = x
+end
+end
+ret mx
+end
+
+fn grg_dk_norm v ulong inv1 f64 invt f64 to void
+for c2 ulong v bound 4096
+put grg_dk_p1 c2 mul get grg_dk_p1 c2 inv1
+put grg_dk_pt c2 mul get grg_dk_pt c2 invt
+end
+end
+
+fn grg_dk_probs_fill stud view f64 * v ulong mx f64 tau f64 to void
+s1 = 0.0f64
+st = 0.0f64
+for c ulong v bound 4096
+z = sub get stud c mx
+w1 = grg_fexp z
+wt = grg_fexp div z tau
+put grg_dk_p1 c w1
+put grg_dk_pt c wt
+s1 = add s1 w1
+st = add st wt
+end
+grg_dk_norm v div 1.0 s1 div 1.0 st
+end
+
+fn grg_dk_eval_kl pos ulong k ulong tau f64 to f64
+kl = 0.0f64
+qsum = 0.0f64
+base = mul pos RING_DK_MAX_K
+for j ulong k bound 64
+qj = get grg_dk_probs add base j
+qsum = add qsum qj
+if gt qj 1.0e-15f64
+idj = get grg_dk_ids add base j
+ptj = get grg_dk_pt idj
+if lt ptj 1.0e-300f64
+ptj = 1.0e-300f64
+end
+kl = add kl mul qj sub grg_flog qj grg_flog ptj
+end
+end
+put grg_dk_stats 3 qsum
+ret mul mul kl tau tau
+end
+
+fn grg_dk_sub_grad pos ulong k ulong alp_tau f64 to void
+base = mul pos RING_DK_MAX_K
+for j2 ulong k bound 64
+qj2 = get grg_dk_probs add base j2
+id2 = get grg_dk_ids add base j2
+put grg_dk_grad id2 sub get grg_dk_grad id2 mul alp_tau qj2
+end
+end
+
+fn grg_dk_emit_grad pos ulong v ulong k ulong alpha f64 tau f64 to void
+y = get grg_dk_y pos
+om = sub 1.0 alpha
+at_sc = mul mul alpha tau get grg_dk_stats 3
+for c ulong v bound 4096
+g = mul om get grg_dk_p1 c
+if eq c y
+g = sub g om
+end
+g = add g mul at_sc get grg_dk_pt c
+put grg_dk_grad c g
+end
+grg_dk_sub_grad pos k mul alpha tau
+end
+
+fn grg_dk_pack_frame pos ulong v ulong k ulong to void
+grg_tw64 0 RING_DK_MAGIC
+grg_tw32 8 uint pos
+grg_tw32 12 uint v
+grg_tw32 16 uint k
+grg_tw32 20 uint get grg_dk_y pos
+grg_tw64 24 bitcast ulong get grg_dk_stats 0
+grg_tw64 32 bitcast ulong get grg_dk_stats 1
+grg_tw64 40 bitcast ulong get grg_dk_stats 2
+grg_tw64 48 bitcast ulong get grg_dk_stats 3
+end
+
+fn grg_dk_eval_pos pos ulong stud view f64 * to bool
+v = get grg_dk_cfg 0
+k = get grg_dk_cfg 1
+mx = grg_dk_max stud v
+tau = div f64 get grg_dk_cfg 4 1000.0
+grg_dk_probs_fill stud v mx tau
+py = get grg_dk_p1 get grg_dk_y pos
+if lt py 1.0e-300f64
+py = 1.0e-300f64
+end
+put grg_dk_stats 1 neg grg_flog py
+put grg_dk_stats 2 grg_dk_eval_kl pos k tau
+ret le get grg_dk_stats 3 1.0001
+end
+
+fn grg_dk_run_loss_grad pos ulong v ulong k ulong to void
+alpha = div f64 get grg_dk_cfg 3 1000000.0
+tau = div f64 get grg_dk_cfg 4 1000.0
+put grg_dk_stats 0 add mul sub 1.0 alpha get grg_dk_stats 1 mul alpha get grg_dk_stats 2
+grg_dk_emit_grad pos v k alpha tau
+grg_dk_pack_frame pos v k
+end
+
+note Compute OLLMDK01 hybrid CE+KL loss & analytic logit gradient for position pos, then push RING_OP_DK_LOOKUP
+fn grg_worker_dk_step pos ulong stud view f64 * batch_id uint layer_id uint to long
+v = get grg_dk_cfg 0
+k = get grg_dk_cfg 1
+if or ge pos get grg_dk_cfg 2 lt len stud v
+ret long -3
+end
+if eq get grg_dk_mask pos 0
+ret long -4
+end
+if not grg_dk_eval_pos pos stud
+grg_w64_rel RING_OFF_FAULT RING_ERR_BOUNDS
+ret long -5
+end
+grg_dk_run_loss_grad pos v k
+tk = grg_push_tmp uint RING_OP_DK_LOOKUP layer_id batch_id uint pos uint k 56
+if ge tk 0
+cnt = grg_r64 RING_OFF_DK_LOOKUPS
+grg_w64 RING_OFF_DK_LOOKUPS add cnt 1
+end
+ret tk
+end
+
+note ---- Concurrent Grace Worker 3: Exact f64 Spot-Check Verification of Ring Outputs ----
+
+note Simulate or stage GPU f32 outputs into a RING_OP_GPU_FWD_OUT ring slot (max 1020 f32 values)
+fn grg_push_gpu_fwd_f32 vals view f64 * layer_id uint batch_id uint to long
+n = len vals
+if or eq n 0 gt n 1020
+grg_w64_rel RING_OFF_FAULT RING_ERR_BOUNDS
+ret long -3
+end
+grg_tw32 0 uint n
+grg_tw32 4 layer_id
+grg_tw32 8 batch_id
+grg_tw32 12 0
+for i ulong n bound 1020
+w = bitcast uint f32 get vals i
+grg_tw32 add 16 mul i 4 w
+end
+ret grg_push_tmp uint RING_OP_GPU_FWD_OUT layer_id batch_id uint n 0 add 16 mul n 4
+end
+
+note Bounded coherent consumer poll using cpurelax until a ready slot appears or max_spin expires
+fn grg_spin_pop_tmp out_meta edit ulong 10 max_spin ulong to long
+i = ulong 0
+while lt i max_spin bound 100000
+r = grg_pop_tmp out_meta
+if ne r -1
+ret r
+end
+if ne grg_r64 RING_OFF_FAULT RING_ERR_NONE
+ret long -2
+end
+cpurelax
+i = add i 1
+end
+ret long -1
+end
+
+note Pull a RING_OP_GPU_FWD_OUT slot and spot-check every stride-th element against exact f64 reference
+fn grg_worker_spot_check y_ref view f64 * tol f64 stride ulong to long
+meta = new ulong 10 0
+tpos = grg_pop_tmp meta
+if lt tpos 0
+ret tpos
+end
+if ne get meta 1 RING_OP_GPU_FWD_OUT
+ret long -6
+end
+n = ulong grg_tr32 0
+if or eq n 0 gt n len y_ref
+grg_w64_rel RING_OFF_FAULT RING_ERR_BOUNDS
+ret long -3
+end
+st = stride
+if eq st 0
+st = ulong 1
+end
+i = ulong 0
+while lt i n bound 1020
+w = grg_tr32 add 16 mul i 4
+vg = f64 bitcast f32 w
+vr = get y_ref i
+if or ne vg vg ne vr vr
+grg_w64_rel RING_OFF_FAULT RING_ERR_SPOTCHECK
+bad = grg_r64 RING_OFF_CHK_BAD
+grg_w64_rel RING_OFF_CHK_BAD add bad 1
+ret long -7
+end
+if gt fabs sub vg vr tol
+grg_w64_rel RING_OFF_FAULT RING_ERR_SPOTCHECK
+bad = grg_r64 RING_OFF_CHK_BAD
+grg_w64_rel RING_OFF_CHK_BAD add bad 1
+ret long -7
+end
+i = add i st
+end
+ok = grg_r64 RING_OFF_CHK_OK
+grg_w64_rel RING_OFF_CHK_OK add ok 1
+ret tpos
+end
+
+note ---- Concurrent Grace Worker 4: Async Master-Weight Updates on Finished Layers ----
+
+fn grg_push_grad_f32 grads view f64 * layer_id uint batch_id uint to long
+n = len grads
+if or eq n 0 gt n 1020
+grg_w64_rel RING_OFF_FAULT RING_ERR_BOUNDS
+ret long -3
+end
+grg_tw32 0 uint n
+grg_tw32 4 layer_id
+grg_tw32 8 batch_id
+grg_tw32 12 0
+for i ulong n bound 1020
+w = bitcast uint f32 get grads i
+grg_tw32 add 16 mul i 4 w
+end
+ret grg_push_tmp uint RING_OP_WEIGHT_UPD layer_id batch_id uint n 1 add 16 mul n 4
+end
+
+note Apply exact f64 AdamW update on finished layer weights from ring f32 gradients
+fn grg_adamw_one idx ulong g f64 to void
+m = add mul 0.9f64 get grg_m_state idx mul 0.1f64 g
+v = add mul 0.999f64 get grg_v_state idx mul 0.001f64 mul g g
+put grg_m_state idx m
+put grg_v_state idx v
+mh = mul m get grg_adam_p 2
+vh = mul v get grg_adam_p 3
+dec = mul get grg_adam_p 0 get grg_adam_p 1
+w = mul get grg_w_master idx sub 1.0 dec
+step_sz = div mul get grg_adam_p 0 mh add fsqrt vh 1.0e-8f64
+put grg_w_master idx sub w step_sz
+end
+
+fn grg_adamw_bc step ulong is_b2 bool to f64
+base = 0.9f64
+if is_b2
+base = 0.999f64
+end
+p = 1.0f64
+for i ulong step bound 10000
+p = mul p base
+end
+ret div 1.0 sub 1.0 p
+end
+
+fn grg_worker_weight_update w_off ulong step ulong lr f64 wd f64 to long
+if eq step 0
+ret long -3
+end
+meta = new ulong 10 0
+tpos = grg_pop_tmp meta
+if lt tpos 0
+ret tpos
+end
+if ne get meta 1 RING_OP_WEIGHT_UPD
+ret long -6
+end
+n = ulong grg_tr32 0
+if gt add w_off n RING_W_CAP
+grg_w64_rel RING_OFF_FAULT RING_ERR_BOUNDS
+ret long -3
+end
+put grg_adam_p 0 lr
+put grg_adam_p 1 wd
+put grg_adam_p 2 grg_adamw_bc step false
+put grg_adam_p 3 grg_adamw_bc step true
+for i ulong n bound 1020
+g = f64 bitcast f32 grg_tr32 add 16 mul i 4
+if ne g g
+grg_w64_rel RING_OFF_FAULT RING_ERR_SPOTCHECK
+ret long -7
+end
+grg_adamw_one add w_off i g
+end
+cnt = grg_r64 RING_OFF_W_UPD
+grg_w64_rel RING_OFF_W_UPD add cnt 1
+ret tpos
+end
+
+note ---- Byte-Traceability Lock 2: Strict Epoch Double-Buffering for Async Grace + Blackwell Sharing ----
+
+fn grg_epoch_init n ulong to void
+if gt n RING_W_CAP
+grg_w64_rel RING_OFF_FAULT RING_ERR_BOUNDS
+ret
+end
+grg_w64_rel RING_OFF_EPOCH_ID 0
+grg_w64_rel RING_OFF_GPU_STEP_ACTIVE 0
+if eq grg_r64 RING_OFF_FAULT RING_ERR_EPOCH_VIOLATION
+grg_w64_rel RING_OFF_FAULT RING_ERR_NONE
+end
+for i ulong n bound 8192
+w = get grg_w_master i
+put grg_w_bank0 i w
+put grg_w_bank1 i w
+end
+cpufence
+end
+
+fn grg_epoch_gpu_bank to ulong
+ret and grg_r64 RING_OFF_EPOCH_ID 1
+end
+
+fn grg_epoch_cpu_bank to ulong
+ret and add grg_r64 RING_OFF_EPOCH_ID 1 1
+end
+
+fn grg_epoch_begin_gpu_step to void
+grg_w64_rel RING_OFF_GPU_STEP_ACTIVE 1
+end
+
+fn grg_epoch_end_gpu_step to void
+grg_w64_rel RING_OFF_GPU_STEP_ACTIVE 0
+end
+
+fn grg_epoch_read_gpu idx ulong to f64
+if ge idx RING_W_CAP
+grg_w64_rel RING_OFF_FAULT RING_ERR_BOUNDS
+ret 0.0f64
+end
+if eq grg_epoch_gpu_bank 0
+ret get grg_w_bank0 idx
+end
+ret get grg_w_bank1 idx
+end
+
+fn grg_epoch_stage_weight idx ulong val f64 to long
+if ge idx RING_W_CAP
+grg_w64_rel RING_OFF_FAULT RING_ERR_BOUNDS
+ret long -3
+end
+if eq grg_epoch_cpu_bank 0
+put grg_w_bank0 idx val
+else
+put grg_w_bank1 idx val
+end
+ret long 0
+end
+
+fn grg_epoch_write_bank_guarded bank ulong idx ulong val f64 to long
+if or gt bank 1 ge idx RING_W_CAP
+grg_w64_rel RING_OFF_FAULT RING_ERR_BOUNDS
+ret long -3
+end
+active = grg_r64 RING_OFF_GPU_STEP_ACTIVE
+gbank = grg_epoch_gpu_bank
+if and eq active 1 eq bank gbank
+grg_w64_rel RING_OFF_FAULT RING_ERR_EPOCH_VIOLATION
+ret long -8
+end
+if eq bank 0
+put grg_w_bank0 idx val
+else
+put grg_w_bank1 idx val
+end
+ret long 0
+end
+
+fn grg_epoch_commit_step_boundary n ulong to long
+if gt n RING_W_CAP
+grg_w64_rel RING_OFF_FAULT RING_ERR_BOUNDS
+ret long -3
+end
+if eq grg_r64 RING_OFF_GPU_STEP_ACTIVE 1
+grg_w64_rel RING_OFF_FAULT RING_ERR_EPOCH_VIOLATION
+ret long -8
+end
+cpufence
+cur = grg_r64 RING_OFF_EPOCH_ID
+new_ep = add cur 1
+grg_w64 RING_OFF_EPOCH_ID new_ep
+new_gpu = and new_ep 1
+for i ulong n bound 8192
+if eq new_gpu 0
+put grg_w_bank1 i get grg_w_bank0 i
+else
+put grg_w_bank0 i get grg_w_bank1 i
+end
+end
+cpufence
+ret long new_ep
+end
+
+fn grg_epoch_chk_eq idx ulong want f64 to bool
+got = grg_epoch_read_gpu idx
+ret eq bitcast ulong got bitcast ulong want
+end
+
+fn grg_epoch_st_init to bool
+put grg_w_master 0 1.5f64
+put grg_w_master 1 -2.25f64
+put grg_w_master 2 3.75f64
+put grg_w_master 3 4.5f64
+grg_w64_rel RING_OFF_FAULT RING_ERR_NONE
+grg_epoch_init 4
+if ne grg_r64 RING_OFF_EPOCH_ID 0
+ret false
+end
+if ne grg_epoch_gpu_bank 0
+ret false
+end
+if ne grg_epoch_cpu_bank 1
+ret false
+end
+if not grg_epoch_chk_eq 0 1.5f64
+ret false
+end
+if not grg_epoch_chk_eq 1 -2.25f64
+ret false
+end
+if not grg_epoch_chk_eq 2 3.75f64
+ret false
+end
+ret grg_epoch_chk_eq 3 4.5f64
+end
+
+fn grg_epoch_st_midstep to int
+grg_epoch_begin_gpu_step
+if ne grg_epoch_stage_weight 1 99.5f64 0
+ret 1
+end
+if ne grg_epoch_stage_weight 3 -12.75f64 0
+ret 2
+end
+if ne grg_epoch_write_bank_guarded grg_epoch_cpu_bank 2 7.25f64 0
+ret 3
+end
+if not grg_epoch_chk_eq 0 1.5f64
+ret 4
+end
+if not grg_epoch_chk_eq 1 -2.25f64
+ret 5
+end
+if not grg_epoch_chk_eq 2 3.75f64
+ret 6
+end
+if not grg_epoch_chk_eq 3 4.5f64
+ret 7
+end
+if ne grg_epoch_write_bank_guarded grg_epoch_gpu_bank 0 123.0f64 -8
+ret 8
+end
+if ne grg_r64 RING_OFF_FAULT RING_ERR_EPOCH_VIOLATION
+ret 9
+end
+if not grg_epoch_chk_eq 0 1.5f64
+ret 10
+end
+grg_w64_rel RING_OFF_FAULT RING_ERR_NONE
+if ne grg_epoch_commit_step_boundary 4 -8
+ret 11
+end
+if ne grg_r64 RING_OFF_FAULT RING_ERR_EPOCH_VIOLATION
+ret 12
+end
+if ne grg_r64 RING_OFF_EPOCH_ID 0
+ret 13
+end
+ret 0
+end
+
+fn grg_epoch_st_commit to int
+grg_epoch_end_gpu_step
+if ne grg_epoch_commit_step_boundary 4 1
+ret 20
+end
+if ne grg_epoch_gpu_bank 1
+ret 21
+end
+if ne grg_epoch_cpu_bank 0
+ret 22
+end
+if not grg_epoch_chk_eq 0 1.5f64
+ret 23
+end
+if not grg_epoch_chk_eq 1 99.5f64
+ret 24
+end
+if not grg_epoch_chk_eq 2 7.25f64
+ret 25
+end
+if not grg_epoch_chk_eq 3 -12.75f64
+ret 26
+end
+if ne grg_epoch_stage_weight 0 88.0f64 0
+ret 27
+end
+if ne grg_epoch_commit_step_boundary 4 2
+ret 28
+end
+if not grg_epoch_chk_eq 0 88.0f64
+ret 29
+end
+if not grg_epoch_chk_eq 1 99.5f64
+ret 30
+end
+ret 0
+end
+
+fn grg_epoch_selftest to int
+if not grg_epoch_st_init
+ret 1
+end
+rc1 = grg_epoch_st_midstep
+if ne rc1 0
+ret rc1
+end
+rc2 = grg_epoch_st_commit
+if ne rc2 0
+ret rc2
+end
+grg_w64_rel RING_OFF_FAULT RING_ERR_NONE
+ret 0
+end
