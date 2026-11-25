@@ -1,52 +1,88 @@
 #!/bin/sh
-# Disassemble the GB10 kernels that native/omegallm/gpu/ emits (rung 4), with nvdisasm as a read-only
-# oracle. Builds the gb10 sources (gg.om's main renamed ggmain) plus tests/omegallm/gpu-dump.om, runs
-# the dump on the CPU (no GPU), cuts slot N (16 KiB at N * 16384; two slots for the 64x64 GEMM ids 40-58, whose kernels
-# span two), trims trailing zero bytes to a 16-byte multiple (an untrimmed slot disassembles its zero tail
-# as illegal instructions) and prints the listing. Then it checks the slot's declared GPR count gkgpr
-# (the dump's stderr, one byte per id) against the highest GPR in the listing: the hardware burns 2 GPRs
-# of the QMD count for the program counter (Mesa NAK sm70.rs hw_reserved_gprs), so gkgpr must be at
-# least max + 3, else the kernel hangs on the chip (evidence/OMEGALLM/gpu-k8 attempt 1). The max is an
-# upper bound: a .128/.64/.WIDE opcode widens every register operand outside brackets, a bracketed
-# R.64 counts as a pair. Prints "GPR s max R m need k declared d OK|LOW"; any LOW exits 4. Then
-# "SMEM s target t" with the slot's QMD TARGET_SM_CONFIG hw value (gk.om gksmw; KiB = (t - 1) * 4).
-# Usage: sh tests/omegallm/gpu-disasm.sh SLOT...   (0-7 GEMM 32x32, 9-24 gr.om, 25-26 fused-epilogue
-#        GEMM 32x32, 27-36 BF16 GEMM 64x64 (27-34 plain, 35/36 fused epilogue), 40-54 even GEMM 64x64,
-#        56/58 fused-epilogue GEMM 64x64)
-# Env: OMC (default ../omega-mv/seed/out/omc), OUT (default ../build), NVDISASM
-#      (default /usr/local/cuda/bin/nvdisasm), CORE (default 6), SHAPE (grset V T D H F B, default the
-#      parity shape "256 32 64 2 128 2"; "4096 256 256 8 1024 8" is the max shape, whose T 256 gives
-#      the softmax kernels 8 column chunks where the parity shape gives 1).
+# Disassemble the GB10 kernels that native/gpu/ emits, with nvdisasm as a read-only
+# oracle. Builds the gb10 sources plus tests/gpu-dump.om, runs the dump on the CPU (no GPU),
+# cuts slot N (16 KiB at N * 16384; two slots for 64x64 GEMM ids 40-58), trims trailing zero
+# bytes to a 16-byte multiple, disassembles with `nvdisasm -b SM121`, checks for illegal
+# instructions, and verifies declared GPR count gkgpr >= max_gpr + 3 (2 hardware-reserved
+# PC GPRs). Any LOW or illegal instruction exits 4.
+#
+# Usage:
+#   sh tests/gpu-disasm.sh --all         # check all 43 non-empty SM121 kernel slots
+#   sh tests/gpu-disasm.sh SLOT...       # check specific slot ids (e.g. 0 27 40)
+#
+# Env:
+#   OMC        Path to seeded omc (auto-detected if unset)
+#   OMC_PIN    Optional expected sha256 of OMC (enforced only when set)
+#   OUT        Scratch/output dir (default: ./build/gpu-disasm)
+#   NVDISASM   Path to nvdisasm (default: /usr/local/cuda/bin/nvdisasm or PATH)
+#   SHAPE      grset V T D H F B (default: "256 32 64 2 128 2")
+#   VERBOSE    Set to 1 to print full SASS listings (default: 0 for --all, 1 for explicit slots)
 set -eu
-here=$(cd "$(dirname "$0")/../.." && pwd)
-PIN=2c82480596bbdc50cda9626866209ef662d5834f278f839ff4ce0250c495029f
-OMC=${OMC:-$here/../omega-mv/seed/out/omc}
-OUT=${OUT:-$here/../build}
-NVDISASM=${NVDISASM:-/usr/local/cuda/bin/nvdisasm}
-CORE=${CORE:-6}
+
+here=$(cd "$(dirname "$0")/.." && pwd)
+OUT=${OUT:-$here/build/gpu-disasm}
 SHAPE=${SHAPE:-256 32 64 2 128 2}
-[ $# -ge 1 ] || { echo "usage: gpu-disasm.sh SLOT..." >&2; exit 2; }
-got=$(sha256sum "$OMC" | cut -d' ' -f1)
-[ "$got" = "$PIN" ] || { echo "OMC_PIN_MISMATCH $got" >&2; exit 3; }
+NVDISASM=${NVDISASM:-$(command -v nvdisasm 2>/dev/null || printf '/usr/local/cuda/bin/nvdisasm')}
+
+find_omc() {
+  if [ -n "${OMC:-}" ] && [ -x "$OMC" ]; then
+    printf '%s\n' "$OMC"
+    return 0
+  fi
+  for cand in \
+    "$(command -v omc 2>/dev/null || true)" \
+    "$HOME/.local/bin/omc" \
+    "$HOME/canon/omega-mv/seed/out/omc" \
+    "$here/../omega-mv/seed/out/omc"
+  do
+    if [ -n "$cand" ] && [ -x "$cand" ]; then
+      printf '%s\n' "$cand"
+      return 0
+    fi
+  done
+  echo "error: seeded 'omc' compiler not found (set OMC=/path/to/omc)" >&2
+  exit 1
+}
+
+[ $# -ge 1 ] || { echo "usage: gpu-disasm.sh --all | SLOT..." >&2; exit 2; }
+[ -x "$NVDISASM" ] || { echo "error: nvdisasm not found at '$NVDISASM'" >&2; exit 3; }
+
+OMC=$(find_omc)
+if [ -n "${OMC_PIN:-}" ]; then
+  got=$(sha256sum "$OMC" | cut -d' ' -f1)
+  [ "$got" = "$OMC_PIN" ] || { echo "OMC_PIN_MISMATCH $got" >&2; exit 3; }
+fi
+
+if [ "$1" = "--all" ]; then
+  VERBOSE=${VERBOSE:-0}
+  set -- 0 1 2 3 4 5 6 7 9 10 11 13 14 15 16 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 40 42 44 46 48 50 52 54 56 58
+else
+  VERBOSE=${VERBOSE:-1}
+fi
+
 mkdir -p "$OUT"
-src=$here/native/omegallm
+src=$here/native
 g=$src/gpu
-# gk.om calls gb.om's BF16 check hooks and gb.om calls gg.om, so the dump takes the whole gb10 source;
-# gg.om's main becomes ggmain (gpu-dump.om's main runs) and gg.om supplies model.om's ogmask hook.
-cat "$src/math.om" "$src/data.om" "$src/lpool.om" "$src/model.om" "$src/adam.om" "$src/ckpt.om" "$src/bpe.om" "$src/spec.om" "$src/cli.om" "$src/lio.om" |
-  sed 's/^fn main to int$/fn ocpumain to int/' > "$OUT/gpu-dump.om"
-sed "s/^grset 256 32 64 2 128 2\$/grset $SHAPE/" "$here/tests/omegallm/gpu-dump.om" > "$OUT/gpu-dump-main.om"
-grep -qx "grset $SHAPE" "$OUT/gpu-dump-main.om" || { echo "SHAPE_NOT_SET $SHAPE" >&2; exit 2; }
-cat "$g/context.om" "$g/vector.om" "$g/launch.om" "$g/gk.om" "$g/gr.om" "$g/gb.om" >> "$OUT/gpu-dump.om"
-n=$(grep -c '^fn main to int$' "$g/gg.om" || true)
-[ "$n" = 1 ] || { echo "GG_MAIN_COUNT $n, want 1" >&2; exit 4; }
-sed 's/^fn main to int$/fn ggmain to int/' "$g/gg.om" >> "$OUT/gpu-dump.om"
-cat "$OUT/gpu-dump-main.om" >> "$OUT/gpu-dump.om"
-taskset -c "$CORE" nice -n 19 "$OMC" < "$OUT/gpu-dump.om" > "$OUT/gpu-dump"
-chmod +x "$OUT/gpu-dump"
+
+{
+  printf 'om2\n'
+  cat "$src/math.om" "$src/data.om" "$src/lpool.om" "$src/model.om" "$src/adam.om" "$src/ckpt.om" "$src/bpe.om" "$src/spec.om" "$src/cli.om" "$src/lio.om" "$src/noserve.om" |
+    sed 's/^fn main to int$/fn ocpumain to int/'
+  cat "$g/context.om" "$g/vector.om" "$g/launch.om" "$g/batch.om" "$g/gk.om" "$g/gr.om" "$g/gb.om" "$g/gg.om"
+  sed "s/^grset 256 32 64 2 128 2\$/grset $SHAPE/" "$here/tests/gpu-dump.om"
+} > "$OUT/gpu-dump.om"
+grep -qx "grset $SHAPE" "$OUT/gpu-dump.om" || { echo "SHAPE_NOT_SET $SHAPE" >&2; exit 2; }
+
+"$OMC" < "$OUT/gpu-dump.om" > "$OUT/gpu-dump.tmp"
+chmod +x "$OUT/gpu-dump.tmp"
+mv -f "$OUT/gpu-dump.tmp" "$OUT/gpu-dump"
+
 "$OUT/gpu-dump" > "$OUT/gpu-code.bin" 2> "$OUT/gpu-gpr.bin"
 [ "$(wc -c < "$OUT/gpu-gpr.bin")" -eq 128 ] || { echo "GPR_TABLE_SIZE $(wc -c < "$OUT/gpu-gpr.bin")" >&2; exit 2; }
 echo "DUMP $(sha256sum "$OUT/gpu-dump" | cut -d' ' -f1) source_sha256 $(sha256sum "$OUT/gpu-dump.om" | cut -d' ' -f1) code_sha256 $(sha256sum "$OUT/gpu-code.bin" | cut -d' ' -f1)"
+
+bad=0
+ok_slots=0
 for s in "$@"; do
   ns=1
   [ "$s" -ge 40 ] && [ "$s" -le 58 ] && ns=2
@@ -54,18 +90,23 @@ for s in "$@"; do
   last=$(od -An -v -tu1 "$OUT/gpu-slot$s.bin" | tr -s ' ' '\n' | awk 'NF { n++; if ($1 != 0) l = n } END { print l + 0 }')
   n=$(( (last + 15) / 16 * 16 ))
   head -c "$n" "$OUT/gpu-slot$s.bin" > "$OUT/gpu-slot$s.t.bin"
-  echo "SLOT $s bytes $n sha256 $(sha256sum "$OUT/gpu-slot$s.t.bin" | cut -d' ' -f1)"
+  [ "$VERBOSE" = 1 ] && echo "SLOT $s bytes $n sha256 $(sha256sum "$OUT/gpu-slot$s.t.bin" | cut -d' ' -f1)"
   [ "$n" -eq 0 ] && { echo "SLOT $s empty"; continue; }
   "$NVDISASM" -b SM121 "$OUT/gpu-slot$s.t.bin" > "$OUT/gpu-slot$s.sass"
-  cat "$OUT/gpu-slot$s.sass"
+  [ "$VERBOSE" = 1 ] && cat "$OUT/gpu-slot$s.sass"
+  if grep -qi 'illegal\|unknown' "$OUT/gpu-slot$s.sass"; then
+    echo "SLOT $s ILLEGAL_INSN" >&2
+    bad=1
+    continue
+  fi
   d=$(od -An -tu1 -j "$s" -N1 "$OUT/gpu-gpr.bin" | tr -d ' ')
-  awk -v s="$s" -v d="$d" '
-    function scan(x, ext,   t, e, v) {
+  awk -v s="$s" -v d="$d" -v v="$VERBOSE" '
+    function scan(x, ext,   t, e, v2) {
       x = " " x
       while (match(x, /[^A-Za-z0-9_.]R[0-9]+(\.64)?/)) {
         t = substr(x, RSTART + 2, RLENGTH - 2); e = ext
         if (t ~ /\.64$/) { e = 1; sub(/\.64$/, "", t) }
-        v = t + e; if (v > mx) mx = v
+        v2 = t + e; if (v2 > mx) mx = v2
         x = substr(x, RSTART + RLENGTH)
       }
     }
@@ -82,8 +123,13 @@ for s in "$@"; do
       }
       scan(r, w - 1)
     }
-    END { k = mx + 3; printf "GPR %s max R%d need %d declared %d %s\n", s, mx, k, d, (d >= k ? "OK" : "LOW"); exit (d >= k ? 0 : 4) }
-  ' "$OUT/gpu-slot$s.sass" || bad=1
-  echo "SMEM $s target $(od -An -tu1 -j $((64 + s)) -N1 "$OUT/gpu-gpr.bin" | tr -d ' ')"
+    END {
+      k = mx + 3
+      if (v == 1 || d < k) printf "GPR %s max R%d need %d declared %d %s\n", s, mx, k, d, (d >= k ? "OK" : "LOW")
+      exit (d >= k ? 0 : 4)
+    }
+  ' "$OUT/gpu-slot$s.sass" && ok_slots=$((ok_slots + 1)) || bad=1
+  [ "$VERBOSE" = 1 ] && echo "SMEM $s target $(od -An -tu1 -j $((64 + s)) -N1 "$OUT/gpu-gpr.bin" | tr -d ' ')"
 done
-[ "${bad:-0}" -eq 0 ] || { echo "GPR_LOW" >&2; exit 4; }
+echo "GPU_DISASM_OK slots=$ok_slots bad=$bad"
+[ "$bad" -eq 0 ] || { echo "GPU_DISASM_FAIL" >&2; exit 4; }

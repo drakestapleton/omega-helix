@@ -55,7 +55,8 @@ Rather than stopping at flat single-layer bundles, `.om` specialists are organiz
 | Full M2 CPU multi-link chain training (`om-core` -> `aienux-kernel` -> `gb20b-mmio` / `libos-rpc`) | `NOT_RUN` | Exact chain recipes specified below; only dataset splits + `fcachem` compatibility exercised here |
 | Pure-Omega `spchainapp` / `spchaineval` / `spchainsamp` / `spclip` (`S=2..4`) execution on trained `.om` chains | `NOT_RUN` | Engine verbs implemented in parallel branch `feat/ollm-chain-clip`; `.om` chain weights not yet trained |
 | Sticky-end ligase bridge pack training (`L -> L+1`) | `NOT_RUN` | Architectural recipe documented below |
-| On-chip GB10 frozen-core specialist training & GB10 decode throughput | `NOT_RUN` | Frozen-core GPU training is not yet implemented in `native/omegallm/gpu/gg.om` (CPU-only via `trainf`/`trainfc`); full-chip `gtrainf`/`gtrainb` mutates base layers and requires an authorized `spark-window` |
+| On-chip GB10 frozen-core specialist training (`grow`/`growpro` -> `gtrainf`/`gtrainb` `FREEZE_LAYERS` -> `spext`/`spapp`) | `EXERCISED` | DGX Spark GB10 (`spark-window` `--gb10 shared --quiet none`), `tests/test_gpu_spec_loop.sh` (`gcmp` `GCF 2 86272 0`, `gacmp` `GAF 2 86272 0`, FP32 + BF16 round-trip, `OMUTFZ=0` mutants) |
+| Linux `x86linux` & UEFI (`x86efi`/`a64efi`) `growpro`/`trainf`/`spext`/`spapp`/`spclip` | `EXERCISED` | Emulated on Spark via `qemu-x86_64`, `qemu-system-x86_64` + OVMF, and `qemu-system-aarch64` + KVM + AAVMF (physical bare-metal x86 hardware `NOT_RUN`) |
 | Aienux / GB20B live inference & hardware-in-the-loop coding | `NOT_RUN` | Requires authorized hardware window; no GPU or Aienux runtime touched |
 
 ## 4. Measured Local `.om` Corpus Inventory

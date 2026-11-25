@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")"
-root=$(cd ../../../.. && pwd)
+root=$(cd ../.. && pwd)
 out=${OUT:-$root/build/omega-controller}
-omc=${OMC:-$root/seed/out/omc}
+if [[ -z "${OMC:-}" ]]; then
+  for cand in "$(command -v omc 2>/dev/null || true)" "$HOME/.local/bin/omc" "$HOME/canon/omega-mv/seed/out/omc" "$root/../omega-mv/seed/out/omc"; do
+    if [[ -n "$cand" && -x "$cand" ]]; then OMC="$cand"; break; fi
+  done
+fi
+omc=${OMC:?error: set OMC=/path/to/omc}
 mkdir -p "$out"
 driver=$out/driver.om
 grader=$out/grader.om
@@ -19,13 +24,13 @@ compile() {
 compile normalize "$driver" normalize.om
 compile train "$driver" policy.om policy-train.om
 compile train-second "$driver" policy.om second.om train-second.om
-compile controller "$driver" "$root/seed/json/json.om" "$grader" ../contrast/read.om policy.om second.om controller.om
-compile resident "$driver" "$root/seed/net/http.om" "$root/seed/net/notls.om" "$root/seed/json/json.om" resident.om
-compile grade "$driver" "$root/seed/json/json.om" ../contrast/grade.om
+compile controller "$driver" "$root/native/net/json.om" "$grader" ../contrast/read.om policy.om second.om controller.om
+compile resident "$driver" "$root/native/net/http.om" "$root/native/net/notls.om" "$root/native/net/json.om" resident.om
+compile grade "$driver" "$root/native/net/json.om" ../contrast/grade.om
 for data in training second-training second-augmented-training; do
   xxd -r -p "calibration/$data.hex" >"$out/$data.bin"
 done
 "$out/train" "$out/training.bin" >"$out/controller.ck"
 "$out/train-second" "$out/second-training.bin" >"$out/second.ck"
 "$out/train-second" "$out/second-augmented-training.bin" >"$out/second-augmented.ck"
-(cd "$out" && sha256sum -c "$root/train/omega-llm/tools/controller/calibration/checkpoints.sha256")
+(cd "$out" && sha256sum -c "$root/tools/controller/calibration/checkpoints.sha256")

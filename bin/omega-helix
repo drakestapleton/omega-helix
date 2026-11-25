@@ -1,0 +1,50 @@
+#!/bin/sh
+# omega-helix: CLI entrypoint. Finds the install root, then runs the Studio CLI
+# (python3 -m studio.cli). No arguments opens the Studio.
+set -eu
+
+# Resolve this script's real location (follow symlinks, POSIX only).
+self=$0
+while [ -L "$self" ]; do
+  d=$(cd "$(dirname "$self")" && pwd)
+  t=$(readlink "$self")
+  case $t in /*) self=$t ;; *) self=$d/$t ;; esac
+done
+here=$(cd "$(dirname "$self")" && pwd)
+
+root=
+if [ -n "${OMEGA_HELIX_HOME:-}" ]; then
+  root=$OMEGA_HELIX_HOME
+elif [ -f "$here/../tools/studio/cli.py" ] || [ -d "$here/../tools/studio" ]; then
+  root=$(cd "$here/.." && pwd)            # installed opt/omega-helix, or repo checkout
+elif [ -d "$here/../opt/omega-helix/tools" ]; then
+  root=$(cd "$here/../opt/omega-helix" && pwd)   # adjacent <PREFIX>/opt/omega-helix
+else
+  g=$(git -C "$here" rev-parse --show-toplevel 2>/dev/null || true)
+  [ -n "$g" ] && [ -d "$g/tools" ] && root=$g
+fi
+if [ -z "$root" ] || [ ! -d "$root/tools" ]; then
+  echo "omega-helix: cannot find the Omega Helix install (set OMEGA_HELIX_HOME=/path/to/omega-helix)" >&2
+  exit 1
+fi
+
+command -v python3 >/dev/null 2>&1 || {
+  echo "omega-helix: python3 is required for the Studio CLI" >&2
+  exit 1
+}
+
+# Where chain_runner.py finds ollm-* binaries: installed bin/, else repo build/.
+if [ -z "${OMEGA_HELIX_BIN_DIR:-}" ]; then
+  if ls "$root"/bin/ollm* >/dev/null 2>&1; then OMEGA_HELIX_BIN_DIR=$root/bin
+  elif [ -d "$root/build" ]; then OMEGA_HELIX_BIN_DIR=$root/build
+  else OMEGA_HELIX_BIN_DIR=$root/bin
+  fi
+fi
+export OMEGA_HELIX_BIN_DIR
+export OMEGA_HELIX_HOME=$root
+PYTHONPATH=$root/tools${PYTHONPATH:+:$PYTHONPATH}
+export PYTHONPATH
+export PYTHONDONTWRITEBYTECODE=1
+
+[ $# -gt 0 ] || set -- studio
+exec python3 -m studio.cli "$@"

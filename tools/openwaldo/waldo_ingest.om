@@ -1,0 +1,409 @@
+note SPDX-License-Identifier: Apache-2.0
+note tools/openwaldo/waldo_ingest.om: Pure seeded-Omega OpenWALDO JSONL -> Omega Helix corpus ingestor.
+note Compose after native/net/json.om:
+note   TARGET=openwaldo sh scripts/build.sh
+note
+note Usage:
+note   ollm-waldo IN.jsonl TRAIN_OUT HELD_OUT [HELD_MOD]
+note
+note Reads canonical OpenWALDO schema-1 JSONL lines (produced by `waldo index export --format jsonl`),
+note strictly validates each RFC 8259 JSON record (`sha256`, `kind`, `text`, `source`, `license`),
+note renders `pretrain` text verbatim and `conversation` messages as `role: content\n` (matching
+note native/serve.om), terminates every document with NUL (0x00), and splits every HELD_MOD-th record
+note (default 10: i mod 10 == 9 -> HELD_OUT; 0 disables held split) into TRAIN_OUT and HELD_OUT.
+note
+note Stdout: W <total_docs> <train_docs> <held_docs> <train_bytes> <held_bytes>
+note Exit codes:
+note   0  ok
+note   2  usage error
+note  21  malformed JSON or line exceeds 983040 bytes
+note  22  OpenWALDO schema refusal (missing/bad sha256, kind, text, source, or license)
+note  23  invalid conversation payload (missing/empty messages, role, or content)
+note  70  I/O error
+
+text wk_sha "sha256"
+text wk_kind "kind"
+text wk_text "text"
+text wk_src "source"
+text wk_lic "license"
+text wk_pre "pretrain"
+text wk_conv "conversation"
+text wk_msgs "messages"
+text wk_role "role"
+text wk_cont "content"
+text wk_sep ": "
+text wk_nl "\n"
+
+global wrbuf uchar 65536
+global wpath uchar 4096
+global wzero uchar 1
+global wout uchar 256
+global won ulong 1
+global wst ulong 8
+global wfd int 4
+global wlen ulong 1
+
+fn woputc c ulong to void
+n = get won 0
+if ge n 256
+exit 70
+end
+put wout n uchar c
+put won 0 add n 1
+end
+
+fn woputu v ulong to void
+if eq v 0
+woputc 48
+ret
+end
+buf = new uchar 24 0
+k = ulong 0
+x = v
+while gt x 0 bound 24
+d = rem x 10
+put buf k uchar add 48 d
+x = div x 10
+k = add k 1
+end
+for i ulong k
+woputc ulong get buf sub sub k 1 i
+end
+end
+
+fn woflush to void
+n = get won 0
+p = ulong 0
+while lt p n bound 257
+w = write 1 wout p sub n p
+if le w 0
+exit 70
+end
+p = add p ulong w
+end
+put won 0 0
+end
+
+fn wwriteall fd int buf view uchar * n ulong to void
+p = ulong 0
+while lt p n bound 999999
+w = write fd buf p sub n p
+if le w 0
+exit 70
+end
+p = add p ulong w
+end
+end
+
+fn wwritez fd int to void
+w = write fd wzero 0 1
+if ne w 1
+exit 70
+end
+end
+
+fn wargp i ulong to ulong
+r = argread i wpath 0 4096
+if or le r 0 gt r 4096
+exit 2
+end
+ret ulong r
+end
+
+fn wargu i ulong to ulong
+n = wargp i
+if gt n 19
+exit 2
+end
+v = ulong 0
+for k ulong n
+c = ulong get wpath k
+if or lt c 48 gt c 57
+exit 2
+end
+v = add mul v 10 sub c 48
+end
+ret v
+end
+
+fn w_ishex c ulong to bool
+if and ge c 48 le c 57
+ret true
+end
+if and ge c 97 le c 102
+ret true
+end
+ret false
+end
+
+fn w_check_sha wline view uchar * off ulong wtmp edit uchar * to bool
+n = js_sget wline off wtmp
+if ne n 64
+ret false
+end
+for i ulong 64
+if not w_ishex ulong get wtmp i
+ret false
+end
+end
+ret true
+end
+
+fn w_pick_stream to ulong
+hm = get wst 5
+if eq hm 0
+ret 0
+end
+tot = get wst 0
+if eq rem tot hm sub hm 1
+ret 1
+end
+ret 0
+end
+
+fn w_obj_str src view uchar * tp view uint 65536 obj ulong key view uchar * to ulong
+kk = js_first tp obj
+while ne kk jsnone bound 65536
+koff = js_off tp kk
+if js_streq src koff key
+vt = add kk 1
+if eq js_type tp vt jsstr
+ret js_off tp vt
+end
+ret jsnone
+end
+kk = js_mnext tp kk
+end
+ret jsnone
+end
+
+fn w_obj_val src view uchar * tp view uint 65536 obj ulong key view uchar * to ulong
+kk = js_first tp obj
+while ne kk jsnone bound 65536
+koff = js_off tp kk
+if js_streq src koff key
+ret add kk 1
+end
+kk = js_mnext tp kk
+end
+ret jsnone
+end
+
+fn w_emit_msg fd int el ulong wtext view uchar * tp view uint 65536 to ulong
+if ne js_type tp el jsobj
+exit 23
+end
+roff = w_obj_str wtext tp el wk_role
+coff = w_obj_str wtext tp el wk_cont
+if or eq roff jsnone eq coff jsnone
+exit 23
+end
+wtmp = new uchar 983040 0
+rlen = js_sget wtext roff wtmp
+if le rlen 0
+exit 23
+end
+wwriteall fd wtmp ulong rlen
+wwriteall fd wk_sep 2
+clen = js_sget wtext coff wtmp
+if le clen 0
+exit 23
+end
+wwriteall fd wtmp ulong clen
+wwriteall fd wk_nl 1
+ret add add ulong rlen ulong clen 3
+end
+
+fn w_emit_conv k ulong tlen ulong wtext view uchar * to ulong
+tp = new uint 65536 0
+if lt js_init tp jsmaxn 64 0
+exit 23
+end
+if le js_parse wtext tp tlen 0
+exit 23
+end
+if ne js_type tp 0 jsobj
+exit 23
+end
+marr = w_obj_val wtext tp 0 wk_msgs
+if or eq marr jsnone ne js_type tp marr jsarr
+exit 23
+end
+if eq js_nkids tp marr 0
+exit 23
+end
+fd = get wfd add 1 k
+written = ulong 0
+el = js_first tp marr
+while ne el jsnone bound 65536
+written = add written w_emit_msg fd el wtext tp
+el = js_enext tp el
+end
+wwritez fd
+ret add written 1
+end
+
+fn w_check_nonempty wline view uchar * tp view uint 65536 key view uchar * wtmp edit uchar 983040 to void
+off = w_obj_str wline tp 0 key
+if eq off jsnone
+exit 22
+end
+if le js_sget wline off wtmp 0
+exit 22
+end
+end
+
+fn w_emit_doc is_pre bool tlen ulong wtmp view uchar * to void
+k = w_pick_stream
+bytes = ulong 0
+if is_pre
+fd = get wfd add 1 k
+wwriteall fd wtmp tlen
+wwritez fd
+bytes = add tlen 1
+else
+bytes = w_emit_conv k tlen wtmp
+end
+put wst 0 add get wst 0 1
+put wst add 1 k add get wst add 1 k 1
+put wst add 3 k add get wst add 3 k bytes
+end
+
+fn w_process_line ln ulong wline view uchar * to void
+if eq ln 0
+ret
+end
+tp = new uint 65536 0
+if lt js_init tp jsmaxn 64 0
+exit 21
+end
+if le js_parse wline tp ln 0
+exit 21
+end
+if ne js_type tp 0 jsobj
+exit 21
+end
+wtmp = new uchar 983040 0
+sha_off = w_obj_str wline tp 0 wk_sha
+if eq sha_off jsnone
+exit 22
+end
+if not w_check_sha wline sha_off wtmp
+exit 22
+end
+w_check_nonempty wline tp wk_src wtmp
+w_check_nonempty wline tp wk_lic wtmp
+kind_off = w_obj_str wline tp 0 wk_kind
+if eq kind_off jsnone
+exit 22
+end
+is_pre = js_streq wline kind_off wk_pre
+if and not is_pre not js_streq wline kind_off wk_conv
+exit 22
+end
+text_off = w_obj_str wline tp 0 wk_text
+if eq text_off jsnone
+exit 22
+end
+tlen = js_sget wline text_off wtmp
+if le tlen 0
+exit 22
+end
+w_emit_doc is_pre ulong tlen wtmp
+end
+
+fn w_feed_buf n ulong wline edit uchar * to void
+ln = get wlen 0
+for i ulong n
+c = get wrbuf i
+if eq c 10
+if gt ln 0
+if eq get wline sub ln 1 13
+ln = sub ln 1
+end
+end
+w_process_line ln wline
+ln = ulong 0
+else
+if ge ln jsmaxn
+exit 21
+end
+put wline ln c
+ln = add ln 1
+end
+end
+put wlen 0 ln
+end
+
+fn main to int
+na = ulong argcnt
+if and ne na 4 ne na 5
+exit 2
+end
+hm = ulong 10
+if eq na 5
+hm = wargu 4
+end
+put wst 5 hm
+put wzero 0 0
+n1 = wargp 1
+in_fd = int fopen wpath 0 n1 0 0
+if lt in_fd 0
+exit 70
+end
+n2 = wargp 2
+tr_fd = int fopen wpath 0 n2 577 420
+if lt tr_fd 0
+exit 70
+end
+n3 = wargp 3
+he_fd = int fopen wpath 0 n3 577 420
+if lt he_fd 0
+exit 70
+end
+put wfd 0 in_fd
+put wfd 1 tr_fd
+put wfd 2 he_fd
+wline = new uchar 983040 0
+dn = false
+for outer ulong 999999
+if dn
+break
+end
+for inner ulong 999999
+r = read in_fd wrbuf 0 65536
+if lt r 0
+exit 70
+end
+if eq r 0
+dn = true
+break
+end
+w_feed_buf ulong r wline
+end
+end
+ln = get wlen 0
+if gt ln 0
+if eq get wline sub ln 1 13
+ln = sub ln 1
+end
+w_process_line ln wline
+end
+if ne fclose in_fd 0
+exit 70
+end
+if ne fclose tr_fd 0
+exit 70
+end
+if ne fclose he_fd 0
+exit 70
+end
+woputc 87
+for j ulong 5
+woputc 32
+woputu get wst j
+end
+woputc 10
+woflush
+ret 0
+end

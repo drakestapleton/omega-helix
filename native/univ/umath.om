@@ -1,0 +1,331 @@
+note SPDX-License-Identifier: Apache-2.0
+note native/univ/umath.om: First-party f64 exp, log, sin, cos, silu, gelu, IEEE-754 bf16/f16/f32
+note converters, splitmix64, FNV-1a 64, and buffered stdout for Omega Helix Universal (OLLMCK04).
+note All math constants verified via WolframLanguageEvaluator (2026-11-25).
+
+const UMOUT ulong 4096
+global uout uchar 4096
+global uon ulong 1
+
+note ug: universal geometry & config slots (64 ulongs)
+note  0 V   1 T   2 D   3 H   4 H_kv  5 F   6 L   7 B
+note  8 E=D/H   9 KVD=H_kv*E   10 P   11 LV (layer apps)
+note  12 arch_flags (1=RoPE, 2=SwiGLU, 4=untied_lm, 8=QK_norm, 16=AdamW_cos, 32=GELU, 64=GeGLU)
+note  13 rope_theta_milli   14 rms_eps_bits   15 wd_bits   16 warmup
+note  17 LP   18 LC   19 NP   20 seed   21 step   22 total   23 lr_bits
+note  24 CT (active context len <= T)   25 tok_bytes (1=u8, 2=u16, 4=u32)   26 data_arg   27 data_N
+note  28 has_rope   29 is_gated   30 has_untied   31 has_qknorm
+note  32 WPE_OFF   33 LAY0   34 LSTR   35 GF_OFF   36 LMH_OFF
+note  37 ASTR (per-app activation stride)   38 PSTR (H*T*T)
+note  39 ACT_HF   40 ACT_SF   41 ACT_Z   42 ACT_PR   43 ACT_DH   44 ACT_DA
+note  45 ACT_DQ   46 ACT_DK   47 ACT_DV   48 ACT_DO   49 ACT_DZ   50 ACT_DF1   51 ACT_DF2   52 ACT_END
+note  53 per-layer field offsets: wq=D, wk=D+D*D, wv=wk+D*KVD, wo=wv+D*KVD
+note  54 O_QN (rel to layer)   55 O_KN   56 O_G2   57 O_W1   58 O_WUP   59 O_W2
+note  60 magic_ver (4=OLLMCK04)   61 freeze_layers (for growpro/trainf; 0=none)
+global ug ulong 64
+
+fn usmx x ulong to ulong
+z = add x 11400714819323198485
+z = mul xor z shr z 30 13787848793156543929
+z = mul xor z shr z 27 10723151780598845931
+ret xor z shr z 31
+end
+
+fn ufexp x f64 to f64
+if ne x x
+ret x
+end
+if gt x 709.782712893384
+ret bitcast f64 ulong 9218868437227405312
+end
+if lt x -745.1332191019412
+ret 0.0f64
+end
+kf = mul x 1.4426950408889634
+if ge kf 0.0
+kf = add kf 0.5
+else
+kf = sub kf 0.5
+end
+k = long kf
+fk = f64 k
+r = sub sub x mul fk 0.6931471803691238 mul fk 1.9082149292705877e-10
+p = add mul r 1.6059043836821613e-10 2.08767569878681e-9
+p = add mul p r 2.505210838544172e-8
+p = add mul p r 2.755731922398589e-7
+p = add mul p r 2.7557319223985893e-6
+p = add mul p r 0.0000248015873015873
+p = add mul p r 0.0001984126984126984
+p = add mul p r 0.001388888888888889
+p = add mul p r 0.008333333333333333
+p = add mul p r 0.041666666666666664
+p = add mul p r 0.16666666666666666
+p = add mul p r 0.5
+p = add mul p r 1.0
+p = add mul p r 1.0
+k1 = div k 2
+k2 = sub k k1
+s1 = bitcast f64 shl ulong add k1 1023 52
+s2 = bitcast f64 shl ulong add k2 1023 52
+ret mul mul p s1 s2
+end
+
+fn uflog x f64 to f64
+if ne x x
+ret x
+end
+if lt x 0.0
+ret bitcast f64 ulong 9221120237041090560
+end
+if eq x 0.0
+ret bitcast f64 ulong 18442240474082181120
+end
+b = bitcast ulong x
+if eq b 9218868437227405312
+ret x
+end
+e = long 0
+if lt b 4503599627370496
+b = bitcast ulong mul x 18014398509481984.0
+e = long -54
+end
+e = add e sub long shr b 52 1023
+m = bitcast f64 or and b 4503599627370495 4607182418800017408
+if gt m 1.4142135623730951
+m = mul m 0.5
+e = add e 1
+end
+f = sub m 1.0
+s = div f add f 2.0
+z = mul s s
+q = add mul z 0.043478260869565216 0.047619047619047616
+q = add mul q z 0.05263157894736842
+q = add mul q z 0.058823529411764705
+q = add mul q z 0.06666666666666667
+q = add mul q z 0.07692307692307693
+q = add mul q z 0.09090909090909091
+q = add mul q z 0.1111111111111111
+q = add mul q z 0.14285714285714285
+q = add mul q z 0.2
+q = add mul q z 0.3333333333333333
+q = add mul q z 1.0
+lm = mul add s s q
+fe = f64 e
+ret add mul fe 0.6931471803691238 add lm mul fe 1.9082149292705877e-10
+end
+
+note sin(r) for |r| <= pi/4 (Wolfram Taylor coefficients 1/3!..1/15!)
+fn ufsin_p r f64 to f64
+z = mul r r
+p = add mul z -7.647163731819816e-13 1.6059043836821614e-10
+p = add mul p z -2.505210838544172e-8
+p = add mul p z 2.755731922398589e-6
+p = add mul p z -0.0001984126984126984
+p = add mul p z 0.008333333333333333
+p = add mul p z -0.16666666666666666
+ret add r mul mul r z p
+end
+
+note cos(r) for |r| <= pi/4 (Wolfram Taylor coefficients 1/2!..1/14!)
+fn ufcos_p r f64 to f64
+z = mul r r
+p = add mul z -1.1470745597729724e-11 2.0876756987868098e-9
+p = add mul p z -2.7557319223985893e-7
+p = add mul p z 0.0000248015873015873
+p = add mul p z -0.0013888888888888889
+p = add mul p z 0.041666666666666664
+p = add mul p z -0.5
+ret add 1.0 mul z p
+end
+
+note Cody-Waite range reduction x = k*(pi/2) + r, |r| <= pi/4; mode 0 = sin, mode 1 = cos
+fn uftrig x f64 mode ulong to f64
+kf = mul x 0.63661977236758134
+if ge kf 0.0
+kf = add kf 0.5
+else
+kf = sub kf 0.5
+end
+k = long kf
+fk = f64 k
+r = sub sub x mul fk 1.5707963267341256 mul fk 6.0771005065061926e-11
+q = and ulong add k long mode 3
+if eq q 0
+ret ufsin_p r
+end
+if eq q 1
+ret ufcos_p r
+end
+if eq q 2
+ret neg ufsin_p r
+end
+ret neg ufcos_p r
+end
+
+fn ufsin x f64 to f64
+ret uftrig x 0
+end
+
+fn ufcos x f64 to f64
+ret uftrig x 1
+end
+
+note sigmoid(x) = 1 / (1 + exp(-x)), numerically stable for all x
+fn ufsig x f64 to f64
+if ge x 0.0
+ret div 1.0 add 1.0 ufexp neg x
+end
+e = ufexp x
+ret div e add 1.0 e
+end
+
+note tanh(x) numerically stable
+fn uftanh x f64 to f64
+if gt x 20.0
+ret 1.0
+end
+if lt x -20.0
+ret -1.0
+end
+e = ufexp mul 2.0 x
+ret div sub e 1.0 add e 1.0
+end
+
+note GELU(x) = 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3)))
+fn ufgelu x f64 to f64
+c = mul 0.79788456080286536 add x mul 0.044715 mul mul x x x
+ret mul 0.5 mul x add 1.0 uftanh c
+end
+
+note d/dx GELU(x) (Wolfram-verified)
+fn ufgelu_d x f64 to f64
+x2 = mul x x
+c = mul 0.79788456080286536 add x mul 0.044715 mul x2 x
+th = uftanh c
+sech2 = sub 1.0 mul th th
+dc = mul 0.79788456080286536 add 1.0 mul 0.134145 x2
+ret add mul 0.5 add 1.0 th mul mul 0.5 x mul sech2 dc
+end
+
+note IEEE-754 binary16 (u16 bits) -> f64 (handles normal, subnormal, zero, inf, NaN)
+fn uf16_to_f64 h ulong to f64
+sgn = shl and shr h 15 1 63
+exp = and shr h 10 31
+man = and h 1023
+if eq exp 0
+if eq man 0
+ret bitcast f64 sgn
+end
+v = mul f64 man 5.9604644775390625e-8
+if ne sgn 0
+ret neg v
+end
+ret v
+end
+if eq exp 31
+if eq man 0
+ret bitcast f64 or sgn 9218868437227405312
+end
+ret bitcast f64 or sgn 9221120237041090560
+end
+e64 = add sub exp 15 1023
+ret bitcast f64 or sgn or shl e64 52 shl man 42
+end
+
+note BF16 (u16 bits) -> f64 (exact widening via f32)
+fn ubf16_to_f64 b ulong to f64
+uw = uint shl and b 65535 16
+ret f64 bitcast f32 uw
+end
+
+note f64 -> BF16 (u16 bits, round-to-nearest-even)
+fn uf64_to_bf16 v f64 to ulong
+bits = ulong bitcast uint f32 v
+exp = and shr bits 23 255
+if eq exp 255
+if ne and bits 8388607 0
+ret or shr bits 16 64
+end
+ret shr bits 16
+end
+lsb = and shr bits 16 1
+rb = add 32767 lsb
+ret and shr add bits rb 16 65535
+end
+
+fn urmic v f64 to long
+x = mul v 1000000.0
+q = long x
+fr = sub x f64 q
+if ge fr 0.5
+q = add q 1
+end
+if le fr -0.5
+q = sub q 1
+end
+ret q
+end
+
+fn uflush to void
+n = get uon 0
+p = ulong 0
+while lt p n bound 4097
+w = write 1 uout p sub n p
+if le w 0
+exit 70
+end
+p = add p ulong w
+end
+put uon 0 0
+end
+
+fn uputc c ulong to void
+n = get uon 0
+if ge n UMOUT
+uflush
+n = ulong 0
+end
+put uout n uchar and c 255
+put uon 0 add n 1
+end
+
+fn uputu v ulong to void
+d = new uchar 24 0
+n = ulong 0
+x = v
+while true bound 21
+put d n uchar add rem x 10 48
+n = add n 1
+x = div x 10
+if eq x 0
+break
+end
+end
+for i ulong n
+uputc ulong get d sub sub n 1 i
+end
+end
+
+fn uputl v long to void
+if lt v 0
+uputc 45
+if eq v -9223372036854775808
+uputu 9223372036854775808
+else
+uputu ulong neg v
+end
+else
+uputu ulong v
+end
+end
+
+fn uputx v ulong to void
+for i ulong 16
+h = and shr v mul sub 15 i 4 15
+if lt h 10
+uputc add h 48
+else
+uputc add h 87
+end
+end
+end

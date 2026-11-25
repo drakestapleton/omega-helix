@@ -2,14 +2,17 @@
 # Build Omega Helix (ollm) binaries from pure seeded Omega (.om) sources.
 #
 # Usage:
-#   sh scripts/build.sh                 # default: TARGET=gb10 (Linux AArch64 + GB10 SM121 GPU)
-#   TARGET=aarch64 sh scripts/build.sh  # Linux AArch64 CPU + OpenAI HTTP server
-#   TARGET=macos   sh scripts/build.sh  # Apple Silicon macOS Mach-O CPU binary
-#   TARGET=x86linux sh scripts/build.sh # Linux x86-64 CPU binary
-#   TARGET=x86efi  sh scripts/build.sh  # Bare-metal x86-64 UEFI application
-#   TARGET=a64efi  sh scripts/build.sh  # Bare-metal AArch64 UEFI application
-#   TARGET=tok     sh scripts/build.sh  # Standalone pure-Omega BPE tokenizer (ollm-tok)
-#   TARGET=wtrain  sh scripts/build.sh  # Pure-Omega fine-tune & eval driver (wtrain)
+#   sh scripts/build.sh                     # default: TARGET=gb10 (Linux AArch64 + GB10 SM121 GPU)
+#   TARGET=aarch64     sh scripts/build.sh  # Linux AArch64 CPU + OpenAI HTTP server
+#   TARGET=macos       sh scripts/build.sh  # Apple Silicon macOS Mach-O CPU binary
+#   TARGET=x86linux    sh scripts/build.sh  # Linux x86-64 CPU binary
+#   TARGET=x86efi      sh scripts/build.sh  # Bare-metal x86-64 UEFI application
+#   TARGET=a64efi      sh scripts/build.sh  # Bare-metal AArch64 UEFI application
+#   TARGET=tok         sh scripts/build.sh  # Standalone pure-Omega BPE tokenizer (ollm-tok)
+#   TARGET=wtrain      sh scripts/build.sh  # Pure-Omega fine-tune & eval driver (wtrain)
+#   TARGET=openwaldo   sh scripts/build.sh  # Pure-Omega OpenWALDO JSONL ingestor (ollm-waldo)
+#   TARGET=univ        sh scripts/build.sh  # Pure-Omega Universal zero-cap LLM engine (ollm-univ)
+#   TARGET=interchange sh scripts/build.sh  # Pure-Omega Safetensors/HF/GGUF converter (ollm-interchange)
 #
 # Env:
 #   OMC   Path to seeded omc compiler (auto-detected if unset)
@@ -29,6 +32,7 @@ find_omc() {
   for cand in \
     "$(command -v omc 2>/dev/null || true)" \
     "$HOME/.local/bin/omc" \
+    "$HOME/canon/omega-mv/seed/out/omc" \
     "$here/../omega-mv/seed/out/omc" \
     "$here/../omega-mv-macos/seed/out/omc"
   do
@@ -46,10 +50,18 @@ OMC=$(find_omc)
 mkdir -p "$OUT"
 
 if [ "$TARGET" = tok ]; then
-  cat "$src/tok/tkcore.om" "$src/tok/tkfit.om" "$src/tok/tkio.om" "$src/tok/tkcli.om" > "$OUT/ollm-tok.om"
+  {
+    if [ "$(uname -s)" = Darwin ]; then
+      printf 'target a64macos\n'
+    fi
+    cat "$src/tok/tkcore.om" "$src/tok/tkfit.om" "$src/tok/tkio.om" "$src/tok/tkcli.om"
+  } > "$OUT/ollm-tok.om"
   "$OMC" < "$OUT/ollm-tok.om" > "$OUT/ollm-tok.tmp"
   chmod +x "$OUT/ollm-tok.tmp"
   mv -f "$OUT/ollm-tok.tmp" "$OUT/ollm-tok"
+  if [ "$(uname -s)" = Darwin ] && command -v codesign >/dev/null 2>&1; then
+    codesign -s - -f "$OUT/ollm-tok" >/dev/null 2>&1
+  fi
   printf 'built %s (%s bytes)\n' "$OUT/ollm-tok" "$(wc -c < "$OUT/ollm-tok" | tr -d ' ')"
   exit 0
 fi
@@ -61,6 +73,68 @@ if [ "$TARGET" = wtrain ]; then
   chmod +x "$OUT/wtrain.tmp"
   mv -f "$OUT/wtrain.tmp" "$OUT/wtrain"
   printf 'built %s (%s bytes)\n' "$OUT/wtrain" "$(wc -c < "$OUT/wtrain" | tr -d ' ')"
+  exit 0
+fi
+
+if [ "$TARGET" = openwaldo ]; then
+  {
+    if [ "$(uname -s)" = Darwin ]; then
+      printf 'target a64macos\nom2\n'
+    else
+      printf 'om2\n'
+    fi
+    cat "$src/net/json.om" "$here/tools/openwaldo/waldo_ingest.om"
+  } > "$OUT/ollm-waldo.om"
+  "$OMC" < "$OUT/ollm-waldo.om" > "$OUT/ollm-waldo.tmp"
+  chmod +x "$OUT/ollm-waldo.tmp"
+  mv -f "$OUT/ollm-waldo.tmp" "$OUT/ollm-waldo"
+  if [ "$(uname -s)" = Darwin ] && command -v codesign >/dev/null 2>&1; then
+    codesign -s - -f "$OUT/ollm-waldo" >/dev/null 2>&1
+  fi
+  printf 'built %s (%s bytes, target=%s, omc=%s)\n' \
+    "$OUT/ollm-waldo" "$(wc -c < "$OUT/ollm-waldo" | tr -d ' ')" "$TARGET" "$OMC"
+  exit 0
+fi
+
+if [ "$TARGET" = univ ]; then
+  u=$src/univ
+  {
+    if [ "$(uname -s)" = Darwin ]; then
+      printf 'target a64macos\nom2\n'
+    else
+      printf 'om2\n'
+    fi
+    cat "$u/umath.om" "$u/uarena.om" "$u/uadam.om" "$u/uckpt.om" "$u/umodel.om" "$u/ucli.om"
+  } > "$OUT/ollm-univ.om"
+  "$OMC" < "$OUT/ollm-univ.om" > "$OUT/ollm-univ.tmp"
+  chmod +x "$OUT/ollm-univ.tmp"
+  mv -f "$OUT/ollm-univ.tmp" "$OUT/ollm-univ"
+  if [ "$(uname -s)" = Darwin ] && command -v codesign >/dev/null 2>&1; then
+    codesign -s - -f "$OUT/ollm-univ" >/dev/null 2>&1
+  fi
+  printf 'built %s (%s bytes, target=%s, omc=%s)\n' \
+    "$OUT/ollm-univ" "$(wc -c < "$OUT/ollm-univ" | tr -d ' ')" "$TARGET" "$OMC"
+  exit 0
+fi
+
+if [ "$TARGET" = interchange ]; then
+  u=$src/univ
+  {
+    if [ "$(uname -s)" = Darwin ]; then
+      printf 'target a64macos\nom2\n'
+    else
+      printf 'om2\n'
+    fi
+    cat "$src/net/json.om" "$src/net/jsonw.om" "$u/umath.om" "$u/uarena.om" "$u/uckpt.om" "$u/interchange.om"
+  } > "$OUT/ollm-interchange.om"
+  "$OMC" < "$OUT/ollm-interchange.om" > "$OUT/ollm-interchange.tmp"
+  chmod +x "$OUT/ollm-interchange.tmp"
+  mv -f "$OUT/ollm-interchange.tmp" "$OUT/ollm-interchange"
+  if [ "$(uname -s)" = Darwin ] && command -v codesign >/dev/null 2>&1; then
+    codesign -s - -f "$OUT/ollm-interchange" >/dev/null 2>&1
+  fi
+  printf 'built %s (%s bytes, target=%s, omc=%s)\n' \
+    "$OUT/ollm-interchange" "$(wc -c < "$OUT/ollm-interchange" | tr -d ' ')" "$TARGET" "$OMC"
   exit 0
 fi
 
@@ -116,7 +190,7 @@ case "$TARGET" in
     fi
     ;;
   *)
-    echo "error: unknown TARGET '$TARGET' (expected: gb10, aarch64, macos, x86linux, x86efi, a64efi, tok, wtrain)" >&2
+    echo "error: unknown TARGET '$TARGET' (expected: gb10, aarch64, macos, x86linux, x86efi, a64efi, tok, wtrain, openwaldo, univ, interchange)" >&2
     exit 2
     ;;
 esac

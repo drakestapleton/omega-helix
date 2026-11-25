@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#050814">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Omega Helix Studio — Forge Verified DNA Merkle Model Chains Locally</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23050814'/%3E%3Cpath d='M8 4c16 6 0 18 16 24M24 4C8 10 24 22 8 28' stroke='%2322d3ee' stroke-width='2.4' fill='none'/%3E%3Cpath d='M11 9h10M11 23h10M13 16h6' stroke='%23fbbf24' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to studio</a>
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <defs>
+    <linearGradient id="g-strand" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0" stop-color="#22d3ee"/><stop offset=".35" stop-color="#a78bfa"/>
+      <stop offset=".7" stop-color="#34d399"/><stop offset="1" stop-color="#fbbf24"/>
+    </linearGradient>
+    <filter id="f-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2.2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 16l4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-sync" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 1-14 5.3M4 12a8 8 0 0 1 14-5.3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M18 2.5v4.5h-4.5M6 21.5V17h4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.2l2 2.2h8.8A1.5 1.5 0 0 1 21 8.7v9.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-seed" viewBox="0 0 24 24"><path d="M12 21V11M12 11C12 6 8 3.5 4 4c0 4.5 3 7 8 7zM12 13c0-4 3-6.5 8-6.5 0 4-3 6.5-8 6.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-base" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 12l8-4.5M12 12L4 7.5M12 12v9" stroke="currentColor" stroke-width="1.6"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 2.8l7.5 3v5.7c0 4.6-3.1 8.2-7.5 9.7-4.4-1.5-7.5-5.1-7.5-9.7V5.8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M8.6 12l2.4 2.4 4.4-4.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13.5 2.5L5 13.5h6l-1 8 8.5-11h-6z" fill="currentColor"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M5 7h14M10 7V4.5h4V7M7 7l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></symbol>
+    <symbol id="i-sound" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-mute" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/><path d="M16 9.5l5 5M21 9.5l-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9.5 3v3.5M14.5 3v3.5M9.5 17.5V21M14.5 17.5V21M3 9.5h3.5M3 14.5h3.5M17.5 9.5H21M17.5 14.5H21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  </defs>
+</svg>
+
+<header class="topbar">
+  <div class="brand">
+    <svg class="helix-mini" viewBox="0 0 40 40" aria-hidden="true"><path d="M10 4c20 8 0 24 20 32M30 4C10 12 30 28 10 36" stroke="url(#g-strand)" stroke-width="3" fill="none" stroke-linecap="round"/><path d="M13 9.5h14M13 30.5h14M16 20h8" stroke="#fbbf24" stroke-width="2.2" stroke-linecap="round" opacity=".85"/></svg>
+    <span class="brand-name">Omega Helix <b>Studio</b></span>
+  </div>
+  <div class="topbar-pills">
+    <span class="pill" id="sys-pill" title="Host system"><svg class="ic"><use href="#i-chip"/></svg><span id="sys-text">probing host…</span></span>
+    <span class="pill pill-run" id="run-pill" data-state="idle"><span class="dot" aria-hidden="true"></span><span id="run-pill-text">No active forge</span></span>
+    <button type="button" class="pill pill-btn" id="sound-toggle" aria-pressed="false"><svg class="ic"><use href="#i-mute"/></svg><span>Sound: OFF</span></button>
+  </div>
+</header>
+
+<main id="main" tabindex="-1">
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="hero-copy">
+      <p class="eyebrow">Sovereign, not super · pure seeded Omega · zero telemetry</p>
+      <h1 id="hero-title">Forge your own <span class="grad">4-strand Helix</span> model chain</h1>
+      <p class="lede">Pick verified OpenWALDO data, design a frozen-trunk Merkle chain of specialist strands, forge it on your own hardware, then play with it and check every SHA-256 yourself.</p>
+      <ol class="flow-mini" aria-label="Studio flow">
+        <li><span class="n c1">1</span>Discover</li>
+        <li><span class="n c2">2</span>Design</li>
+        <li><span class="n c3">3</span>Forge</li>
+        <li><span class="n c4">4</span>Play &amp; Export</li>
+      </ol>
+    </div>
+    <div class="hero-helix" aria-hidden="true">
+      <svg id="helix-svg" viewBox="0 0 640 200" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+  </section>
+
+  <div class="tabs" role="tablist" aria-label="Studio stages" focusgroup="tablist nomemory">
+    <button type="button" role="tab" id="tab-discover" aria-controls="panel-discover" aria-selected="true" data-accent="c1"><span class="tab-n">1</span>Discover Data</button>
+    <button type="button" role="tab" id="tab-design" aria-controls="panel-design" tabindex="-1" data-accent="c2"><span class="tab-n">2</span>Design Helix Chain</button>
+    <button type="button" role="tab" id="tab-forge" aria-controls="panel-forge" tabindex="-1" data-accent="c3"><span class="tab-n">3</span>Forge &amp; Telemetry</button>
+    <button type="button" role="tab" id="tab-play" aria-controls="panel-play" tabindex="-1" data-accent="c4"><span class="tab-n">4</span>Playground &amp; Exports</button>
+  </div>
+
+  <!-- ============ TAB 1: DISCOVER ============ -->
+  <section class="panel" role="tabpanel" id="panel-discover" aria-labelledby="tab-discover" tabindex="0">
+    <div class="grid-discover">
+      <div class="col-main">
+        <div class="glass toolbar">
+          <div class="search">
+            <label for="cat-q" class="vh">Search OpenWALDO corpora</label>
+            <svg class="ic" aria-hidden="true"><use href="#i-search"/></svg>
+            <input id="cat-q" type="search" placeholder="Search 73+ OpenWALDO corpora… (press /)" autocomplete="off" spellcheck="false">
+            <kbd aria-hidden="true">/</kbd>
+          </div>
+          <button type="button" class="btn btn-ghost" id="btn-sync"><svg class="ic"><use href="#i-sync"/></svg>Sync Live Index</button>
+        </div>
+        <div class="filters">
+          <div class="chip-row" id="cat-pills" role="group" aria-label="Category"></div>
+          <details class="glass facet" open>
+            <summary>License (SPDX) &amp; programming language filters <span class="muted" id="facet-summary"></span></summary>
+            <div class="facet-body">
+              <div class="facet-col"><span class="facet-label" id="lic-label">SPDX license</span><div class="chip-row small" id="lic-chips" role="group" aria-labelledby="lic-label"></div></div>
+              <div class="facet-col"><span class="facet-label" id="prog-label">Programming language</span><div class="chip-row small" id="prog-chips" role="group" aria-labelledby="prog-label"></div></div>
+            </div>
+          </details>
+        </div>
+        <p class="result-meta" id="cat-meta" aria-live="polite">Loading catalog…</p>
+        <div class="cards" id="cat-cards"></div>
+      </div>
+
+      <aside class="col-side">
+        <div class="glass side-card">
+          <h2>Your data DNA</h2>
+          <p class="muted small">The base trunk is trained once and frozen; each strand specialises on its own dataset.</p>
+          <div class="slot slot-base" id="slot-base">
+            <span class="slot-k"><svg class="ic"><use href="#i-base"/></svg>Base trunk</span>
+            <span class="slot-v" id="slot-base-v">omega-starter (repo corpus)</span>
+          </div>
+          <h3 class="mini-h">Strand datasets</h3>
+          <ul class="slot-list" id="slot-strands"></ul>
+          <button type="button" class="btn btn-primary wide" id="btn-to-design">Design the chain →</button>
+        </div>
+
+        <div class="glass side-card">
+          <h2>Local sources</h2>
+          <button type="button" class="btn btn-ghost wide" id="btn-starter"><svg class="ic"><use href="#i-seed"/></svg>Use Starter Repo Corpus</button>
+          <div class="field">
+            <label for="local-path">Local folder, file or OpenWALDO <code>EXPORT.json</code> directory</label>
+            <div class="inline">
+              <input id="local-path" type="text" placeholder="/Users/you/notes" autocomplete="off" spellcheck="false">
+              <button type="button" class="btn btn-ghost" id="btn-inspect"><svg class="ic"><use href="#i-folder"/></svg>Inspect Local Folder</button>
+            </div>
+          </div>
+          <div class="inspect-out" id="inspect-out" aria-live="polite"></div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ============ TAB 2: DESIGN ============ -->
+  <section class="panel" role="tabpanel" id="panel-design" aria-labelledby="tab-design" tabindex="0" hidden>
+    <div class="glass mode-bar">
+      <fieldset class="seg" id="mode-seg">
+        <legend class="vh">Chain mode</legend>
+        <input type="radio" name="mode" id="mode-dna" value="dna" checked><label for="mode-dna"><b>DNA Merkle Chain</b><small><code>OLLMSP01</code> + <code>spclip</code></small></label>
+        <input type="radio" name="mode" id="mode-universal" value="universal"><label for="mode-universal"><b>Universal Architecture</b><small>llama · qwen3 · gemma · <code>OLLMCK04</code></small></label>
+        <input type="radio" name="mode" id="mode-hybrid" value="hybrid"><label for="mode-hybrid"><b>Hybrid</b><small>DNA chain + HF / GGUF export</small></label>
+      </fieldset>
+      <div class="chip-row" id="preset-chips" role="group" aria-label="Presets"></div>
+    </div>
+
+    <div class="grid-design">
+      <div class="col-main">
+        <div class="glass block">
+          <div class="block-h"><h2>Helix DAG</h2><span class="muted small" id="dag-caption">Base trunk → Merkle lock → strands → exports</span></div>
+          <div class="dag-wrap"><svg id="dag-svg" viewBox="0 0 900 320" role="img" aria-labelledby="dag-title"><title id="dag-title">Merkle chain DAG of the designed Helix</title></svg></div>
+          <div class="est-row" aria-live="polite">
+            <div class="est"><span class="est-k">Parameters</span><span class="est-v" id="est-params">—</span></div>
+            <div class="est"><span class="est-k">Footprint</span><span class="est-v" id="est-mb">—</span></div>
+            <div class="est"><span class="est-k">Token width</span><span class="est-v" id="est-tok">—</span></div>
+            <div class="est"><span class="est-k">Geometry</span><span class="est-v" id="est-valid">—</span></div>
+          </div>
+          <details class="cmd-preview"><summary>Resolved command preview</summary><pre id="est-cmd">—</pre></details>
+        </div>
+
+        <div class="glass block" id="strand-block">
+          <div class="block-h"><h2>Specialist strands</h2><button type="button" class="btn btn-ghost" id="btn-add-strand"><svg class="ic"><use href="#i-plus"/></svg>Add Custom Strand</button></div>
+          <p class="muted small" id="strand-note">Each strand forks from the frozen base, grows layers and trains only its own weights. <code>spclip</code> fuses 2–4 strands at sample time.</p>
+          <div class="strands" id="strands"></div>
+        </div>
+      </div>
+
+      <div class="col-side">
+        <div class="glass block">
+          <h2>Architecture</h2>
+          <div class="form-grid two">
+            <div class="field"><label for="f-name">Chain name</label><input id="f-name" type="text" value="my-helix" spellcheck="false"></div>
+            <div class="field"><label for="f-arch">Architecture</label>
+              <select id="f-arch"><option value="custom">helix (custom)</option><option value="llama">llama</option><option value="qwen2">qwen2</option><option value="qwen3">qwen3 (QK-norm)</option><option value="mistral">mistral</option><option value="gemma">gemma (GeGLU)</option><option value="gpt">gpt (WPE + ReLU)</option><option value="gelu">gelu (WPE + GELU)</option></select></div>
+            <div class="field"><label for="f-tokenizer">Tokenizer</label>
+              <select id="f-tokenizer"><option value="bpe">BPE (ollm bpefit)</option><option value="byte">raw bytes</option><option value="u32">u32 vocab</option></select></div>
+            <div class="field"><label for="f-hfdtype">HF dtype</label>
+              <select id="f-hfdtype"><option value="f32">f32</option><option value="bf16">bf16</option></select></div>
+          </div>
+          <div class="sliders" id="geo-sliders"></div>
+        </div>
+
+        <div class="glass block">
+          <h2>Loop &amp; adaptive exit</h2>
+          <div class="sliders" id="loop-sliders"></div>
+        </div>
+
+        <div class="glass block">
+          <h2>Training &amp; export</h2>
+          <div class="sliders" id="train-sliders"></div>
+          <div class="checks">
+            <label class="check"><input type="checkbox" id="f-gpu"><span>Use GB10 GPU (<code>gtrainf</code>/<code>gtrainb</code>)</span></label>
+            <label class="check"><input type="checkbox" id="f-hf"><span>Export HF <code>model.safetensors</code></span></label>
+            <label class="check"><input type="checkbox" id="f-gguf"><span>Export GGUF v3</span></label>
+          </div>
+          <button type="button" class="btn btn-forge wide" id="btn-to-forge"><svg class="ic"><use href="#i-bolt"/></svg>Continue to Forge</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TAB 3: FORGE ============ -->
+  <section class="panel" role="tabpanel" id="panel-forge" aria-labelledby="tab-forge" tabindex="0" hidden>
+    <div class="glass forge-bar">
+      <button type="button" class="btn btn-forge big" id="btn-forge"><svg class="ic"><use href="#i-bolt"/></svg><span>Forge Custom Helix Chain</span></button>
+      <button type="button" class="btn btn-danger" id="btn-stop" disabled><svg class="ic"><use href="#i-stop"/></svg>Stop</button>
+      <div class="field grow">
+        <label for="run-select">Run</label>
+        <select id="run-select"><option value="">— no runs yet —</option></select>
+      </div>
+      <button type="button" class="btn btn-ghost" id="btn-refresh-runs"><svg class="ic"><use href="#i-sync"/></svg>Refresh</button>
+    </div>
+
+    <ol class="stepper" id="stepper" aria-label="Forge pipeline"></ol>
+
+    <div class="kpis">
+      <div class="kpi c1"><span class="kpi-k">Current Step</span><span class="kpi-v" id="kpi-step">0</span></div>
+      <div class="kpi c2"><span class="kpi-k">Loss (nats)</span><span class="kpi-v" id="kpi-loss">—</span></div>
+      <div class="kpi c3"><span class="kpi-k">BPB</span><span class="kpi-v" id="kpi-bpb">—</span></div>
+      <div class="kpi c4"><span class="kpi-k">Throughput tok/s</span><span class="kpi-v" id="kpi-tps">—</span></div>
+      <div class="kpi c5"><span class="kpi-k">Verified Packs</span><span class="kpi-v" id="kpi-packs">0</span></div>
+    </div>
+
+    <div class="grid-forge">
+      <div class="glass block">
+        <div class="block-h"><h2>Loss &amp; BPB telemetry</h2>
+          <span class="legend"><i class="lg c1"></i>loss <i class="lg c4"></i>bpb</span></div>
+        <svg id="chart" viewBox="0 0 640 260" role="img" aria-labelledby="chart-title"><title id="chart-title">Training loss and bits-per-byte over steps</title></svg>
+      </div>
+      <div class="glass block">
+        <div class="block-h"><h2>Live Merkle DAG</h2><span class="muted small" id="forge-dag-cap">idle</span></div>
+        <div class="dag-wrap"><svg id="forge-dag" viewBox="0 0 900 320" role="img" aria-labelledby="forge-dag-title"><title id="forge-dag-title">Live Merkle chain DAG for the active run</title></svg></div>
+      </div>
+    </div>
+
+    <div class="glass block">
+      <div class="block-h"><h2>Forge log</h2>
+        <label class="check small"><input type="checkbox" id="log-follow" checked><span>Auto-scroll</span></label></div>
+      <pre class="term" id="term" role="log" aria-label="Forge log output" tabindex="0"></pre>
+    </div>
+  </section>
+
+  <!-- ============ TAB 4: PLAYGROUND ============ -->
+  <section class="panel" role="tabpanel" id="panel-play" aria-labelledby="tab-play" tabindex="0" hidden>
+    <div class="grid-play">
+      <div class="glass block">
+        <h2>Strand mixer</h2>
+        <div class="field">
+          <label for="play-run">Forged chain</label>
+          <select id="play-run"><option value="">— forge a chain first —</option></select>
+        </div>
+        <fieldset class="seg seg-sm">
+          <legend>spclip fusion mode</legend>
+          <input type="radio" name="spmode" id="sp-entropy" value="1" checked><label for="sp-entropy"><b>Entropy-Gated</b><small>confident strands lead</small></label>
+          <input type="radio" name="spmode" id="sp-prior" value="0"><label for="sp-prior"><b>Prior-Weighted</b><small>product of experts</small></label>
+        </fieldset>
+        <div class="mixer" id="mixer"></div>
+        <div class="field">
+          <label for="play-prompt">Prompt</label>
+          <textarea id="play-prompt" rows="3" spellcheck="false">fn main</textarea>
+        </div>
+        <div class="sliders" id="play-sliders"></div>
+        <button type="button" class="btn btn-primary wide" id="btn-sample"><svg class="ic"><use href="#i-play"/></svg>Generate</button>
+      </div>
+
+      <div class="col-stack">
+        <div class="glass block">
+          <div class="block-h"><h2>Output</h2><span class="muted small" id="sample-meta"></span></div>
+          <div class="out" id="sample-out" aria-live="polite"><span class="muted">Generated text appears here, with one pill per token showing its loop exit depth.</span></div>
+          <div class="pills" id="exit-pills" aria-label="Per-token exit depth"></div>
+        </div>
+        <div class="glass block">
+          <div class="block-h"><h2>Verified artifacts</h2><span class="muted small" id="art-meta">SHA-256 of every file the forge wrote</span></div>
+          <div class="table-wrap">
+            <table class="art">
+              <thead><tr><th scope="col">Artifact</th><th scope="col">Kind</th><th scope="col">Size</th><th scope="col">SHA-256</th><th scope="col"><span class="vh">Copy</span></th></tr></thead>
+              <tbody id="art-body"><tr><td colspan="5" class="muted">No artifacts yet.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+<div class="vh" id="sr-status" role="status" aria-live="polite"></div>
+<svg class="burst" id="burst" aria-hidden="true"></svg>
+<footer class="foot"><span>Local only · 127.0.0.1 · no CDN, no trackers, no telemetry</span><span id="foot-bin"></span></footer>
+</body>
+</html>

@@ -180,32 +180,35 @@ def main():
         run([B, "train", FL, TK, "10", "10"])
         prompt = "The loop"
 
-        # ---- 2. preservation against HEAD's three files
-        head = baseline_tree(work)
-        hdir = os.path.join(work, "headbin")
-        build(tgt, hdir, src_root=head)
-        H = os.path.join(hdir, binname)
-        for ck in (LP, FL):
-            tag = os.path.basename(ck)
-            for args in (["eval", ck, TK, "8", M],
-                         ["sample", ck, "1", "24", "0", prompt, M],
-                         ["sample", ck, "5", "24", "700", prompt, M],
-                         ["nsample", ck, "3", "12", "0", prompt, M, "2", "1500"]):
-                a = run([H] + args)[1]
-                b = run([B] + args)[1]
-                check(a == b, "preserve %s %s" % (" ".join(os.path.basename(x) for x in args[:1] + args[2:4]), tag),
-                      "%r != %r" % (a[:200], b[:200]))
-            a = strip_ns(run([H, "kvcmp", ck, "40", prompt, M])[1], ())
-            b = strip_ns(run([B, "kvcmp", ck, "40", prompt, M])[1], ())
-            check(a == b and a[-1].endswith(" 0"), "preserve kvcmp %s (0 diff)" % tag)
-            c1 = os.path.join(work, "h-" + tag)
-            c2 = os.path.join(work, "n-" + tag)
-            shutil.copy(ck, c1)
-            shutil.copy(ck, c2)
-            a = run([H, "train", c1, TK, "25", "5"])[1]
-            b = run([B, "train", c2, TK, "25", "5"])[1]
-            check(a == b and open(c1, "rb").read() == open(c2, "rb").read(),
-                  "preserve train %s (same lines, same checkpoint bytes)" % tag)
+        # ---- 2. preservation against HEAD's three files (when .git is present)
+        if os.path.exists(os.path.join(REPO, ".git")):
+            head = baseline_tree(work)
+            hdir = os.path.join(work, "headbin")
+            build(tgt, hdir, src_root=head)
+            H = os.path.join(hdir, binname)
+            for ck in (LP, FL):
+                tag = os.path.basename(ck)
+                for args in (["eval", ck, TK, "8", M],
+                             ["sample", ck, "1", "24", "0", prompt, M],
+                             ["sample", ck, "5", "24", "700", prompt, M],
+                             ["nsample", ck, "3", "12", "0", prompt, M, "2", "1500"]):
+                    a = run([H] + args)[1]
+                    b = run([B] + args)[1]
+                    check(a == b, "preserve %s %s" % (" ".join(os.path.basename(x) for x in args[:1] + args[2:4]), tag),
+                          "%r != %r" % (a[:200], b[:200]))
+                a = strip_ns(run([H, "kvcmp", ck, "40", prompt, M])[1], ())
+                b = strip_ns(run([B, "kvcmp", ck, "40", prompt, M])[1], ())
+                check(a == b and a[-1].endswith(" 0"), "preserve kvcmp %s (0 diff)" % tag)
+                c1 = os.path.join(work, "h-" + tag)
+                c2 = os.path.join(work, "n-" + tag)
+                shutil.copy(ck, c1)
+                shutil.copy(ck, c2)
+                a = run([H, "train", c1, TK, "25", "5"])[1]
+                b = run([B, "train", c2, TK, "25", "5"])[1]
+                check(a == b and open(c1, "rb").read() == open(c2, "rb").read(),
+                      "preserve train %s (same lines, same checkpoint bytes)" % tag)
+        else:
+            print("SKIP preservation (no .git in %s)" % REPO)
 
         # ---- 3. thresh 0 gain 0 == eval
         for ck in (LP, FL):
@@ -248,11 +251,16 @@ def main():
         check(both == run([B, "adapteval", LP, TK, "8", str(th), G, M])[1], "exit+messages deterministic")
 
         # ---- 6. cached decode == full forward
-        for t_, g_ in (("0", "0"), (str(th), "0"), ("0", G), (str(th), G)):
+        rc0, out_c0 = run([B, "adaptcmp", LP, "40", prompt, M, "0", "0"], ok=None)
+        check(rc0 == 0 and line(out_c0, "ADAPTCMP")[:3] == ["40", "0", "0"],
+              "adaptcmp thresh 0 gain 0: 0 logit diff, 0 telemetry diff", out_c0[-300:])
+        ax_c = line(out_c0, "AX")
+        th_c = (int(ax_c[4]) + int(ax_c[5])) // 2
+        for t_, g_ in ((str(th_c), "0"), ("0", G), (str(th_c), G)):
             rc, out = run([B, "adaptcmp", LP, "40", prompt, M, t_, g_], ok=None)
             f = line(out, "ADAPTCMP")
             check(rc == 0 and f[:3] == ["40", "0", "0"], "adaptcmp thresh %s gain %s: 0 logit diff, 0 telemetry diff" % (t_, g_), out[-300:])
-        rc, out = run([B, "adaptcmp", LP, "40", prompt, M, str(th), G], ok=None)
+        rc, out = run([B, "adaptcmp", LP, "40", prompt, M, str(th_c), G], ok=None)
         xps = set(r[4] for r in lines(out, "AI"))
         check(len(xps) >= 2 and max(int(r[1]) for r in lines(out, "AI")) == 32,
               "adaptcmp crosses the context limit with mixed exit passes %s" % sorted(xps))

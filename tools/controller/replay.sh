@@ -2,8 +2,13 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 src=$PWD
-bin=$(realpath "${OUT:-../../../../build/omega-controller}")
-omc=$(realpath "${OMC:-../../../../seed/out/omc}")
+bin=$(realpath "${OUT:-../../build/omega-controller}")
+if [[ -z "${OMC:-}" ]]; then
+  for cand in "$(command -v omc 2>/dev/null || true)" "$HOME/.local/bin/omc" "$HOME/canon/omega-mv/seed/out/omc" "$src/../../../omega-mv/seed/out/omc"; do
+    if [[ -n "$cand" && -x "$cand" ]]; then OMC="$cand"; break; fi
+  done
+fi
+omc=$(realpath "${OMC:?error: set OMC=/path/to/omc}")
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cd "$work"

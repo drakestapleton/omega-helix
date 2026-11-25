@@ -92,7 +92,9 @@ On the DGX Spark's GB10 on 2026-11-21, in two `spark-window`s opened `--gb10 sha
 | Looped, large: `gsample` against CPU `sample`, 24 tokens at temperature 0 | The same text |
 | Looped, large: BF16 (`gbcmp`: every BF16 GEMM of a step against a host reference; `gdbench` mode 8) | `GBCMP PASS` (259 GEMMs, 0 bad); decode within 0.0143 of f32 (limit 0.25) |
 
-Two things these checks do not cover. `gbcmp` ends with exit 84 on the small shape, with and without a loop and with the binary from before the change, so BF16 has only been run at the large shape. `gbcmp2`'s step bound grows with the applications and is 1.28 at 16 of them, too loose to catch a wrong gradient: BF16 training of a looped model has no gradient check with teeth.
+**Update (2026-11-25 — BF16 Looped/Small-Shape Fix & `gbcmp2` Per-Tensor Gradient Check, `tests/test_gpu_spec_loop.sh`):**
+- **Root-cause fix (`native/gpu/gg.om` `ggks`):** On small shapes (`R=128`), `ggks` split `R` into `K` slices of `16`, below the `32`-element BF16 tensor-core K-tile, triggering `nverr -22` -> `ggdie 84` in `gbcmp`, `gbcmp2`, and `gtrainb`. Keeping BF16 split-K slice depth a multiple of `32` under `gkbf` resolves `exit 84` (`gbcmp` passes on both `base` at `T=64` and looped `LP1 LC2 NP3` at `T=32`, `GBC 115 0 32269 GBCMP PASS`, and `gtrainb` matches CPU `eval` `E 10 8 5294512 7638367`). Existing `R=2048` BF16 `gtrainb` and small `f32` `gtrainf` checkpoints remain byte-identical.
+- **Looped BF16 gradient check with teeth (`native/gpu/gb.om` `gbcmp2`):** `gbcmp2` now checks per-tensor cosine similarity (`>= 0.995`) and normwise relative error (`< 0.1`) against both `K0` and `K1` (`GBT 35 998854966 48632025 8 999984081 5642465 32 0`, `GBCMP2 PASS`). Mutant `OMUTLG=0` (dropping repeated core `w2` pass gradients) is caught with `exit 49` (`GBT 35 0 1e9 34 ... 48`). Note: `K0`'s margin (`0.99885` vs `0.995`) was measured at the small shape; the large shape was not re-run.
 
 The windows held the chip lock shared and no quiet lock, so every time above is from a shared machine.
 
@@ -154,7 +156,10 @@ What this run does not show:
 
 Two receipts hold every hash, window and result line: `evidence/omega-llm-gb10-loop.9cc64757bce18e0f1525a45110f492de1861cab5ebeab7bafb33bc5f8d772150.json` (the checks, base and loop) and `evidence/omega-llm-gb10-loop-deep.0aaa7af54916a38ea763418db90c2dd1f25907347df564198dbcaeecb3f3c258.json` (deep and the final window); both name source commit `688d278e`. The pre-registrations, logs and checkpoints are on the Spark under `~/work/ollm-loop-20261121/` (`gate/`, `run/`); the checkpoints are not in this repository.
 
-## What is not done
+## Per-Token Loop Exit, Inter-Pass Messages & Remaining Future Work
 
-- Per-token exit from the loop and messages between passes are not built.
-- More seeds, a corpus large enough that the arms do not overfit, and BF16 training of a looped model.
+- **Per-token loop exit & inter-pass messages (CPU, `native/model.om`, `native/cli.om`, `native/serve.om`, `tests/test_adaptive_loop.py`):**
+  - During looped-core execution (`NP > 1`), per-token adaptive exit (`onlx`, `onlxp`) measures `|out - in| / max(|in|, 1e-12)` per token `t` after each core pass `p = 0 .. NP-1`; tokens below `thresh` record their exit pass `onlxp[t] = p + 1` and propagate unchanged through remaining core passes (`olayf2x`) while active tokens continue (`K`/`V` still come from the frozen row so causal attention over later tokens remains bit-identical between `ofwd` and incremental KV-cached `ofwdi`).
+  - Inter-pass messages (`onlmsg`, `onlpin`): each token's residual delta `out - in` acts as its inter-pass message carried into pass `p + 1` via `out + gain * msg` (`gain = msg_gain_micro / 1e6`), and optionally seeded/exported across requests via checksummed `LTP0` vectors in `/v1/neuralese/trace` (`exit_thresh_micro`, `msg_gain_micro`, `ltp_msg`, returning per-token `exit_passes`, `msg_norms_milli`, and `ltp0_msg`).
+  - Verified (`42 passed 0 failed`): `thresh = 0, gain = 0` is bit-identical to `eval`/`sample`/`kvcmp`/`train`; heterogeneous exit depths (`AH [211,45,0]`) and deterministic messages verified on CPU CLI & live Spark `/v1/neuralese/trace` HTTP; `adaptcmp` gives `0` differing logits across windowed banks and catches mutant `OMUTAX=0` (`exit 43`). Note: adaptive per-token exit & inter-pass message hooks are CPU-only (`aarch64`/`macos`/`x86linux`); the GB10 GPU path runs fixed `NP`.
+- **Future research:** More seeds and training on a non-overfitting corpus large enough to isolate looped-depth generalization cleanly.
