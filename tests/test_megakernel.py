@@ -437,7 +437,7 @@ def build_macos_source():
     parts = [
         "math.om", "data.om", "lpool.om", "model.om", "adam.om",
         "ckpt.om", "bpe.om", "spec.om", "rev.om", "arboris.om",
-        "sp_solve.om", "omg.om", "pillars_cli.om", "cli.om", "mio.om", "noserve.om", "nogpu.om",
+        "sp_solve.om", "spiral.om", "omg.om", "pillars_cli.om", "cli.om", "mio.om", "noserve.om", "nogpu.om",
     ]
     body = []
     for name in parts:
@@ -466,6 +466,7 @@ def build_gb10_source():
         os.path.join(SRC, "rev.om"),
         os.path.join(SRC, "arboris.om"),
         os.path.join(SRC, "sp_solve.om"),
+        os.path.join(SRC, "spiral.om"),
         os.path.join(SRC, "omg.om"),
         os.path.join(SRC, "pillars_cli.om"),
         os.path.join(SRC, "cli.om"),
@@ -500,6 +501,7 @@ def build_gb10_minimal_source():
         os.path.join(SRC, "rev.om"),
         os.path.join(SRC, "arboris.om"),
         os.path.join(SRC, "sp_solve.om"),
+        os.path.join(SRC, "spiral.om"),
         os.path.join(SRC, "omg.om"),
         os.path.join(SRC, "pillars_cli.om"),
         os.path.join(SRC, "cli.om"),

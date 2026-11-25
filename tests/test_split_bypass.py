@@ -884,6 +884,7 @@ def main():
                 "native/spec.om",
                 "native/rev.om",
                 "native/sp_solve.om",
+                "native/spiral.om",
                 "native/omg.om",
                 "native/pillars_cli.om",
                 "native/cli.om",

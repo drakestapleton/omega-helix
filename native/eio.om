@@ -420,6 +420,10 @@ fn ocsinit to ulong
 ret mul 3 OCSB
 end
 
+fn ocsgrow need ulong to bool
+ret le need mul 3 OCSB
+end
+
 fn ocsg i ulong to f64
 if lt i OCSB
 ret get ocs0 i

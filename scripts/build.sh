@@ -218,6 +218,7 @@ om_file="$OUT/$bin.om"
       "$src/$rev_mod" \
       "$src/arboris.om" \
       "$src/sp_solve.om" \
+      "$src/spiral.om" \
       "$src/omg.om" \
       "$src/pillars_cli.om"
   else
@@ -225,6 +226,18 @@ om_file="$OUT/$bin.om"
     cat <<'EOF'
 fn cmdspforge to void
 exit 2
+end
+fn cmdspcryst to void
+exit 2
+end
+fn cmdspweval to void
+exit 2
+end
+fn cmdspwsamp to void
+exit 2
+end
+fn sp2_is_sp2 ai ulong to bool
+ret false
 end
 fn cmdomg to void
 exit 2

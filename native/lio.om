@@ -152,6 +152,14 @@ end
 ret OCSN
 end
 
+fn ocsgrow need ulong to bool
+if gt need OCSN
+ret false
+end
+cap = ocsinit
+ret le need cap
+end
+
 fn ocsg i ulong to f64
 ret bitcast f64 mapget get ocsh 0 mul i 8 8
 end
