@@ -568,6 +568,143 @@ def cmd_runtime_green(args: argparse.Namespace) -> int:
     return 0 if res.get("passed") else 1
 
 
+def _load_commons() -> Any:
+    tools_dir = str(STUDIO_DIR.parent)
+    if tools_dir not in sys.path:
+        sys.path.insert(0, tools_dir)
+    import commons  # type: ignore
+    return commons
+
+
+def cmd_commons_verify(args: argparse.Namespace) -> int:
+    cm = _load_commons()
+    res = cm.verify_sovereign_trust(
+        bin_dir=args.bin_dir,
+        base_ck=args.base_ck,
+        packs=args.pack,
+        bom_path=args.bom,
+    )
+    if args.json:
+        print(json.dumps(res, indent=2))
+    else:
+        for chk in res["checks"]:
+            badge = emerald("PASS") if chk["passed"] else red("FAIL")
+            print(f"[{badge}] {chk['name']}: {chk['detail']}")
+        print(f"Trust audit {'OK' if res['ok'] else 'FAILED'} in {res['elapsed_ms']} ms")
+    return 0 if res.get("ok") else 1
+
+
+def cmd_commons_pkg(args: argparse.Namespace) -> int:
+    cm = _load_commons()
+    action = args.pkg_action
+    if action == "publish":
+        res = cm.publish_pack(
+            args.sp_path,
+            args.name,
+            registry_dir=args.registry,
+            version=args.version,
+            license_id=args.license,
+            description=args.desc,
+        )
+    elif action == "search":
+        res = cm.search_packs(args.registry, query=args.query, base_hash=args.base_hash)
+    elif action == "install":
+        res = cm.install_pack(args.name, args.env_dir, registry_dir=args.registry, expected_base_hash=args.base_hash)
+    elif action == "revoke":
+        res = cm.revoke_pack(args.name, args.env_dir, reason=args.reason)
+    elif action == "diff":
+        res = cm.diff_packs(args.sp_a, args.sp_b)
+    else:
+        raise ValueError(f"unknown pkg action: {action}")
+    print(json.dumps(res, indent=2))
+    return 0
+
+
+def cmd_commons_memory(args: argparse.Namespace) -> int:
+    cm = _load_commons()
+    action = args.mem_action
+    if action == "add":
+        res = cm.MemoryStore(args.store_path).add(args.text, tags=args.tag)
+    elif action == "list":
+        res = cm.MemoryStore(args.store_path).list_memories()
+    elif action == "export-enc":
+        res = cm.export_encrypted(args.store_path, args.out_path, args.passphrase)
+    elif action == "import-enc":
+        res = cm.import_encrypted(args.enc_path, args.out_store_path, args.passphrase)
+    elif action == "migrate":
+        bins = runner.ensure_binaries(["ollm"], bin_dir=args.bin_dir)
+        res = cm.migrate_brain_to_trunk(
+            bins["ollm"],
+            args.store_path,
+            args.new_trunk_ck,
+            args.out_dir,
+            steps=args.steps,
+            add_layers=args.add_layers,
+            lr_micro=args.lr_micro,
+        )
+    else:
+        raise ValueError(f"unknown memory action: {action}")
+    print(json.dumps(res, indent=2))
+    return 0
+
+
+def cmd_commons_lease(args: argparse.Namespace) -> int:
+    cm = _load_commons()
+    action = args.lease_action
+    if action == "issue":
+        res = cm.issue_lease(
+            args.lease_path,
+            allowed_dirs=args.allowed_dir,
+            allowed_cmds=args.allowed_cmd,
+            allow_network=args.allow_network,
+            ttl_seconds=args.ttl,
+        )
+    elif action == "run":
+        cmd = list(args.cmd)
+        if cmd and cmd[0] == "--":
+            cmd = cmd[1:]
+        res = cm.execute_under_lease(
+            args.lease_path,
+            cmd,
+            args.cwd,
+            audit_log_path=args.audit,
+            timeout=args.timeout,
+        )
+    elif action == "revoke":
+        res = cm.revoke_lease(args.lease_path)
+    else:
+        raise ValueError(f"unknown lease action: {action}")
+    print(json.dumps(res, indent=2))
+    return 0
+
+
+def cmd_commons_pack_usb(args: argparse.Namespace) -> int:
+    cm = _load_commons()
+    res = cm.pack_usb_bundle(
+        args.out_dir,
+        bin_dir=args.bin_dir,
+        trunk_ck=args.trunk_ck,
+        packs=args.pack,
+        memory_store=args.memory,
+    )
+    print(json.dumps(res, indent=2))
+    return 0
+
+
+def cmd_commons_port_check(args: argparse.Namespace) -> int:
+    cm = _load_commons()
+    cand = args.bin or str(runner.ensure_binaries(["ollm"], bin_dir=args.bin_dir)["ollm"])
+    res = cm.run_port_parity_check(cand, out_json=args.out_json)
+    if args.json:
+        print(json.dumps(res, indent=2))
+    else:
+        for g in res["gates"]:
+            badge = emerald("PASS") if g["passed"] else red("FAIL")
+            print(f"[{badge}] {g['gate']} (rc={g['returncode']}) {g['stdout_tail']}")
+        print(f"Port parity: {res['passed_count']}/{res['total_gates']} gates passed")
+    return 0 if res.get("ok") else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--workspace-dir", default=argparse.SUPPRESS, help="Directory for forged runs")
@@ -735,6 +872,120 @@ def build_parser() -> argparse.ArgumentParser:
     p_grn.add_argument("--out-dir", dest="out_dir", required=True)
     p_grn.add_argument("--json", action="store_true")
     p_grn.set_defaults(func=cmd_runtime_green)
+
+    p_ver = sub.add_parser("verify", parents=[common], help="One-command offline Cryptographic Trust Audit")
+    p_ver.add_argument("--base-ck", dest="base_ck", default=None)
+    p_ver.add_argument("--pack", action="append", default=None)
+    p_ver.add_argument("--bom", default=None)
+    p_ver.add_argument("--json", action="store_true")
+    p_ver.set_defaults(func=cmd_commons_verify)
+
+    p_pkg = sub.add_parser("pkg", parents=[common], help="DNA Commons package manager for signed .sp chains")
+    pkg_sub = p_pkg.add_subparsers(dest="pkg_action", required=True)
+
+    p_pub = pkg_sub.add_parser("publish", help="Publish an OLLMSP01 .sp pack into a registry")
+    p_pub.add_argument("sp_path")
+    p_pub.add_argument("name")
+    p_pub.add_argument("--registry", required=True)
+    p_pub.add_argument("--version", default="0.1.0")
+    p_pub.add_argument("--license", default="Apache-2.0")
+    p_pub.add_argument("--desc", default="")
+    p_pub.set_defaults(func=cmd_commons_pkg)
+
+    p_src = pkg_sub.add_parser("search", help="Search DNA Commons packs by query or base_hash")
+    p_src.add_argument("--registry", required=True)
+    p_src.add_argument("--query", default="")
+    p_src.add_argument("--base-hash", dest="base_hash", default="")
+    p_src.set_defaults(func=cmd_commons_pkg)
+
+    p_ins = pkg_sub.add_parser("install", help="Install a verified .sp pack from a registry")
+    p_ins.add_argument("name")
+    p_ins.add_argument("env_dir")
+    p_ins.add_argument("--registry", required=True)
+    p_ins.add_argument("--base-hash", dest="base_hash", default=None)
+    p_ins.set_defaults(func=cmd_commons_pkg)
+
+    p_rev = pkg_sub.add_parser("revoke", help="Revoke and delete a .sp pack (Right to be Forgotten)")
+    p_rev.add_argument("name")
+    p_rev.add_argument("env_dir")
+    p_rev.add_argument("--reason", default="right-to-be-forgotten")
+    p_rev.set_defaults(func=cmd_commons_pkg)
+
+    p_dif = pkg_sub.add_parser("diff", help="Diff two OLLMSP01 .sp packs")
+    p_dif.add_argument("sp_a")
+    p_dif.add_argument("sp_b")
+    p_dif.set_defaults(func=cmd_commons_pkg)
+
+    p_mem = sub.add_parser("memory", parents=[common], help="Model-agnostic personal memory & trunk migration")
+    mem_sub = p_mem.add_subparsers(dest="mem_action", required=True)
+
+    p_madd = mem_sub.add_parser("add", help="Append a SHA-256 deduplicated memory record")
+    p_madd.add_argument("store_path")
+    p_madd.add_argument("text")
+    p_madd.add_argument("--tag", action="append", default=None)
+    p_madd.set_defaults(func=cmd_commons_memory)
+
+    p_mlist = mem_sub.add_parser("list", help="List stored personal memories")
+    p_mlist.add_argument("store_path")
+    p_mlist.set_defaults(func=cmd_commons_memory)
+
+    p_mexp = mem_sub.add_parser("export-enc", help="Export PBKDF2+HMAC encrypted memory bundle")
+    p_mexp.add_argument("store_path")
+    p_mexp.add_argument("out_path")
+    p_mexp.add_argument("--passphrase", required=True)
+    p_mexp.set_defaults(func=cmd_commons_memory)
+
+    p_mimp = mem_sub.add_parser("import-enc", help="Import PBKDF2+HMAC encrypted memory bundle")
+    p_mimp.add_argument("enc_path")
+    p_mimp.add_argument("out_store_path")
+    p_mimp.add_argument("--passphrase", required=True)
+    p_mimp.set_defaults(func=cmd_commons_memory)
+
+    p_mmig = mem_sub.add_parser("migrate", help="Replay personal memory onto a new base trunk -> .sp")
+    p_mmig.add_argument("store_path")
+    p_mmig.add_argument("new_trunk_ck")
+    p_mmig.add_argument("out_dir")
+    p_mmig.add_argument("--steps", type=int, default=6)
+    p_mmig.add_argument("--add-layers", dest="add_layers", type=int, default=1)
+    p_mmig.add_argument("--lr-micro", dest="lr_micro", type=int, default=2000)
+    p_mmig.set_defaults(func=cmd_commons_memory)
+
+    p_lse = sub.add_parser("lease", parents=[common], help="Capability-bounded local execution leases")
+    lse_sub = p_lse.add_subparsers(dest="lease_action", required=True)
+
+    p_liss = lse_sub.add_parser("issue", help="Issue a bounded, revocable capability lease")
+    p_liss.add_argument("lease_path")
+    p_liss.add_argument("--dir", dest="allowed_dir", action="append", required=True)
+    p_liss.add_argument("--cmd", dest="allowed_cmd", action="append", required=True)
+    p_liss.add_argument("--allow-network", dest="allow_network", action="store_true")
+    p_liss.add_argument("--ttl", type=int, default=3600)
+    p_liss.set_defaults(func=cmd_commons_lease)
+
+    p_lrun = lse_sub.add_parser("run", help="Execute a command strictly inside an issued lease")
+    p_lrun.add_argument("lease_path")
+    p_lrun.add_argument("--cwd", required=True)
+    p_lrun.add_argument("--audit", default=None)
+    p_lrun.add_argument("--timeout", type=float, default=15.0)
+    p_lrun.add_argument("cmd", nargs=argparse.REMAINDER)
+    p_lrun.set_defaults(func=cmd_commons_lease)
+
+    p_lrev = lse_sub.add_parser("revoke", help="Revoke a capability lease")
+    p_lrev.add_argument("lease_path")
+    p_lrev.set_defaults(func=cmd_commons_lease)
+
+    p_usb = sub.add_parser("pack-usb", parents=[common], help="Assemble an air-gapped USB-Stick Sovereignty bundle")
+    p_usb.add_argument("out_dir")
+    p_usb.add_argument("--trunk-ck", dest="trunk_ck", default=None)
+    p_usb.add_argument("--pack", action="append", default=None)
+    p_usb.add_argument("--memory", default=None)
+    p_usb.add_argument("--json", action="store_true")
+    p_usb.set_defaults(func=cmd_commons_pack_usb)
+
+    p_prt = sub.add_parser("port-check", parents=[common], help="Run Hardware-Porting Kit 9-gate oracle parity check")
+    p_prt.add_argument("--bin", default=None)
+    p_prt.add_argument("--out-json", dest="out_json", default=None)
+    p_prt.add_argument("--json", action="store_true")
+    p_prt.set_defaults(func=cmd_commons_port_check)
 
     return p
 

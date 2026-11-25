@@ -157,6 +157,9 @@ Distill traces, logs, and open-source models into compact Helix students (`dk-un
 ### 8. Sovereign Runtime: Anti-DNA Firewalls, Disagreement Deep-Thinking & Grammar Decoding
 Run negative-weight contrastive Anti-DNA strands with per-token FNV-1a cryptographic receipts + JSD disagreement `LTP0` extra passes (`ollm spguard`), deterministic FSM JSON grammar masking (`ollm-univ gsamp`), verifier-gated sleep cycles (`omega-helix sleep`), compile-until-green crystallization (`omega-helix green`), and the 10-second `import-hf` -> DNA demo (`sh scripts/demo-10s-wow.sh`) — see [`docs/SOVEREIGN-RUNTIME.md`](docs/SOVEREIGN-RUNTIME.md).
 
+### 9. Sovereign Commons, Trust Audit, Memory Migration, Porting Kit & USB-Stick Air-Gap
+Manage trunk-pinned ~14 MB `OLLMSP01` `.sp` packages (`omega-helix pkg`), run one-command offline binary/CSP/BOM/Merkle audits (`omega-helix verify`), migrate encrypted personal memory across new model trunks (`omega-helix memory migrate`), certify new silicon backends (`omega-helix port-check`), enforce BFT swarm receipts + revocable agent leases (`omega-helix lease`), and bundle everything for offline air-gapped USB deployment (`omega-helix pack-usb`) — see [`docs/COMMONS.md`](docs/COMMONS.md) and [`docs/BACKEND-PORTING-KIT.md`](docs/BACKEND-PORTING-KIT.md).
+
 ---
 
 ## Universal Model Engine, Weight Interchange & Open-Source Data
