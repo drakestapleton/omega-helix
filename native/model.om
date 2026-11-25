@@ -64,8 +64,8 @@ note       [6]=ltp_inject_on, [7]=ltp_inject_layer, [8]=last_extra_loops, [9]=la
 global onlc ulong 16
 note onlf: [0]=steer_val, [1]=ltp_alpha, [2]=last_entropy, [3]=last_surprisal, [4]=last_max_prob, [5]=last_hf_norm
 global onlf f64 8
-global onlv f64 384
-global onlh f64 384
+global onlv f64 1024
+global onlh f64 1024
 global onln f64 32
 global onla f64 16
 global onltn_i ulong 16
@@ -309,6 +309,11 @@ p = get og 8
 if gt p add OGC OGBN
 ret false
 end
+if gt p OGC
+if not olp_grow 0 sub p OGC 0
+ret false
+end
+end
 if gt mul 3 p ocsinit
 ret false
 end
@@ -372,7 +377,11 @@ if lt OWC nd
 ret false
 end
 la = div sub OWC nd ls
-if gt mul sub ll la ls OWWN
+nbw = mul sub ll la ls
+if gt nbw OWWN
+ret false
+end
+if not olp_grow nbw 0 0
 ret false
 end
 sb = add get og 31 mul la ls
@@ -400,7 +409,11 @@ if lt OAC w2
 ret false
 end
 la = div sub OAC w2 st
-if gt mul sub ll la st OABN
+nba = mul sub ll la st
+if gt nba OABN
+ret false
+end
+if not olp_grow 0 0 nba
 ret false
 end
 aw = mul la st
@@ -425,8 +438,9 @@ a = add mul 8 td mul 2 t
 ret add a mul mul 2 t get og 4
 end
 
-note shape limits (CONTRACT-V3 section 1): every shape >= 1, 256 <= V <= 4096, T <= 256,
-note D <= 384, H <= 16, F <= 1536, L <= 16, B <= 64, D mod H = 0
+note shape limits: dynamic-pool targets (OWWN > 16M: gb10, aarch64, macos) support up to 150M+
+note (D <= 1024, H <= 32, F <= 4096, L <= 24); static-pool targets (x86linux, UEFI) keep
+note CONTRACT-V3 limits (D <= 384, H <= 16, F <= 1536, L <= 16).
 fn ogok to bool
 for i ulong 7
 if eq get og i 0
@@ -436,13 +450,23 @@ end
 if or lt get og 0 256 gt get og 0 4096
 ret false
 end
-if or gt get og 1 256 gt get og 2 384
+maxd = ulong 384
+maxh = ulong 16
+maxf = ulong 1536
+maxl = ulong 16
+if gt OWWN 16000000
+maxd = 1024
+maxh = 32
+maxf = 4096
+maxl = 24
+end
+if or gt get og 1 256 gt get og 2 maxd
 ret false
 end
-if or gt get og 3 16 gt get og 4 1536
+if or gt get og 3 maxh gt get og 4 maxf
 ret false
 end
-if or gt get og 5 16 gt get og 6 64
+if or gt get og 5 maxl gt get og 6 64
 ret false
 end
 ret eq rem get og 2 get og 3 0

@@ -18,6 +18,7 @@ if [ "$OS" = Darwin ]; then
   BIN="$OUT/ollm-macos"
   BT_HDR='target a64macos
 om2'
+  BT_POOL="lpool.om"
   BT_PLAT="mio.om"
   BT_REV="rev.om"
 elif [ "$ARCH" = x86_64 ] || [ "$ARCH" = amd64 ]; then
@@ -25,6 +26,7 @@ elif [ "$ARCH" = x86_64 ] || [ "$ARCH" = amd64 ]; then
   BIN="$OUT/ollm-x86linux"
   BT_HDR='target x86linux
 om2'
+  BT_POOL="xpool.om"
   BT_PLAT="lio.om"
   BT_REV="norev.om"
 else
@@ -32,6 +34,7 @@ else
   OUT="$OUT" TARGET=gb10 sh "$here/scripts/build.sh"
   BIN="$OUT/ollm"
   BT_HDR='om2'
+  BT_POOL="lpool.om"
   BT_PLAT="lio.om"
   BT_REV="rev.om"
 fi
@@ -118,7 +121,7 @@ EOF
 src=$here/native
 {
   printf '%s\n' "$BT_HDR"
-  for u in math.om data.om lpool.om model.om adam.om ckpt.om bpe.om spec.om "$BT_REV" arboris.om sp_solve.om omg.om pillars_cli.om cli.om "$BT_PLAT" noserve.om nogpu.om; do
+  for u in math.om data.om "$BT_POOL" model.om adam.om ckpt.om bpe.om spec.om "$BT_REV" arboris.om sp_solve.om omg.om pillars_cli.om cli.om "$BT_PLAT" noserve.om nogpu.om; do
     sed 's/^fn main to int$/fn ocpumain to int/' "$src/$u"
   done
   cat "$work/sim_main.om" "$src/gpu/gm.om" "$src/gpu/ring.om" "$src/gpu/ejit.om" "$work/bt_driver.om"

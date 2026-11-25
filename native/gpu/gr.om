@@ -585,12 +585,12 @@ put grd 4 f
 put grd 5 b
 end
 fn grall to bool
-note the warp-per-row RMS kernels hold D/32 columns per lane (D <= 384: four banks end at R119, grrb),
+note the warp-per-row RMS kernels hold D/32 columns per lane (D <= 1024: four banks end at R199, grrb),
 note softmax T/32, and CE steps 256 columns
 if or ne rem get grd 2 32 0 ne rem get grd 1 32 0
 ret false
 end
-if gt get grd 2 384
+if gt get grd 2 1024
 ret false
 end
 if ne rem get grd 0 256 0
@@ -641,7 +641,8 @@ end
 put gkthr id 64
 put gkgpr id 72
 if and gt get grd 2 256 or eq id 10 eq id 11
-put gkgpr id 128
+top = add 72 mul 4 div uint get grd 2 32
+put gkgpr id mul div add top 9 8 8
 end
 put gksm id 0
 end

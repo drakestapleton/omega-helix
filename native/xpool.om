@@ -1,0 +1,17 @@
+note SPDX-License-Identifier: AGPL-3.0-only
+note omegallm xpool.om: static bank-B pools for target x86linux (which does not support dynamic
+note `global ... *` enlarge pools). Sizes at the CONTRACT-V3 maxima (V 4096, T 256, D 384, H 16,
+note F 1536, L 16):
+note  oww parameters of layers LA .. L-1: (16 - 7) LSTR = 9 1770240 -> 15932160 (LA = 7)
+note  ogb BLK values past OGC: P - OGC = 29995392 - 15833472 -> 14161920
+note  oab activations of layers LAA .. L-1: (16 - 6) ASTR = 10 1573376 -> 15733760 (LAA = 6)
+const OWWN ulong 15932160
+global oww f64 15932160
+const OGBN ulong 14161920
+global ogb f64 14161920
+const OABN ulong 15733760
+global oab f64 15733760
+
+fn olp_grow w ulong g ulong a ulong to bool
+ret and le w OWWN and le g OGBN le a OABN
+end

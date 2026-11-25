@@ -425,7 +425,7 @@ fn osp_wrpay fz ulong nspec ulong to ulong
 h = ulong 14695981039346656037
 pos = ulong 48
 done = ulong 0
-while lt done nspec bound 1024
+while lt done nspec bound 65536
 cnt = sub nspec done
 if gt cnt OCKC
 cnt = OCKC
@@ -447,7 +447,7 @@ fn osp_rdpay ai ulong fz ulong nspec ulong to ulong
 h = ulong 14695981039346656037
 pos = ulong 48
 done = ulong 0
-while lt done nspec bound 1024
+while lt done nspec bound 65536
 cnt = sub nspec done
 if gt cnt OCKC
 cnt = OCKC
@@ -676,7 +676,7 @@ const OFHMAG ulong 3544412373522336847
 note Write oa[src .. src + n) as little-endian f64s starting at file offset pos; returns new pos
 fn ofh_wroa pos ulong src ulong n ulong to ulong
 done = ulong 0
-while lt done n bound 1024
+while lt done n bound 65536
 cnt = sub n done
 if gt cnt OCKC
 cnt = OCKC
@@ -981,7 +981,7 @@ fn osp_rd2c ai ulong dst ulong ns ulong to ulong
 h = ulong 14695981039346656037
 pos = ulong 48
 done = ulong 0
-while lt done ns bound 1024
+while lt done ns bound 65536
 cnt = sub ns done
 if gt cnt OCKC
 cnt = OCKC
@@ -1541,7 +1541,7 @@ fn osp_chkpay ai ulong ns ulong wantph ulong to void
 h = ulong 14695981039346656037
 pos = ulong 48
 done = ulong 0
-while lt done ns bound 1024
+while lt done ns bound 65536
 cnt = sub ns done
 if gt cnt OCKC
 cnt = OCKC
