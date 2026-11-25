@@ -79,6 +79,7 @@
     <button type="button" role="tab" id="tab-design" aria-controls="panel-design" tabindex="-1" data-accent="c2"><span class="tab-n">2</span>Design Helix Chain</button>
     <button type="button" role="tab" id="tab-forge" aria-controls="panel-forge" tabindex="-1" data-accent="c3"><span class="tab-n">3</span>Forge &amp; Telemetry</button>
     <button type="button" role="tab" id="tab-play" aria-controls="panel-play" tabindex="-1" data-accent="c4"><span class="tab-n">4</span>Playground &amp; Exports</button>
+    <button type="button" role="tab" id="tab-distill" aria-controls="panel-distill" tabindex="-1" data-accent="c5"><span class="tab-n">5</span>Distill Network</button>
   </div>
 
   <!-- ============ TAB 1: DISCOVER ============ -->
@@ -282,6 +283,119 @@
               <tbody id="art-body"><tr><td colspan="5" class="muted">No artifacts yet.</td></tr></tbody>
             </table>
           </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TAB 5: DISTILLATION PIPELINE NETWORK ============ -->
+  <section class="panel" role="tabpanel" id="panel-distill" aria-labelledby="tab-distill" tabindex="0" hidden>
+    <div class="glass block distill-hero">
+      <div class="block-h">
+        <h2>Distillation Pipeline Network <span class="muted small">(OLLMDK01 + Teacher Router + Fail-Closed Verifiers)</span></h2>
+        <div class="btn-row">
+          <button type="button" class="btn btn-ghost" id="btn-distill-probe"><svg class="ic"><use href="#i-search"/></svg>Probe Local Teachers</button>
+          <button type="button" class="btn btn-primary" id="btn-distill-start"><svg class="ic"><use href="#i-bolt"/></svg>Launch Distillation</button>
+          <button type="button" class="btn btn-danger" id="btn-distill-stop" disabled><svg class="ic"><use href="#i-stop"/></svg>Stop</button>
+        </div>
+      </div>
+      <div class="dag-wrap">
+        <svg id="distill-topo" viewBox="0 0 900 132" role="img" aria-labelledby="distill-topo-title">
+          <title id="distill-topo-title">Distillation network topology: Teachers and traces through Verifier gate into OLLMDK01 / OpenWALDO and Student Helix</title>
+          <path class="dag-edge lit" d="M200 66 C235 66, 235 66, 270 66"/>
+          <path class="dag-edge lit" d="M430 66 C465 66, 465 66, 500 66"/>
+          <path class="dag-edge lit" d="M670 66 C700 66, 700 66, 730 66"/>
+          <g class="dag-node" id="dnode-src"><rect x="20" y="26" width="180" height="80" rx="12"/><text x="36" y="56">Teachers &amp; Traces</text><text class="sub" x="36" y="78">OpenAI · Helix · JSONL</text></g>
+          <g class="dag-node" id="dnode-ver"><rect x="270" y="26" width="160" height="80" rx="12"/><text x="286" y="56">Verifier Gate</text><text class="sub" x="286" y="78">omc · ast · json</text></g>
+          <g class="dag-node" id="dnode-fmt"><rect x="500" y="26" width="170" height="80" rx="12"/><text x="516" y="56">OLLMDK01 / WALDO</text><text class="sub" x="516" y="78">Top-K KL + FNV-1a</text></g>
+          <g class="dag-node" id="dnode-stu"><rect x="730" y="26" width="150" height="80" rx="12"/><text x="746" y="56">Helix Student</text><text class="sub" x="746" y="78">dcheck · dtrain · BOM</text></g>
+        </svg>
+      </div>
+    </div>
+
+    <div class="grid-distill">
+      <div class="glass block">
+        <h2>Teachers, Traces &amp; Verifiers</h2>
+        <div class="probe-list" id="distill-probes"><span class="muted small">Click "Probe Local Teachers" to scan :18090 omega-router, :18091 q36-serve, :11434 Ollama, :8000 vLLM.</span></div>
+        <div class="form-grid two">
+          <div class="field">
+            <label for="d-mode">Distillation Mode</label>
+            <select id="d-mode">
+              <option value="dk-univ" selected>dk-univ (OLLMDK01 Sparse Top-K CE+KL)</option>
+              <option value="seq-univ">seq-univ (Teacher + Verifier -> ollm-univ)</option>
+              <option value="dna-strand">dna-strand (Merkle OLLMSP01 Strand)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="d-arch">Student Architecture</label>
+            <select id="d-arch">
+              <option value="qwen3" selected>qwen3 (RoPE + QK-Norm + SwiGLU)</option>
+              <option value="llama">llama</option>
+              <option value="mistral">mistral</option>
+              <option value="gemma">gemma</option>
+              <option value="qwen2">qwen2</option>
+              <option value="gpt">gpt</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-grid two">
+          <div class="field">
+            <label for="d-teacher-url">Teacher Endpoint (optional)</label>
+            <input id="d-teacher-url" type="url" placeholder="http://127.0.0.1:18090/v1">
+          </div>
+          <div class="field">
+            <label for="d-teacher-model">Teacher Model</label>
+            <input id="d-teacher-model" type="text" placeholder="q36-35b">
+          </div>
+        </div>
+        <div class="field">
+          <label for="d-traces">Trace Files / Directories (one path per line)</label>
+          <textarea id="d-traces" rows="2" spellcheck="false" placeholder="/path/to/traces.jsonl or OpenWALDO EXPORT.json"></textarea>
+        </div>
+        <div class="field">
+          <label for="d-prompts">Teacher Prompts (one per line, optional)</label>
+          <textarea id="d-prompts" rows="2" spellcheck="false" placeholder="Write a verified .om kernel helper."></textarea>
+        </div>
+        <div class="form-grid two">
+          <div class="field"><label for="d-k">Top-K Sparse (1..64)</label><input id="d-k" type="number" min="1" max="64" value="8"></div>
+          <div class="field"><label for="d-alpha">KL Alpha (0..1)</label><input id="d-alpha" type="number" min="0" max="1" step="0.05" value="0.7"></div>
+          <div class="field"><label for="d-tau">Temperature τ</label><input id="d-tau" type="number" min="0.1" max="5" step="0.1" value="1.5"></div>
+          <div class="field"><label for="d-steps">Distill Steps</label><input id="d-steps" type="number" min="1" max="5000" value="10"></div>
+        </div>
+        <fieldset class="seg seg-sm">
+          <legend>Fail-Closed Verifiers</legend>
+          <div class="ver-chips">
+            <label class="check small"><input type="checkbox" name="d-ver" value="nonempty" checked><span>nonempty</span></label>
+            <label class="check small"><input type="checkbox" name="d-ver" value="json_schema"><span>json_schema</span></label>
+            <label class="check small"><input type="checkbox" name="d-ver" value="python_ast"><span>python_ast</span></label>
+            <label class="check small"><input type="checkbox" name="d-ver" value="omc_compile"><span>omc_compile</span></label>
+            <label class="check small"><input type="checkbox" name="d-ver" value="regex"><span>regex</span></label>
+          </div>
+        </fieldset>
+      </div>
+
+      <div class="col-stack">
+        <div class="glass block">
+          <div class="block-h">
+            <h2>Distill Telemetry &amp; Verifier Gate</h2>
+            <span class="legend"><i class="lg c1"></i>Total <i class="lg c4"></i>CE <i class="lg c2"></i>KL</span>
+          </div>
+          <div class="kpis distill-kpis">
+            <div class="kpi c1"><span class="kpi-k">Step</span><span class="kpi-v" id="dk-step">0</span></div>
+            <div class="kpi c5"><span class="kpi-k">Total Loss</span><span class="kpi-v" id="dk-loss">—</span></div>
+            <div class="kpi c4"><span class="kpi-k">CE Loss</span><span class="kpi-v" id="dk-ce">—</span></div>
+            <div class="kpi c2"><span class="kpi-k">KL Loss</span><span class="kpi-v" id="dk-kl">—</span></div>
+            <div class="kpi c3"><span class="kpi-k">Pass Rate</span><span class="kpi-v" id="dk-pass">—</span></div>
+          </div>
+          <svg id="chart-distill" viewBox="0 0 640 220" role="img" aria-labelledby="chart-distill-title"><title id="chart-distill-title">Hybrid CE and KL distillation loss curves</title></svg>
+          <div class="muted small distill-meta" id="distill-dcheck-meta">dcheck receipt: pending</div>
+        </div>
+        <div class="glass block">
+          <div class="block-h">
+            <h2>Distill Stream &amp; BOM</h2>
+            <select id="distill-run-select" aria-label="Select distillation run"><option value="">— live / recent runs —</option></select>
+          </div>
+          <pre class="term" id="distill-term" role="log" aria-label="Distillation output" tabindex="0"></pre>
         </div>
       </div>
     </div>

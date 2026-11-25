@@ -146,6 +146,14 @@ waldo index export --format jsonl core/example ./waldo-export
 sh scripts/openwaldo-train.sh ./waldo-export ./run-waldo
 ```
 
+### 7. Sovereign Distillation Pipeline Network (`OLLMDK01`)
+Distill traces, logs, and open-source models into compact Helix students (`dk-univ`, `seq-univ`, or Merkle `dna-strand`) with fail-closed verifiers (`omc_compile`, `python_ast`, `json_schema`, `regex`, `nonempty`), multi-teacher routing, Studio Tab 5, and pure seeded-Omega sparse top-K hybrid CE+KL optimization (`ollm-univ dkemit` / `dcheck` / `dtrain`) — see [`docs/DISTILLATION.md`](docs/DISTILLATION.md):
+```sh
+./bin/omega-helix distill probe
+./bin/omega-helix distill harvest -i ./traces.jsonl -o ./distilled-export --verify nonempty,json_schema
+./bin/omega-helix distill run --mode dk-univ --arch qwen3 --trace ./traces.jsonl --K 8 --alpha 0.7 --steps 20
+```
+
 ---
 
 ## Universal Model Engine, Weight Interchange & Open-Source Data
