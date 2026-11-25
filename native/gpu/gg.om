@@ -246,6 +246,9 @@ grset v tt d h f bb
 if not gropen asz
 ggsetupfail
 end
+if not gbbopen
+ggdie 122
+end
 put gga 40 gkbase
 ggstr
 end
@@ -577,11 +580,13 @@ ggatt l
 ggffn l
 end
 
-note ggnoce 1 (set by oglast only): ggfwd stops after the logits GEMM. CE (kernel 21) rewrites the
-note logits in place to (softmax - [c = y]) / (T B) for training, which keeps their argmax but is not a
-note logit (DRA-292 window gserve-w1: greedy matched, maxdiff 21.6, temperature draws drifted).
+note ggnoce 1 (oglast): stop after logits GEMM. ggnoce 2 (gfcache): stop right after the LV layers
+note (leaving final hidden state HF in gga1 8, skipping final RMS, logits and CE).
 global ggnoce uint 1
-fn ggfwd to void
+fn ggb_ok to bool
+ret and and eq get gkbck 0 0 eq get gkpf 0 0 and eq get gkbat 0 0 gt get gbpkt 0 0
+end
+fn ggfwd_emb to void
 d = get og 2
 x = ggl 0 0
 ggu 0 d
@@ -595,9 +600,12 @@ ggpt 4 x
 tt = get og 1
 bb = get og 6
 ggrun 9 10 ggcd d 64 tt bb
-for l ulong get og 56 bound 9223372036854775807
-ggfl l
 end
+fn ggfwd_head to void
+if eq get ggnoce 0 2
+ret
+end
+d = get og 2
 x = gga1 8
 w = ggw get og 33
 z = gga1 10
@@ -618,6 +626,64 @@ ggpt 2 x
 x = gga1 12
 ggpt 3 x
 ggrun 21 8 ggcd r 64 1 1
+end
+fn ggfwd_hcnt to ulong
+nc = get ggnoce 0
+if eq nc 2
+ret 0
+end
+if eq nc 1
+ret 2
+end
+ret 3
+end
+fn ggfwd_bat to void
+lv = get og 56
+l0 = ulong 0
+while lt l0 lv bound 1024
+l1 = add l0 16
+if gt l1 lv
+l1 = lv
+end
+cnt = mul sub l1 l0 11
+if eq l0 0
+cnt = add cnt 1
+end
+if eq l1 lv
+cnt = add cnt ggfwd_hcnt
+end
+if not gbbegin cnt
+ggdie 120
+end
+put gkbat 0 1
+if eq l0 0
+ggfwd_emb
+end
+l = l0
+while lt l l1 bound 32
+ggfl l
+l = add l 1
+end
+if eq l1 lv
+ggfwd_head
+end
+put gkbat 0 0
+if not gkbsub
+ggdie 121
+end
+l0 = l1
+end
+end
+fn ggfwd to void
+if ggb_ok
+ggfwd_bat
+ret
+end
+ggfwd_emb
+for l ulong get og 56 bound 9223372036854775807
+ggfl l
+end
+ggfwd_head
 end
 
 note layer l FFN backward: DH holds d out on entry, d hm on exit. The dF GEMM's fused epilogue (gkope 2)
@@ -737,10 +803,16 @@ ggbatt l
 ggbqkv l
 end
 
-fn ggbwd to void
+fn ggks_ex m ulong n ulong nz ulong to ulong
+if gt ggks m n nz 1
+ret 1
+end
+ret 0
+end
+
+fn ggbwd_head to void
 d = get og 2
 v = get og 0
-tt = get og 1
 r = ggr
 ggew 20 ggp5 gga1 1 gga1 1
 ggew 20 mul r d gga1 13 gga1 13
@@ -750,14 +822,15 @@ ggwg gga1 11 gga1 10 ggg 0 v d
 end
 ggrmsb gga1 8 ggw get og 33 gga1 9
 ggain get og 33
-l = get og 56
-while gt l ggfzl bound 9223372036854775807
-l = sub l 1
-ggbl l
 end
+
+fn ggbwd_emb to void
 if ne ggfzn 0
 ret
 end
+d = get og 2
+v = get og 0
+tt = get og 1
 td = mul tt d
 ggu 0 td
 ggu 1 get og 6
@@ -773,6 +846,108 @@ ggpt 2 gga1 4
 ggpt 3 gga1 5
 ggpt 4 ggg 0
 ggrun 22 10 ggcd d 64 v 1
+end
+
+fn ggbwd_hcnt to ulong
+c = ulong 6
+if eq ggfzn 0
+c = add c add 1 ggks_ex get og 0 get og 2 1
+end
+ret c
+end
+
+fn ggbwd_lcnt l ulong to ulong
+d = get og 2
+f = get og 4
+c = ulong 20
+c = add c ggks_ex d f 1
+c = add c ggks_ex d d 1
+c = add c ggks_ex d d 3
+if or eq OMUTLG 1 eq olp l l
+c = add c add 1 ggks_ex f d 1
+end
+ret c
+end
+
+fn ggbwd_ecnt to ulong
+if eq ggfzn 0
+ret 2
+end
+ret 0
+end
+
+fn ggbwd_bat to void
+lv = get og 56
+fzl = ggfzl
+if le lv fzl
+cnt = add ggbwd_hcnt ggbwd_ecnt
+if not gbbegin cnt
+ggdie 120
+end
+put gkbat 0 1
+ggbwd_head
+ggbwd_emb
+put gkbat 0 0
+if not gkbsub
+ggdie 121
+end
+ret
+end
+hi = lv
+first = true
+while gt hi fzl bound 1024
+lo = fzl
+if gt sub hi fzl 8
+lo = sub hi 8
+end
+cnt = ulong 0
+if first
+cnt = add cnt ggbwd_hcnt
+end
+l = hi
+while gt l lo bound 16
+l = sub l 1
+cnt = add cnt ggbwd_lcnt l
+end
+if eq lo fzl
+cnt = add cnt ggbwd_ecnt
+end
+if not gbbegin cnt
+ggdie 120
+end
+put gkbat 0 1
+if first
+ggbwd_head
+end
+l2 = hi
+while gt l2 lo bound 16
+l2 = sub l2 1
+ggbl l2
+end
+if eq lo fzl
+ggbwd_emb
+end
+put gkbat 0 0
+if not gkbsub
+ggdie 121
+end
+first = false
+hi = lo
+end
+end
+
+fn ggbwd to void
+if ggb_ok
+ggbwd_bat
+ret
+end
+ggbwd_head
+l = get og 56
+while gt l ggfzl bound 9223372036854775807
+l = sub l 1
+ggbl l
+end
+ggbwd_emb
 end
 
 note Mutant f: 1 in the product, 0 in the mutant, which uploads layer 0's W1 times 1 + 2^-10 (a
@@ -1339,11 +1514,11 @@ end
 ret 1000000.0f64
 end
 
-note gcmp2 state. ggfs[j] = s_j for the row in flight (F <= 1536, CONTRACT-V2). ggk2: [0] ReLU
+note gcmp2 state. ggfs[j] = s_j for the row in flight (F <= 8192). ggk2: [0] ReLU
 note flips (sign of FP_chip differs from FP_ref), [1] non-finite FP values (chip or reference),
 note [2] layer of the largest rho, [3] non-finite gradient values (chip, K0 or K1).
 note ggk3: [0] rho max, [1] max |FP_ref| at a flip, [2] max |FP_chip - FP_ref|.
-global ggfs f64 4096
+global ggfs f64 8192
 global ggk2 ulong 4
 global ggk3 f64 3
 
@@ -1353,7 +1528,14 @@ fn ggsj l ulong t ulong to void
 d = get og 2
 f = get og 4
 bn = add oabn l mul t d
-w = opx ovw1 l
+wv = ovw1 l
+inb = owinb wv
+w = ulong 0
+if inb
+w = sub wv get og 34
+else
+w = opx wv
+end
 for j ulong f
 put ggfs j 0.0f64
 end
@@ -1362,13 +1544,27 @@ a = get oa add bn k
 if lt a 0.0f64
 a = neg a
 end
+if inb
+ggsjk_b a add w mul k f f
+else
 ggsjk a add w mul k f f
+end
 end
 end
 
 fn ggsjk a f64 wo ulong f ulong to void
 for j ulong f
 x = get ow add wo j
+if lt x 0.0f64
+x = neg x
+end
+put ggfs j add get ggfs j mul a x
+end
+end
+
+fn ggsjk_b a f64 wo ulong f ulong to void
+for j ulong f
+x = get oww add wo j
 if lt x 0.0f64
 x = neg x
 end
@@ -2804,6 +3000,155 @@ end
 ret sub get gscl a b
 end
 
+note gfcache BASE.ck TOKS W OUT.hc [BF16]: batched GB10 frozen-trunk hidden-state dumper writing
+note the canonical OLLMFH01 format (compatible with trainfc, spforge, and spcryst) at full GPU speed.
+note Streams B windows per batched GPU forward (ggnoce = 2 skips logits/CE) and supports NP > 1 looped
+note checkpoints and D <= 2048 with chunked OCKC writes. Optional arg 6 selects BF16 (1) or f32 (0);
+note default is 1 when T, D, F are multiples of 64, else 0. Prints `GFCACHE W T D L gpu_ns bf16`.
+fn ggfch_wry pos ulong b ulong to ulong
+tt = get og 1
+bo = mul b tt
+for t ulong tt
+ocput8 mul t 8 get oby add bo t
+end
+nb = mul tt 8
+ocwput pos nb
+ret add pos nb
+end
+
+fn ggfch_wr1 base ulong cnt ulong to void
+h = get gbmem 5
+for j ulong cnt
+x = uint mapget h add base mul j 4 4
+ocput8 mul j 8 bitcast ulong f64 bitcast f32 x
+end
+end
+
+fn ggfch_wr pos ulong b ulong to ulong
+pos = ggfch_wry pos b
+td = mul get og 1 get og 2
+base = add get gga 8 mul mul b td 4
+done = ulong 0
+while lt done td bound 65536
+cnt = sub td done
+if gt cnt OCKC
+cnt = OCKC
+end
+ggfch_wr1 add base mul done 4 cnt
+nb = mul cnt 8
+ocwput pos nb
+pos = add pos nb
+done = add done cnt
+end
+ret pos
+end
+
+fn ggfch_defbf to uint
+if ne rem get og 1 64 0
+ret 0
+end
+if ne rem get og 2 64 0
+ret 0
+end
+if ne rem get og 4 64 0
+ret 0
+end
+ret 1
+end
+
+fn ggfch_step c ulong ww ulong pos ulong to ulong
+bb = get og 6
+tt = get og 1
+for b ulong bb
+w = add mul c bb b
+if ge w ww
+w = 0
+end
+obrow b mul w tt
+end
+ggupt
+put gkinv 0 1
+put ggnoce 0 2
+ggfwd
+put ggnoce 0 0
+for b2 ulong bb
+w2 = add mul c bb b2
+if lt w2 ww
+pos = ggfch_wr pos b2
+end
+end
+ret pos
+end
+
+fn ggfch_pr ww ulong ns long bf uint to void
+oputc 71
+oputc 70
+oputc 67
+oputc 65
+oputc 67
+oputc 72
+oputc 69
+oputc 32
+oputu ww
+oputc 32
+oputu get og 1
+oputc 32
+oputu get og 2
+oputc 32
+oputu get og 5
+oputc 32
+oputl ns
+oputc 32
+oputu ulong bf
+oputc 10
+oflush
+end
+
+fn ggfcache to void
+na = oargc
+if and ne na 6 ne na 7
+exit 2
+end
+ockloop 2
+odopen 3
+ww = oargu 4
+if or eq ww 0 gt ww div sub get odn 0 1 get og 1
+exit 23
+end
+bf = ggfch_defbf
+if eq na 7
+ba = oargu 6
+if gt ba 1
+exit 2
+end
+bf = uint ba
+end
+bh = osp_basehash get og 5 get og 33
+ocwopen 5
+ocput8 0 OFHMAG
+ocput8 8 ww
+ocput8 16 get og 1
+ocput8 24 get og 2
+ocput8 32 get og 5
+ocput8 40 bh
+ocwput 0 48
+pos = ulong 48
+t0 = monons
+ggopen
+ggupw
+put gkbf 0 bf
+bb = get og 6
+nc = div add ww sub bb 1 bb
+for c ulong nc
+pos = ggfch_step c ww pos
+end
+put gkbf 0 0
+ns = sub monons t0
+ocwend 5
+r = nvstop
+ggfch_pr ww ns bf
+end
+
 note ogcmd: the gb10 target's GPU commands. cli.om's ocmd offers every command word here first
 note (nogpu.om's ogcmd takes none on the CPU-only targets), so the gb10 unit is the aarch64 source
 note with gpu/ in place of nogpu.om and no renamed main. It runs the GPU commands here and the BF16
@@ -2909,6 +3254,10 @@ gt_r = gt_selftest
 if ne gt_r 0
 exit gt_r
 end
+ret true
+end
+if eq w 28543748692731495
+ggfcache
 ret true
 end
 ret false

@@ -11,7 +11,13 @@ const OGBN ulong 14161920
 global ogb f64 14161920
 const OABN ulong 15733760
 global oab f64 15733760
+const OPABN ulong 0
+global opab f64 1
 
 fn olp_grow w ulong g ulong a ulong to bool
 ret and le w OWWN and le g OGBN le a OABN
+end
+
+fn olp_grow_pa pa ulong to bool
+ret eq pa 0
 end

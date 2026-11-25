@@ -115,13 +115,25 @@ gkstg p add s u mul u 128 ne u 0
 end
 end
 note RMS register bank k (k < 4) of n = D/32 words: R32 + 8 k while n <= 8 (the v1 layout, scalars at
-note R64..R67 above it); from n = 9 the banks sit above the scalars at R72 + n k, so D <= 384 (n <= 12)
-note ends at R119 and grall raises the slot's GPR count to 128 (gk.om: highest GPR + 3, multiple of 8).
+note R64..R67 above it); for n > 8 (D <= 2048, n <= 64) RMSF/RMSB use a tiled 2-pass warp loop with
+note chunk size c <= 8 so all four banks stay in R32..R63 and max GPR is R67 (gkgpr 72, high SM121 occupancy).
 fn grrb k uint n uint to uint
 if le n 8
 ret add 32 mul 8 k
 end
 ret add 72 mul n k
+end
+fn grrmsch n uint to uint
+if eq rem n 8 0
+ret 8
+end
+if eq rem n 4 0
+ret 4
+end
+if eq rem n 2 0
+ret 2
+end
+ret 1
 end
 note 10 RMSF: per row r < R: s = 1/sqrt(sum v^2 / D + 1e-5); y = v s g; args R*32 v g y s
 fn grrmsf to void
@@ -131,6 +143,7 @@ n = div d 32
 grrrow
 gkmovi 24 grf div 1.0f64 f64 d
 gkmovi 25 grf 0.00001f64
+if le n 8
 grrptr 10 1 d4
 gkldc64 14 grarg 4
 gkimadw 14 9 4 14
@@ -154,6 +167,42 @@ gkfmulf add b0 u add b0 u add b1 u
 end
 grstw 16 b0 n
 gkexit
+ret
+end
+c = grrmsch n
+it = div n c
+adv = mul c 128
+grrptr 10 1 d4
+gkmovz 64
+top = grtop 30 it
+grldw 32 10 c true
+for u uint c
+gkffmaf 64 add 32 u add 32 u 64
+end
+gradv 10 adv
+grbot 30 top
+grwred 0 0
+gkffmaf 65 64 24 25
+grmufu 66 65 5120
+grptr 12 7 8 4
+gkstg 12 66 0 false
+grrptr 10 1 d4
+gkldc64 14 grarg 4
+gkimadw 14 9 4 14
+grrptr 16 5 d4
+top2 = grtop 30 it
+grldw 32 10 c true
+grldw 40 14 c false
+for u uint c
+gkfmulf add 32 u add 32 u 66
+gkfmulf add 32 u add 32 u add 40 u
+end
+grstw 16 32 c
+gradv 10 adv
+gradv 14 adv
+gradv 16 adv
+grbot 30 top2
+gkexit
 end
 note Mutant r: 1 in the product, 0 in the mutant, whose RMSB row sum sum(da g v) skips the lane-1
 note butterfly step (k1 from half the row), which gcmp2 must catch.
@@ -165,6 +214,7 @@ d4 = mul d 4
 n = div d 32
 grrrow
 gkmovi 24 grf div 1.0f64 f64 d
+if le n 8
 grrptr 10 1 d4
 gkldc64 12 grarg 4
 gkimadw 12 9 4 12
@@ -204,6 +254,67 @@ grfadd add b3 u add b3 u add b1 u
 end
 grstw 16 b3 n
 grstw 18 b0 n
+gkexit
+ret
+end
+c = grrmsch n
+it = div n c
+adv = mul c 128
+grptr 20 5 8 4
+gkldg 67 20 0 false
+grrptr 10 1 d4
+gkldc64 12 grarg 4
+gkimadw 12 9 4 12
+grrptr 14 7 d4
+gkmovz 64
+top = grtop 30 it
+grldw 32 14 c true
+grldw 40 12 c false
+grldw 48 10 c false
+for u uint c
+gkfmulf add 40 u add 32 u add 40 u
+gkffmaf 64 add 40 u add 48 u 64
+end
+gradv 10 adv
+gradv 12 adv
+gradv 14 adv
+grbot 30 top
+if eq OMUTR 0
+grwred 0 1
+else
+grwred 0 0
+end
+gkfmulf 66 67 67
+gkfmulf 66 66 64
+gkfmulf 66 66 24
+grrptr 10 1 d4
+gkldc64 12 grarg 4
+gkimadw 12 9 4 12
+grrptr 14 7 d4
+grrptr 16 9 d4
+grrptr 18 11 d4
+top2 = grtop 30 it
+grldw 32 14 c true
+grldw 40 12 c false
+grldw 48 10 c false
+grldw 56 16 c false
+for u uint c
+gkfmulf add 40 u add 32 u add 40 u
+gkfmulf add 32 u add 32 u add 48 u
+gkfmulf add 32 u add 32 u 67
+gkfmulf add 48 u add 48 u 66
+grfsub add 40 u add 40 u add 48 u
+gkfmulf add 40 u add 40 u 67
+grfadd add 56 u add 56 u add 40 u
+end
+grstw 16 56 c
+grstw 18 32 c
+gradv 10 adv
+gradv 12 adv
+gradv 14 adv
+gradv 16 adv
+gradv 18 adv
+grbot 30 top2
 gkexit
 end
 note 13/14 COLSUM: out[c ostr + i] (=, +=) sum_k in[c cstr + k kstr + i]; grid (n/64, chunks)
@@ -585,12 +696,12 @@ put grd 4 f
 put grd 5 b
 end
 fn grall to bool
-note the warp-per-row RMS kernels hold D/32 columns per lane (D <= 1024: four banks end at R199, grrb),
-note softmax T/32, and CE steps 256 columns
+note the warp-per-row RMS kernels tile D/32 columns in chunks <= 8 (D <= 2048, n <= 64, gkgpr 72),
+note softmax T/32 (T <= 512), and CE steps 256 columns
 if or ne rem get grd 2 32 0 ne rem get grd 1 32 0
 ret false
 end
-if gt get grd 2 1024
+if gt get grd 2 2048
 ret false
 end
 if ne rem get grd 0 256 0
@@ -640,10 +751,6 @@ ret false
 end
 put gkthr id 64
 put gkgpr id 72
-if and gt get grd 2 256 or eq id 10 eq id 11
-top = add 72 mul 4 div uint get grd 2 32
-put gkgpr id mul div add top 9 8 8
-end
 put gksm id 0
 end
 ret true
