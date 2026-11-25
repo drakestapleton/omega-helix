@@ -2,13 +2,82 @@
   <img src="assets/twitter-card.jpg" alt="Omega Helix — Pure-Omega Zero-CUDA DNA LLM Training Engine" width="100%">
 </p>
 
+<p align="center">
+  <a href="https://github.com/drakestapleton/omega-helix/actions/workflows/verify.yml"><img src="https://github.com/drakestapleton/omega-helix/actions/workflows/verify.yml/badge.svg?branch=main" alt="Verify Omega Helix CI"></a>
+  <a href="https://github.com/drakestapleton/omega-helix/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/release-v0.1.0-0ea5e9?style=flat-square" alt="Release v0.1.0"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-10b981?style=flat-square" alt="License Apache-2.0"></a>
+  <a href="https://github.com/drakestapleton/omega-helix/issues/5"><img src="https://img.shields.io/badge/reproducers-post%20receipt-8b5cf6?style=flat-square" alt="Independent Reproducers Issue #5"></a>
+</p>
+
 # Omega Helix
 
 **Pure-Omega, Zero-CUDA, DNA-Chained LLM Training, Specialist & Serving Engine on Raw Blackwell Silicon.**
 
 Omega Helix (`ollm` / `ollm-gb10`) is an entire end-to-end language model stack — BPE tokenizer, transformer pretraining, BF16 Tensor-Core & FP32 SM121 Blackwell GPU kernels, **DNA-style Merkle Specialist Chains (`OLLMSP01` + `spclip`)**, **Looped-Core & Adaptive Neuralese (`OLLMCK03` + `LTP0`)**, KV-cached sampling, and an OpenAI-compatible HTTP server — compiled into a **single static binary** with **zero CUDA, zero cuBLAS, zero PyTorch, zero C, and zero `libc`**.
 
+> **Repo Scope & Language Disclosure:** `omega-helix` is the standalone pure-Omega LLM training, DNA specialist, and serving engine; [`omega-mv`](https://interplane.io/drakestapleton/omega-mv) (`seed/helix/`) holds the bootstrapped `omc` compiler and proof-carrying toolchain. All engine binaries, GPU kernels, tokenizers, and HTTP servers in `native/` are 100% pure Omega (`.om`) with zero Python or C; Python files under `tests/` and `tools/` are strictly the independent `f64` referee oracle (`oracle.py`) and optional local Studio UI/CLI helpers (marked `linguist-vendored` in `.gitattributes`).
+>
 > **Driver & Firmware Disclosure:** "Zero CUDA" means zero NVIDIA userspace libraries or CUDA toolkit (`ldd: not a dynamic executable`). GPU execution opens `/dev/nvidiactl`, `/dev/nvidia0`, and `/dev/nvidia-uvm` directly via raw Linux `ioctl` calls through the open Linux kernel modules (`nvidia` / `nvidia-uvm`) and NVIDIA's signed GSP firmware.
+
+---
+
+## Verify on Your Own Laptop in 30 Seconds (Zero GPU Required)
+
+Runs cleanly on any Apple Silicon Mac or Linux (`x86_64` / `aarch64`) machine with Python 3 + [`omc`](https://interplane.io/omega/) — compiles the static engine, verifies linkage (`otool -L` / `ldd`), checks bit-exact gradient/step parity against the independent Python `f64` oracle, and trips two live negative controls (`rc=61` on tampered `.sp`, non-zero on injected oracle mutant):
+
+```sh
+git clone https://github.com/drakestapleton/omega-helix.git && cd omega-helix
+sh scripts/verify-30s.sh
+```
+
+---
+
+## 45-Second Uncut Live Proof (Zero CUDA / Static ELF / `/proc/$PID/maps` Empty / Negative Controls)
+
+Recorded unedited on DGX Spark GB10 (`evidence/proof-zero-cuda-gb10/{`[`transcript.txt`](evidence/proof-zero-cuda-gb10/transcript.txt)`,` [`proof.cast`](evidence/proof-zero-cuda-gb10/proof.cast)`}` via [`scripts/record-zero-cuda-proof.sh`](scripts/record-zero-cuda-proof.sh)):
+
+<p align="center">
+  <img src="assets/zero-cuda-proof.svg" alt="Uncut terminal proof of zero CUDA linkage, empty /proc/PID/maps, live GB10 gtrainb, and rc=61 negative control" width="100%">
+</p>
+
+---
+
+## What's Proven / What's `NOT_RUN` / What Missed
+
+| Area | Status | Honest Scope, Receipts & Boundaries |
+|---|---|---|
+| **DGX Spark GB10 Silicon (`sm_121`)** | **PROVEN** | Rungs 4–10 (`85,285 tok/s` BF16 `1.204466 nats`), `Δ = 0 µnats` CPU vs. chip `geval`, 43/43 SM121 SASS disassembly guard slots (`tests/gpu-disasm.sh --all`), and raw `/dev/nvidia*` execution with empty CUDA `/proc/$PID/maps` ([`evidence/`](evidence/)). |
+| **Independent CPU & Oracle Verification** | **PROVEN** | Full `scripts/verify.sh` (`adamck`, `gcheck`, `kvcmp`, `oracle.py`, `oracle_universal.py`, Safetensors/GGUF `test_interchange.py`, `test_adaptive_loop.py`, Studio/Distill/Runtime/Commons suites, `verify-30s.sh`) verified on Apple Silicon macOS + DGX Spark AArch64 + GitHub Actions CI. |
+| **QEMU-Emulated Bare-Metal Targets** | **EMULATED ONLY** | `x86efi` (QEMU + OVMF) & `a64efi` (QEMU + KVM + AAVMF) executed `.sp` DNA chains; `a64efi` also booted on physical Spark UEFI (`evidence/OMEGALLM/a64efi/dgx-spark/`). **Physical bare-metal x86 UEFI remains `NOT_RUN`.** |
+| **CPU-Only Feature Paths (`NOT_RUN` on GB10)** | **CPU ONLY (`GPU NOT_RUN`)** | Per-token adaptive loop exit & inter-pass messages (`adapteval`/`adaptsamp`/`adaptcmp`), grammar FSM `gsamp`, and `ollm spguard` JSD + anti-DNA steering run on CPU only (`docs/LOOP.md`, `docs/SOVEREIGN-RUNTIME.md`); `FREEZE_LAYERS` + fixed-`NP` looped `gtrainf`/`gtrainb` ARE proven on GB10. |
+| **Scratch 15.8M Coding-Bench Miss** | **MISSED (`0 / 159`)** | All three arms (`base`, `loop`, `deep`) trained for 6,000 steps on the small `.om` repo corpus scored **`0 of 159`** on `tools/bench/` Python/coding tasks (`docs/LOOP.md` — small scratch corpus capacity/token-budget miss). |
+| **Trust & Hardware Boundaries** | **DISCLOSED** | Open `nvidia` / `nvidia-uvm` kernel modules + NVIDIA signed GSP firmware sit beneath raw `ioctl` submission; hardware receipts so far come from **one operator's DGX Spark + MacBook** alongside automated GitHub Actions CPU runners. |
+
+---
+
+## Reproducible Head-to-Head: Omega Helix vs. PyTorch + CUDA (`15.83M` Model on DGX Spark GB10)
+
+Matched model (`V=4096, T=256, D=384, H=12, F=1536, L=8, B=64`, `15,833,472` params, RMSNorm, causal attention, ReLU MLP, tied head, BF16 + AdamW) run inside the same exclusive GB10 window ([`evidence/h2h-pytorch-gb10/README.md`](evidence/h2h-pytorch-gb10/README.md), [`tests/bench_pytorch_h2h.py`](tests/bench_pytorch_h2h.py)):
+
+| Metric | Omega Helix (`ollm-gb10 gtrainb`) | PyTorch `2.14.0+cu130` (Eager) | PyTorch `2.14.0+cu130` (`torch.compile`) |
+|---|---:|---:|---:|
+| **Install / Binary Footprint** | **`791,988 B` (~773 KiB)** | `5,325,112,578 B` (~4.96 GiB) | `5,325,112,578 B` (~4.96 GiB) |
+| **Userspace CUDA / cuBLAS / Triton** | **0 (static ELF, `not a dynamic executable`)** | Yes (`cu130`, cuBLAS, cuDNN) | Yes (`cu130`, Triton 3.8, Inductor) |
+| **Cold Start to Step 1** | `7,258.3 ms` *(loads & saves `380 MB` `f64` ckpt)* | **`2,646.8 ms`** *(in-RAM init)* | `4,748.5 ms` *(in-RAM + compile)* |
+| **Steady-State Speed (30 steps)** | `84,646.7 tok/s` (`193.56 ms/step`) | **`130,769.2 tok/s`** (`125.29 ms`) | **`257,463.6 tok/s`** (`63.64 ms`) |
+| **Peak CUDA Alloc / Reserved** | Raw `/dev/nvidia*` UVM heaps (zero CUDA) | `2.08 GiB` / `2.21 GiB` | `1.65 GiB` / `2.21 GiB` |
+
+---
+
+## Independent Reproducers Log
+
+> **Want to add your hardware?** Run `sh scripts/verify.sh 2>&1 | tee verify.log` (or `sh scripts/verify-30s.sh`) and post your log SHA-256 in the pinned issue: [**#5 — Run `scripts/verify.sh` on your machine and post your receipt**](https://github.com/drakestapleton/omega-helix/issues/5).
+
+| Date (UTC) | GitHub Handle / CI | Machine / OS | Command | Receipt / Binary SHA-256 |
+|---|---|---|---|---|
+| 2026-11-25 | [`github-actions`](https://github.com/drakestapleton/omega-helix/actions/workflows/verify.yml) | Ubuntu x86_64 / ARM64 & macOS arm64 | `sh scripts/verify.sh` | Live workflow artifact (`verify-ci-*.log`) |
+| 2026-11-25 | `@drakestapleton` | Apple Silicon macOS arm64 (M2 Air) | `sh scripts/verify-30s.sh` | Binary `c8c03d85955653ae...` (static Mach-O, `VERIFY_30S_PASS`) |
+| 2026-11-25 | `@drakestapleton` | NVIDIA DGX Spark (Grace + GB10 `sm_121`) | `sh scripts/verify.sh` + `record-zero-cuda-proof.sh` | See [`evidence/proof-zero-cuda-gb10/SHA256SUMS.txt`](evidence/proof-zero-cuda-gb10/SHA256SUMS.txt) |
 
 ---
 

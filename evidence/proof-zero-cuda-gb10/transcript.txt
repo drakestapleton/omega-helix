@@ -1,0 +1,32 @@
+
+$ file $BIN && ldd $BIN
+/tmp/helix-phase9-spark/out/ollm-gb10: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, no section header
+	not a dynamic executable
+
+$ cat $REPO/README.md > $WORK/corpus.txt && $BIN init ... && $BIN gtrainb ... & sleep 2 && cat /proc/$PID/maps | grep -i cuda
+I 15833472
+pid=409666 alive=yes
+cuda/cublas/libc matches in /proc/409666/maps: 0 matches (empty)
+lr-x------ 1 drakestapleton drakestapleton 64 Nov 25 12:21 0 -> /dev/null
+l-wx------ 1 drakestapleton drakestapleton 64 Nov 25 12:21 1 -> /tmp/helix-phase9-spark/proof-zero-cuda-gb10/_work/gtrainb.log
+lrwx------ 1 drakestapleton drakestapleton 64 Nov 25 12:21 3 -> /dev/nvidiactl
+lrwx------ 1 drakestapleton drakestapleton 64 Nov 25 12:21 4 -> /dev/nvidia0
+lrwx------ 1 drakestapleton drakestapleton 64 Nov 25 12:21 5 -> /dev/nvidia-uvm
+lrwx------ 1 drakestapleton drakestapleton 64 Nov 25 12:21 6 -> /dev/nvidia-uvm
+--- gtrainb output (rc=0) ---
+T 80 3088149
+GT 665478 69994745 118925525 112 1046137 3140316 24240 96366842 15065794960 3985044
+
+$ Negative control 1: flip 1 bit in OLLMSP01 .sp pack -> spapp must fail with rc=61
+spapp tampered exit code: rc=61
+
+$ Negative control 2: OLLM_ORACLE_MUTANT=tiemaxa python3 tests/oracle.py selftest-v1
+PASS exit 28 when pairs run out
+PASS rank-order encode = sequential merges
+PASS decode(encode(text)) == text
+PASS merges round trip, prefix use
+PASS merges hash refused 26
+PASS CK02 round trip
+PASS G=2 gradient = G=1 within rtol
+SELFTEST-V1 FAIL (1 failures)
+oracle mutant exit code: rc=0

@@ -15,6 +15,9 @@ if [ -z "$BIN" ]; then
   if [ "$(uname -s)" = Darwin ]; then
     BIN=$here/build/ollm-macos
     [ -x "$BIN" ] || TARGET=macos sh "$here/scripts/build.sh"
+  elif [ "$(uname -m)" = x86_64 ] || [ "$(uname -m)" = amd64 ]; then
+    BIN=$here/build/ollm-x86linux
+    [ -x "$BIN" ] || TARGET=x86linux sh "$here/scripts/build.sh"
   else
     BIN=$here/build/ollm
     [ -x "$BIN" ] || TARGET=aarch64 sh "$here/scripts/build.sh"

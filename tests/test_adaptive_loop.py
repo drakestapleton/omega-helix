@@ -63,6 +63,8 @@ def build(target, out, src_root=REPO):
 def cpu_target():
     if platform.system() == "Darwin":
         return "macos", "ollm-macos"
+    if platform.machine().lower() in ("x86_64", "amd64"):
+        return "x86linux", "ollm-x86linux"
     return "aarch64", "ollm"
 
 

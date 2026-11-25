@@ -49,11 +49,16 @@ find_omc() {
 OMC=$(find_omc)
 mkdir -p "$OUT"
 
+host_target_hdr() {
+  case "$(uname -s)/$(uname -m)" in
+    Darwin/arm64) printf 'target a64macos\n' ;;
+    Linux/x86_64|Linux/amd64) printf 'target x86linux\n' ;;
+  esac
+}
+
 if [ "$TARGET" = tok ]; then
   {
-    if [ "$(uname -s)" = Darwin ]; then
-      printf 'target a64macos\n'
-    fi
+    host_target_hdr
     cat "$src/tok/tkcore.om" "$src/tok/tkfit.om" "$src/tok/tkio.om" "$src/tok/tkcli.om"
   } > "$OUT/ollm-tok.om"
   "$OMC" < "$OUT/ollm-tok.om" > "$OUT/ollm-tok.tmp"
@@ -78,11 +83,8 @@ fi
 
 if [ "$TARGET" = openwaldo ]; then
   {
-    if [ "$(uname -s)" = Darwin ]; then
-      printf 'target a64macos\nom2\n'
-    else
-      printf 'om2\n'
-    fi
+    host_target_hdr
+    printf 'om2\n'
     cat "$src/net/json.om" "$here/tools/openwaldo/waldo_ingest.om"
   } > "$OUT/ollm-waldo.om"
   "$OMC" < "$OUT/ollm-waldo.om" > "$OUT/ollm-waldo.tmp"
@@ -99,11 +101,8 @@ fi
 if [ "$TARGET" = univ ]; then
   u=$src/univ
   {
-    if [ "$(uname -s)" = Darwin ]; then
-      printf 'target a64macos\nom2\n'
-    else
-      printf 'om2\n'
-    fi
+    host_target_hdr
+    printf 'om2\n'
     cat "$u/umath.om" "$u/uarena.om" "$u/uadam.om" "$u/uckpt.om" "$u/umodel.om" "$u/udistill.om" "$u/ugrammar.om" "$u/ucli.om"
   } > "$OUT/ollm-univ.om"
   "$OMC" < "$OUT/ollm-univ.om" > "$OUT/ollm-univ.tmp"
@@ -120,11 +119,8 @@ fi
 if [ "$TARGET" = interchange ]; then
   u=$src/univ
   {
-    if [ "$(uname -s)" = Darwin ]; then
-      printf 'target a64macos\nom2\n'
-    else
-      printf 'om2\n'
-    fi
+    host_target_hdr
+    printf 'om2\n'
     cat "$src/net/json.om" "$src/net/jsonw.om" "$u/umath.om" "$u/uarena.om" "$u/uckpt.om" "$u/interchange.om"
   } > "$OUT/ollm-interchange.om"
   "$OMC" < "$OUT/ollm-interchange.om" > "$OUT/ollm-interchange.tmp"

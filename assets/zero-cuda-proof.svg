@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 702" width="920" height="702" role="img" aria-label="Uncut DGX Spark GB10 zero-CUDA proof terminal session">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#090d16"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <style>
+      text { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; white-space: pre; }
+      .hdr { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 12px; fill: #94a3b8; font-weight: 600; }
+      .sub { font-size: 11px; fill: #64748b; }
+            .l0 { opacity: 1; }
+      .l1 { opacity: 1; }
+      .l2 { opacity: 1; }
+      .l3 { opacity: 1; }
+      @keyframes k4 { 0%,5.26% { opacity: 0; } 5.61%,100% { opacity: 1; } } .l4 { opacity: 0; animation: k4 28.3s linear infinite; }
+      @keyframes k5 { 0%,12.44% { opacity: 0; } 12.79%,100% { opacity: 1; } } .l5 { opacity: 0; animation: k5 28.3s linear infinite; }
+      @keyframes k6 { 0%,12.44% { opacity: 0; } 12.79%,100% { opacity: 1; } } .l6 { opacity: 0; animation: k6 28.3s linear infinite; }
+      @keyframes k7 { 0%,12.45% { opacity: 0; } 12.8%,100% { opacity: 1; } } .l7 { opacity: 0; animation: k7 28.3s linear infinite; }
+      @keyframes k8 { 0%,12.45% { opacity: 0; } 12.8%,100% { opacity: 1; } } .l8 { opacity: 0; animation: k8 28.3s linear infinite; }
+      @keyframes k9 { 0%,12.45% { opacity: 0; } 12.8%,100% { opacity: 1; } } .l9 { opacity: 0; animation: k9 28.3s linear infinite; }
+      @keyframes k10 { 0%,12.45% { opacity: 0; } 12.8%,100% { opacity: 1; } } .l10 { opacity: 0; animation: k10 28.3s linear infinite; }
+      @keyframes k11 { 0%,12.45% { opacity: 0; } 12.8%,100% { opacity: 1; } } .l11 { opacity: 0; animation: k11 28.3s linear infinite; }
+      @keyframes k12 { 0%,12.45% { opacity: 0; } 12.8%,100% { opacity: 1; } } .l12 { opacity: 0; animation: k12 28.3s linear infinite; }
+      @keyframes k13 { 0%,84.87% { opacity: 0; } 85.22%,100% { opacity: 1; } } .l13 { opacity: 0; animation: k13 28.3s linear infinite; }
+      @keyframes k14 { 0%,84.87% { opacity: 0; } 85.22%,100% { opacity: 1; } } .l14 { opacity: 0; animation: k14 28.3s linear infinite; }
+      @keyframes k15 { 0%,84.87% { opacity: 0; } 85.22%,100% { opacity: 1; } } .l15 { opacity: 0; animation: k15 28.3s linear infinite; }
+      @keyframes k16 { 0%,84.87% { opacity: 0; } 85.22%,100% { opacity: 1; } } .l16 { opacity: 0; animation: k16 28.3s linear infinite; }
+      @keyframes k17 { 0%,85.03% { opacity: 0; } 85.38%,100% { opacity: 1; } } .l17 { opacity: 0; animation: k17 28.3s linear infinite; }
+      @keyframes k18 { 0%,85.03% { opacity: 0; } 85.38%,100% { opacity: 1; } } .l18 { opacity: 0; animation: k18 28.3s linear infinite; }
+      @keyframes k19 { 0%,85.5% { opacity: 0; } 85.85%,100% { opacity: 1; } } .l19 { opacity: 0; animation: k19 28.3s linear infinite; }
+      @keyframes k20 { 0%,85.5% { opacity: 0; } 85.85%,100% { opacity: 1; } } .l20 { opacity: 0; animation: k20 28.3s linear infinite; }
+      @keyframes k21 { 0%,85.5% { opacity: 0; } 85.85%,100% { opacity: 1; } } .l21 { opacity: 0; animation: k21 28.3s linear infinite; }
+      @keyframes k22 { 0%,85.5% { opacity: 0; } 85.85%,100% { opacity: 1; } } .l22 { opacity: 0; animation: k22 28.3s linear infinite; }
+      @keyframes k23 { 0%,85.5% { opacity: 0; } 85.85%,100% { opacity: 1; } } .l23 { opacity: 0; animation: k23 28.3s linear infinite; }
+      @keyframes k24 { 0%,85.5% { opacity: 0; } 85.85%,100% { opacity: 1; } } .l24 { opacity: 0; animation: k24 28.3s linear infinite; }
+      @keyframes k25 { 0%,85.5% { opacity: 0; } 85.85%,100% { opacity: 1; } } .l25 { opacity: 0; animation: k25 28.3s linear infinite; }
+      @keyframes k26 { 0%,85.5% { opacity: 0; } 85.85%,100% { opacity: 1; } } .l26 { opacity: 0; animation: k26 28.3s linear infinite; }
+      @media (prefers-reduced-motion: reduce) {
+        text { opacity: 1 !important; animation: none !important; }
+      }
+    </style>
+  </defs>
+  <rect width="920" height="702" rx="12" fill="url(#bg)" stroke="#1e293b" stroke-width="1.5"/>
+  <rect x="0" y="0" width="920" height="42" rx="12" fill="#111827"/>
+  <rect x="0" y="30" width="920" height="12" fill="#111827"/>
+  <circle cx="24" cy="21" r="6" fill="#ef4444"/>
+  <circle cx="44" cy="21" r="6" fill="#f59e0b"/>
+  <circle cx="64" cy="21" r="6" fill="#10b981"/>
+  <text x="88" y="25" class="hdr">DGX Spark GB10 (sm_121) — Uncut Zero-CUDA Proof &amp; Negative Controls (evidence/proof-zero-cuda-gb10/proof.cast)</text>
+  <text x="24" y="76" fill="#38bdf8" font-weight="600" class="l0">$ file $BIN &amp;&amp; ldd $BIN</text>
+  <text x="24" y="98" fill="#cbd5e1" class="l1">/tmp/helix-phase9-spark/out/ollm-gb10: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV</text>
+  <text x="24" y="120" fill="#e2e8f0" class="l2">	not a dynamic executable</text>
+  <text x="24" y="142" fill="#38bdf8" font-weight="600" class="l3">$ cat $REPO/README.md &gt; $WORK/corpus.txt &amp;&amp; $BIN init ... &amp;&amp; $BIN gtrainb ... &amp; sleep 2 &amp;&amp; cat</text>
+  <text x="24" y="164" fill="#cbd5e1" class="l4">I 15833472</text>
+  <text x="24" y="186" fill="#cbd5e1" class="l5">pid=409666 alive=yes</text>
+  <text x="24" y="208" fill="#34d399" font-weight="600" class="l6">cuda/cublas/libc matches in /proc/409666/maps: 0 matches (empty)</text>
+  <text x="24" y="230" fill="#cbd5e1" class="l7">lr-x------ 1 drakestapleton drakestapleton 64 Nov 25 12:21 0 -&gt; /dev/null</text>
+  <text x="24" y="252" fill="#cbd5e1" class="l8">l-wx------ 1 drakestapleton drakestapleton 64 Nov 25 12:21 1 -&gt; /tmp/helix-phase9-spark/proof-</text>
+  <text x="24" y="274" fill="#e2e8f0" class="l9">lrwx------ 1 drakestapleton drakestapleton 64 Nov 25 12:21 3 -&gt; /dev/nvidiactl</text>
+  <text x="24" y="296" fill="#e2e8f0" class="l10">lrwx------ 1 drakestapleton drakestapleton 64 Nov 25 12:21 4 -&gt; /dev/nvidia0</text>
+  <text x="24" y="318" fill="#e2e8f0" class="l11">lrwx------ 1 drakestapleton drakestapleton 64 Nov 25 12:21 5 -&gt; /dev/nvidia-uvm</text>
+  <text x="24" y="340" fill="#e2e8f0" class="l12">lrwx------ 1 drakestapleton drakestapleton 64 Nov 25 12:21 6 -&gt; /dev/nvidia-uvm</text>
+  <text x="24" y="362" fill="#cbd5e1" class="l13">--- gtrainb output (rc=0) ---</text>
+  <text x="24" y="384" fill="#e2e8f0" class="l14">T 80 3088149</text>
+  <text x="24" y="406" fill="#e2e8f0" class="l15">GT 665478 69994745 118925525 112 1046137 3140316 24240 96366842 15065794960 3985044</text>
+  <text x="24" y="428" fill="#38bdf8" font-weight="600" class="l16">$ Negative control 1: flip 1 bit in OLLMSP01 .sp pack -&gt; spapp must fail with rc=61</text>
+  <text x="24" y="450" fill="#34d399" font-weight="600" class="l17">spapp tampered exit code: rc=61</text>
+  <text x="24" y="472" fill="#38bdf8" font-weight="600" class="l18">$ Negative control 2: OLLM_ORACLE_MUTANT=tiemaxa python3 tests/oracle.py selftest-v1</text>
+  <text x="24" y="494" fill="#94a3b8" class="l19">PASS exit 28 when pairs run out</text>
+  <text x="24" y="516" fill="#94a3b8" class="l20">PASS rank-order encode = sequential merges</text>
+  <text x="24" y="538" fill="#94a3b8" class="l21">PASS decode(encode(text)) == text</text>
+  <text x="24" y="560" fill="#94a3b8" class="l22">PASS merges round trip, prefix use</text>
+  <text x="24" y="582" fill="#94a3b8" class="l23">PASS merges hash refused 26</text>
+  <text x="24" y="604" fill="#94a3b8" class="l24">PASS CK02 round trip</text>
+  <text x="24" y="626" fill="#94a3b8" class="l25">PASS G=2 gradient = G=1 within rtol</text>
+  <text x="24" y="648" fill="#34d399" font-weight="600" class="l26">SELFTEST-V1 FAIL (1 failures)</text>
+</svg>
