@@ -1229,8 +1229,70 @@
     });
   }
 
+  async function runVerifyLocks() {
+    const btn = $("btn-verify-locks");
+    const st = $("locks-status");
+    if (!btn || !st) return;
+    btn.disabled = true;
+    st.textContent = "Verifying 8-pillar locks…";
+    try {
+      const res = await api("/api/runtime/locks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ steps: 6, lr_milli: 10 }) });
+      if (res.ok) {
+        const revTxt = res.rev_supported ? `Rev Q32 (${res.q32_inv_bits}-bit, 0B act) ✓` : "Rev (ARM64 only)";
+        st.textContent = `OMG ✓ · Arboris ✓ · ${revTxt}`;
+        toast("8-pillar pure-Omega locks verified.", "ok");
+        sfx.assign();
+      } else {
+        st.textContent = res.error || "Lock check failed";
+        toast("8-pillar lock check failed.", "err");
+        sfx.err();
+      }
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   async function runSample() {
+    const playModeEl = document.querySelector('input[name="playmode"]:checked');
+    const playMode = playModeEl ? playModeEl.value : "std";
     const runId = $("play-run").value || state.activeRunId;
+    if (playMode === "omg" || playMode === "arbsamp") {
+      const btn = $("btn-sample");
+      btn.disabled = true;
+      $("sample-out").textContent = playMode === "omg" ? "OMG-masked decoding…" : "Arboris 3-layer guided decoding…";
+      try {
+        const endpoint = playMode === "omg" ? "/api/runtime/omg" : "/api/runtime/arbsamp";
+        const res = await api(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "samp",
+            run_id: runId || undefined,
+            seed: state.playOpts.seed,
+            budget: Math.min(128, Math.max(16, state.playOpts.n_tokens || 64)),
+            temp_milli: state.playOpts.temp_milli,
+          }),
+        });
+        if (!res.ok) {
+          $("sample-out").textContent = res.error || "8-pillar decode failed.";
+          sfx.err();
+          return;
+        }
+        $("sample-out").textContent = res.source_om || "(empty .om)";
+        const compBadge = res.omc_compiled ? "omc ✓" : `omc rc=${res.omc_rc}`;
+        if (playMode === "omg") {
+          $("sample-meta").textContent = `OMG-Masked · ${res.ntok} toks · sem=${res.sem_id} · ${compBadge}`;
+        } else {
+          const pct = Math.round((res.bypass_rate || 0) * 100);
+          $("sample-meta").textContent = `Arboris-Guided · ${res.bypass_hits}/${res.ntok} bypass (${pct}%) · LTP0=${res.ltp0_calls} · ${compBadge}`;
+        }
+        $("exit-pills").replaceChildren();
+        sfx.assign();
+      } finally {
+        btn.disabled = false;
+      }
+      return;
+    }
     if (!runId) {
       toast("Select or forge a chain first.", "err");
       sfx.err();
@@ -1378,6 +1440,7 @@
       if (id) loadRunDetail(id);
     });
     $("btn-sample").addEventListener("click", runSample);
+    if ($("btn-verify-locks")) $("btn-verify-locks").addEventListener("click", runVerifyLocks);
 
     /* ---------------- Tab 5: Distillation Pipeline Network ---------------- */
     $("btn-distill-probe").addEventListener("click", probeDistillTeachers);

@@ -137,4 +137,40 @@ cat "$here/README.md" "$here/docs/LOOP.md" > "$work/corpus.txt"
 "$BIN" spapp "$work/base.ck" "$work/closed.sp" "$work/spec.ck"
 "$BIN" speval "$work/base.ck" "$work/closed.sp" "$work/corpus.txt" 8
 
+echo "=== 10. Unified 8-Pillar Loop (omg pack/decode/samp -> omc, arboris guide -> omc, rev train) ==="
+cat > "$work/seed.om" <<'EOF'
+om2
+fn scale x ulong k ulong to ulong
+  res = mul x k
+  res = add res 1
+  ret res
+end
+fn main to int
+  a = ulong 7
+  b = scale a 3
+  if gt b 10
+    ret int sub b 10
+  end
+  ret 0
+end
+EOF
+"$BIN" omg pack "$work/seed.om" "$work/seed.tok"
+"$BIN" omg decode "$work/seed.tok" "$work/dec.om"
+cat "$work/seed.tok" "$work/seed.tok" "$work/seed.tok" "$work/seed.tok" > "$work/omg_corpus.tok"
+"$BIN" init "$work/omg.ck" 256 16 16 2 32 2 4 1 10 4000
+"$BIN" train "$work/omg.ck" "$work/omg_corpus.tok" 5 5
+"$BIN" omg samp "$work/omg.ck" 42 64 0 "$work/samp.om"
+"$BIN" arboris guide "$work/omg.ck" "$work/omg_corpus.tok" 42 64 0 "$work/guide.om"
+OMC_HDR=""
+if [ "$OS" = Darwin ]; then
+  OMC_HDR="target a64macos
+"
+fi
+for omf in "$work/dec.om" "$work/samp.om" "$work/guide.om"; do
+  { printf '%s' "$OMC_HDR"; cat "$omf"; } | "$OMC" > "$omf.bin"
+done
+if [ "$OS" = Darwin ] || [ "$ARCH" = aarch64 ]; then
+  "$BIN" rev train 8 10
+fi
+
 echo "OMEGA_HELIX_PURE_OM_PASS"

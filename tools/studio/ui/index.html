@@ -211,7 +211,7 @@
             <div class="field"><label for="f-arch">Architecture</label>
               <select id="f-arch"><option value="custom">helix (custom)</option><option value="llama">llama</option><option value="qwen2">qwen2</option><option value="qwen3">qwen3 (QK-norm)</option><option value="mistral">mistral</option><option value="gemma">gemma (GeGLU)</option><option value="gpt">gpt (WPE + ReLU)</option><option value="gelu">gelu (WPE + GELU)</option></select></div>
             <div class="field"><label for="f-tokenizer">Tokenizer</label>
-              <select id="f-tokenizer"><option value="bpe">BPE (ollm bpefit)</option><option value="byte">raw bytes</option><option value="u32">u32 vocab</option></select></div>
+              <select id="f-tokenizer"><option value="bpe">BPE (ollm bpefit)</option><option value="byte">raw bytes</option><option value="omg">OMG V=256 typed graph</option><option value="u32">u32 vocab</option></select></div>
             <div class="field"><label for="f-hfdtype">HF dtype</label>
               <select id="f-hfdtype"><option value="f32">f32</option><option value="bf16">bf16</option></select></div>
           </div>
@@ -228,6 +228,8 @@
           <div class="sliders" id="train-sliders"></div>
           <div class="checks">
             <label class="check"><input type="checkbox" id="f-gpu"><span>Use GB10 GPU (<code>gtrainf</code>/<code>gtrainb</code>)</span></label>
+            <label class="check"><input type="checkbox" id="f-spforge"><span>Closed-Form <code>spforge</code> (one-shot Ridge/GN)</span></label>
+            <label class="check"><input type="checkbox" id="f-rev"><span>Reversible Q32 Core (0-byte act, ARM64)</span></label>
             <label class="check"><input type="checkbox" id="f-hf"><span>Export HF <code>model.safetensors</code></span></label>
             <label class="check"><input type="checkbox" id="f-gguf"><span>Export GGUF v3</span></label>
           </div>
@@ -247,6 +249,8 @@
         <select id="run-select"><option value="">— no runs yet —</option></select>
       </div>
       <button type="button" class="btn btn-ghost" id="btn-refresh-runs"><svg class="ic"><use href="#i-sync"/></svg>Refresh</button>
+      <button type="button" class="btn btn-ghost" id="btn-verify-locks"><svg class="ic"><use href="#i-shield"/></svg>8-Pillar Locks</button>
+      <span class="muted small" id="locks-status"></span>
     </div>
 
     <ol class="stepper" id="stepper" aria-label="Forge pipeline"></ol>
@@ -287,6 +291,12 @@
           <label for="play-run">Forged chain</label>
           <select id="play-run"><option value="">— forge a chain first —</option></select>
         </div>
+        <fieldset class="seg seg-sm">
+          <legend>Decode engine</legend>
+          <input type="radio" name="playmode" id="pm-std" value="std" checked><label for="pm-std"><b>Standard / spclip</b><small>DNA strand mixer</small></label>
+          <input type="radio" name="playmode" id="pm-omg" value="omg"><label for="pm-omg"><b>OMG-Masked</b><small>100% omc-valid .om</small></label>
+          <input type="radio" name="playmode" id="pm-arb" value="arbsamp"><label for="pm-arb"><b>Arboris-Guided</b><small>Bypass + OMG + LTP0</small></label>
+        </fieldset>
         <fieldset class="seg seg-sm">
           <legend>spclip fusion mode</legend>
           <input type="radio" name="spmode" id="sp-entropy" value="1" checked><label for="sp-entropy"><b>Entropy-Gated</b><small>confident strands lead</small></label>

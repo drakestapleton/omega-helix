@@ -539,6 +539,8 @@ class StudioTestCase(unittest.TestCase):
                 self.assertIn('meta name="color-scheme" content="light dark"', html)
                 self.assertIn('id="remote-ssh-dialog"', html)
                 self.assertIn('class="uni-sky-bg"', html)
+                self.assertIn('id="btn-verify-locks"', html)
+                self.assertIn('id="pm-arb"', html)
             finally:
                 srv.shutdown()
                 srv.server_close()
@@ -552,6 +554,70 @@ class StudioTestCase(unittest.TestCase):
                 os.environ.pop("OMEGA_HELIX_STATE_DIR", None)
             else:
                 os.environ["OMEGA_HELIX_STATE_DIR"] = old_st
+
+    def test_eight_pillar_runtime_api_and_cli(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="helix-8p-studio-") as td:
+            srv = studio_server.create_server(host="127.0.0.1", port=0, workspace_dir=Path(td) / "runs-8p", bin_dir=self.bin_dir)
+            port = srv.server_address[1]
+            th = threading.Thread(target=srv.serve_forever, daemon=True)
+            th.start()
+            try:
+                # 1. GET /api/runtime/locks
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/runtime/locks", timeout=20.0) as resp:
+                    lk = json.loads(resp.read().decode("utf-8"))
+                self.assertTrue(lk["ok"])
+                self.assertTrue(lk["omg_pass"])
+                self.assertTrue(lk["arboris_pass"])
+                self.assertTrue(lk["rev_pass"])
+
+                # 2. POST /api/runtime/omg (pack + samp with omc compile check)
+                req_pk = urllib.request.Request(
+                    f"http://127.0.0.1:{port}/api/runtime/omg",
+                    data=json.dumps({"action": "pack"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req_pk, timeout=20.0) as resp:
+                    pk = json.loads(resp.read().decode("utf-8"))
+                self.assertTrue(pk["ok"])
+                self.assertGreater(pk["ntok"], 0)
+
+                req_s = urllib.request.Request(
+                    f"http://127.0.0.1:{port}/api/runtime/omg",
+                    data=json.dumps({"action": "samp", "seed": 42, "budget": 48, "temp_milli": 0}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req_s, timeout=20.0) as resp:
+                    sm = json.loads(resp.read().decode("utf-8"))
+                self.assertTrue(sm["ok"])
+                self.assertTrue(sm["omc_compiled"], f"omg samp failed omc rc={sm.get('omc_rc')}")
+
+                # 3. POST /api/runtime/arbsamp (3-layer guided decode)
+                req_a = urllib.request.Request(
+                    f"http://127.0.0.1:{port}/api/runtime/arbsamp",
+                    data=json.dumps({"seed": 42, "budget": 48, "temp_milli": 0}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req_a, timeout=20.0) as resp:
+                    ag = json.loads(resp.read().decode("utf-8"))
+                self.assertTrue(ag["ok"])
+                self.assertTrue(ag["omc_compiled"], f"arbsamp failed omc rc={ag.get('omc_rc')}")
+                self.assertGreaterEqual(ag["bypass_hits"] + ag["ltp0_calls"], 1)
+
+                # 4. CLI `omega-helix pillars --json`
+                r_cli = subprocess.run(
+                    [sys.executable, str(STUDIO_DIR / "cli.py"), "--bin-dir", str(self.bin_dir), "pillars", "--steps", "4", "--json"],
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertEqual(r_cli.returncode, 0, r_cli.stderr)
+                cli_doc = json.loads(r_cli.stdout)
+                self.assertTrue(cli_doc["ok"])
+            finally:
+                srv.shutdown()
+                srv.server_close()
+                th.join(timeout=3.0)
 
 
 if __name__ == "__main__":

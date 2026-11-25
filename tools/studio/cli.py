@@ -897,6 +897,21 @@ def cmd_commons_port_check(args: argparse.Namespace) -> int:
     return 0 if res.get("ok") else 1
 
 
+def cmd_pillars(args: argparse.Namespace) -> int:
+    import server as studio_server
+    res = studio_server._run_eight_pillar_locks(
+        Path(args.bin_dir) if args.bin_dir else None,
+        None,
+        steps=int(args.steps),
+        lr_milli=int(args.lr_milli),
+    )
+    if args.json:
+        print(json.dumps(res, indent=2))
+    else:
+        print(f"OMG={res['omg_pass']} Arboris={res['arboris_pass']} Rev={res['rev_pass']} (supported={res['rev_supported']}, act_bytes={res['act_bytes']}, q32_bits={res['q32_inv_bits']})")
+    return 0 if res.get("ok") else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--workspace-dir", default=argparse.SUPPRESS, help="Directory for forged runs")
@@ -1236,6 +1251,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_prt.add_argument("--out-json", dest="out_json", default=None)
     p_prt.add_argument("--json", action="store_true")
     p_prt.set_defaults(func=cmd_commons_port_check)
+
+    p_pil = sub.add_parser("pillars", parents=[common], help="Verify pure-Omega 8-pillar runtime & Q32 reversible locks")
+    p_pil.add_argument("--steps", type=int, default=8)
+    p_pil.add_argument("--lr-milli", dest="lr_milli", type=int, default=10)
+    p_pil.add_argument("--json", action="store_true")
+    p_pil.set_defaults(func=cmd_pillars)
 
     return p
 
