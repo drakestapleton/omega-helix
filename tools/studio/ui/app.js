@@ -13,7 +13,7 @@
         name: "starter-nano",
         mode: "dna",
         arch: "custom",
-        tokenizer: "bpe",
+        tokenizer: "byte",
         V: 256, T: 16, D: 32, H: 2, H_KV: 2, F: 64, L: 2, B: 2,
         LP: 0, LC: 0, NP: 1, adapt_thresh_micro: 0, msg_gain_micro: 0,
         base_steps: 12, lr_micro: 3000, spclip_mode: 1,
@@ -55,7 +55,7 @@
         name: "looped-adapt",
         mode: "dna",
         arch: "custom",
-        tokenizer: "bpe",
+        tokenizer: "byte",
         V: 256, T: 32, D: 48, H: 4, H_KV: 2, F: 96, L: 4, B: 2,
         LP: 1, LC: 2, NP: 3, adapt_thresh_micro: 25000, msg_gain_micro: 150000,
         base_steps: 16, lr_micro: 2500, spclip_mode: 1,
@@ -81,7 +81,7 @@
       name: "my-helix",
       mode: "dna",
       arch: "custom",
-      tokenizer: "bpe",
+      tokenizer: "byte",
       V: 256, T: 16, D: 32, H: 2, H_KV: 2, F: 64, L: 2, B: 2,
       LP: 0, LC: 0, NP: 1,
       adapt_thresh_micro: 0,
@@ -823,8 +823,10 @@
         else if (activeStage && n.kind === activeStage) cls += " active";
         else if (stInfo && stInfo.status === "done") cls += " done";
       }
-      const grp = svgEl("g", { class: cls, transform: `translate(${p.x - 74}, ${p.y - 25})` });
-      const rect = svgEl("rect", { width: 148, height: 50, rx: 10 });
+      const boxW = maxCol >= 5 ? 124 : 148;
+      const maxChars = maxCol >= 5 ? 15 : 18;
+      const grp = svgEl("g", { class: cls, transform: `translate(${p.x - boxW / 2}, ${p.y - 25})` });
+      const rect = svgEl("rect", { width: boxW, height: 50, rx: 10 });
       if (n.color) rect.setAttribute("stroke", n.color);
       grp.appendChild(rect);
 
@@ -835,14 +837,18 @@
       }
 
       const title = svgEl("text", { x: n.kind === "lock" ? 26 : 12, y: 21 });
-      title.textContent = String(n.label || n.id).slice(0, 18);
+      title.textContent = String(n.label || n.id).slice(0, maxChars);
       grp.appendChild(title);
 
-      let subText = n.meta || "";
+      let subText = typeof n.meta === "string"
+        ? n.meta
+        : (n.meta && typeof n.meta === "object"
+          ? Object.entries(n.meta).slice(0, 2).map(([k, v]) => `${k}:${v}`).join(" ")
+          : (n.kind || ""));
       if (stInfo && stInfo.pack_sha256) subText = `sha:${stInfo.pack_sha256.slice(0, 10)}`;
       else if (stInfo && stInfo.eval_loss) subText = `loss ${stInfo.eval_loss}`;
       const sub = svgEl("text", { x: 12, y: 39, class: "sub" });
-      sub.textContent = String(subText).slice(0, 22);
+      sub.textContent = String(subText).slice(0, maxChars + 2);
       grp.appendChild(sub);
       svg.appendChild(grp);
     });
@@ -1120,7 +1126,7 @@
       state.spec.name = "quick-qwen3";
       state.spec.mode = "universal";
       state.spec.arch = "qwen3";
-      state.spec.tokenizer = "bpe";
+      state.spec.tokenizer = "byte";
       state.spec.V = 256; state.spec.T = 16; state.spec.D = 32; state.spec.H = 2; state.spec.H_KV = 2; state.spec.F = 64; state.spec.L = 2; state.spec.B = 2;
       state.spec.base_steps = 12;
       state.spec.export_hf = true;
@@ -1129,7 +1135,7 @@
       state.spec.name = customPath ? "my-custom-helix" : `quick-${goal}`;
       state.spec.mode = "dna";
       state.spec.arch = "custom";
-      state.spec.tokenizer = "bpe";
+      state.spec.tokenizer = "byte";
       state.spec.V = 256; state.spec.T = 16; state.spec.D = 32; state.spec.H = 2; state.spec.H_KV = 2; state.spec.F = 64; state.spec.L = 2; state.spec.B = 2;
       state.spec.base_steps = 12;
       state.spec.export_hf = false;
@@ -1339,6 +1345,7 @@
         });
         if (!res.ok) {
           $("sample-out").textContent = res.error || "8-pillar decode failed.";
+          $("sample-meta").textContent = "";
           sfx.err();
           return;
         }

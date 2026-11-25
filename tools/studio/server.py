@@ -68,6 +68,28 @@ def _find_omc_bin() -> str | None:
     return None
 
 
+def _resolve_v256_ck(run: Any) -> str | None:
+    if run is None:
+        return None
+    cands: list[Path] = []
+    if getattr(run, "run_dir", None):
+        cands.append(Path(run.run_dir) / "base.ck")
+    for art in getattr(run, "artifacts", []) or []:
+        if isinstance(art, dict) and art.get("name") == "base.ck" and art.get("path"):
+            cands.append(Path(art["path"]))
+    for p in cands:
+        if p.is_file() and p.stat().st_size >= 32:
+            try:
+                hdr = p.read_bytes()[:24]
+                if hdr[:6] == b"OLLMCK":
+                    v = int.from_bytes(hdr[16:24], "little")
+                    if v == 256:
+                        return str(p)
+            except OSError:
+                pass
+    return None
+
+
 def _compile_om_text(om_text: str) -> tuple[bool, int]:
     omc = _find_omc_bin()
     if not omc:
@@ -574,8 +596,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                     ck_path = body.get("ck_path")
                     if not ck_path and body.get("run_id"):
                         run = self.server.manager.get_run(str(body["run_id"]))
-                        if run and run.base_ck:
-                            ck_path = run.base_ck
+                        ck_path = _resolve_v256_ck(run)
                     if not ck_path:
                         # Auto-init tiny V=256 OMG model for zero-friction Playground exploration
                         ck_p = tdp / "omg_auto.ck"
@@ -630,8 +651,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                     ck_path = body.get("ck_path")
                     if not ck_path and body.get("run_id"):
                         run = self.server.manager.get_run(str(body["run_id"]))
-                        if run and run.base_ck:
-                            ck_path = run.base_ck
+                        ck_path = _resolve_v256_ck(run)
                     if not ck_path:
                         ck_p = tdp / "arb_auto.ck"
                         r_i = subprocess.run([ollm, "init", str(ck_p), "256", "16", "16", "2", "32", "2", "4", "1", "10", "4000"], capture_output=True, text=True, check=False)
