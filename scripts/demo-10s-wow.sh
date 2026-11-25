@@ -14,6 +14,9 @@ fi
 if [ "$(uname -s)" = Darwin ]; then
   [ -x "$OUT/ollm-macos" ] || OUT="$OUT" TARGET=macos sh "$here/scripts/build.sh"
   OLLMBIN="$OUT/ollm-macos"
+elif [ "$(uname -m)" = x86_64 ] || [ "$(uname -m)" = amd64 ]; then
+  [ -x "$OUT/ollm-x86linux" ] || OUT="$OUT" TARGET=x86linux sh "$here/scripts/build.sh"
+  OLLMBIN="$OUT/ollm-x86linux"
 else
   [ -x "$OUT/ollm" ] || OUT="$OUT" TARGET=aarch64 sh "$here/scripts/build.sh"
   OLLMBIN="$OUT/ollm"
