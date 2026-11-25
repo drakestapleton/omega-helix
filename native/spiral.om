@@ -951,9 +951,19 @@ end
 ret best
 end
 
-note Check if argv[ai] begins with OLLMSP02 magic (for spsamp auto-dispatch).
+note Check if argv[ai] is an existing file beginning with OLLMSP02 magic (non-fatal if missing).
 fn sp2_is_sp2 ai ulong to bool
-if ne oprd ai 0 0 8 8
+r = oargr ai
+if le r 0
+  ret false
+end
+fd = fopen oarg 0 ulong r 0 0
+if lt fd 0
+  ret false
+end
+k = read int fd opw 0 8
+c = fclose int fd
+if ne k 8
   ret false
 end
 ret eq opw8 0 OSP2_MAG
