@@ -30,6 +30,7 @@ from distill import pipeline as distill_pipeline  # noqa: E402
 from distill import teachers as distill_teachers  # noqa: E402
 from distill import verifiers as distill_verifiers  # noqa: E402
 import runtime as sovereign_runtime  # noqa: E402
+import commons as sovereign_commons  # noqa: E402
 
 
 class StudioServer(ThreadingHTTPServer):
@@ -184,6 +185,24 @@ class StudioHandler(BaseHTTPRequestHandler):
             if len(parts) == 2 and parts[1] == "events":
                 self._stream_sse(drun)
                 return
+
+        if path == "/api/trust/verify":
+            try:
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                base_ck = (q.get("base_ck") or [None])[0]
+                bom_path = (q.get("bom") or [None])[0]
+                packs = q.get("pack") or None
+                res = sovereign_commons.verify_sovereign_trust(
+                    bin_dir=self.server.manager.bin_dir,
+                    root=self.server.manager.root,
+                    base_ck=base_ck,
+                    packs=packs,
+                    bom_path=bom_path,
+                )
+                self._send_json(HTTPStatus.OK, res)
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
 
         if not path.startswith("/api/"):
             self._serve_static(path)
@@ -411,6 +430,38 @@ class StudioHandler(BaseHTTPRequestHandler):
                     verifier=str(body.get("verifier", "omc_compile")),
                     max_attempts=int(body.get("max_attempts", 3)),
                     out_dir=body["out_dir"],
+                )
+                self._send_json(HTTPStatus.OK, {"ok": True, "receipt": res})
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/api/commons/pack-usb":
+            try:
+                res = sovereign_commons.pack_usb_bundle(
+                    body["out_dir"],
+                    bin_dir=self.server.manager.bin_dir,
+                    root=self.server.manager.root,
+                    trunk_ck=body.get("trunk_ck"),
+                    packs=body.get("packs"),
+                    memory_store=body.get("memory_store"),
+                )
+                self._send_json(HTTPStatus.OK, {"ok": True, "bundle": res})
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/api/commons/memory/migrate":
+            try:
+                bins = runner.ensure_binaries(["ollm"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
+                res = sovereign_commons.migrate_brain_to_trunk(
+                    bins["ollm"],
+                    body["store_path"],
+                    body["new_trunk_ck"],
+                    body["out_dir"],
+                    steps=int(body.get("steps", 6)),
+                    add_layers=int(body.get("add_layers", 1)),
+                    lr_micro=int(body.get("lr_micro", 2000)),
                 )
                 self._send_json(HTTPStatus.OK, {"ok": True, "receipt": res})
             except Exception as exc:

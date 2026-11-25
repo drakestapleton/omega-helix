@@ -104,6 +104,11 @@ OLLM_INTERCHANGE_BIN="$OUT/ollm-interchange" OLLM_BIN="$BIN" \
   python3 -W error::ResourceWarning -m unittest discover -s "$here/tools/runtime" -p "test_*.py" -v
 WORK="$xdir/demo10s" OUT="$OUT" sh "$here/scripts/demo-10s-wow.sh" >/dev/null
 
+echo "--- 4e. Sovereign Commons, Trust Audit, Memory Migration, Porting Kit, Leases & USB Bundle ---"
+OLLM_BIN="$BIN" OMEGA_HELIX_BIN_DIR="$OUT" \
+  python3 -W error::ResourceWarning -m unittest discover -s "$here/tools/commons" -p "test_*.py" -v
+OMEGA_HELIX_BIN_DIR="$OUT" "$here/bin/omega-helix" verify --json >/dev/null
+
 if [ "$OS" = Linux ] && [ "$ARCH" = aarch64 ]; then
   GSL_WORK="$xdir/gsl" sh "$here/tests/test_gpu_spec_loop.sh" build
   GSL_WORK="$xdir/gsl" sh "$here/tests/test_gpu_spec_loop.sh" host
