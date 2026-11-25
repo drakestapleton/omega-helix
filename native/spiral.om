@@ -1,0 +1,1032 @@
+note SPDX-License-Identifier: AGPL-3.0-only
+note omegallm spiral.om: Spiral-2048 Pure-Omega Razor MoE engine.
+note Implements:
+note   1. OLLMSP02 Merkle-signed razor-strand format (exact f64 and W4 4-bit block-32, rc=61 on 1-bit tamper)
+note   2. `ollm spcryst`: Zero-backprop direct analytical crystallization via Arboris/Rho-1 surprisal-weighted
+note      Ridge regression solved in one shot with Cholesky (sp_chol / sp_chol_solve from sp_solve.om)
+note   3. `ollm spweval` & `ollm spsamp`: Sparse-FFN Helix Router (sproute) with Top-K centroid cosine routing
+note      across up to 2048 Merkle-verified OLLMSP02 strands.
+note Uses only static small globals + ocs cold store so it compiles cleanly on macos, aarch64, gb10, and x86linux.
+
+const OSP2_MAG ulong 3616478819487861839
+const OSP2_HDR ulong 80
+const OSP2_MAXS ulong 2048
+const OSP2_MAXF ulong 640
+const OSP2_MAXD ulong 2048
+const OSP2_CALN ulong 128
+
+global sp2_sid ulong 2048
+global sp2_fexp ulong 2048
+global sp2_coff ulong 2048
+global sp2_woff ulong 2048
+global sp2_sim f64 2048
+global sp2_topi ulong 32
+global sp2_topw f64 32
+global sp2_phi f64 640
+global sp2_dz f64 2048
+global sp2_rvec f64 2048
+global sp2_hdr ulong 10
+global sp2_caly ulong 128
+global sp2_st ulong 16
+
+note Deterministic sparse signed hash-orthogonal feature projection phi = ReLU(W_up * z),
+note with bias feature phi[f_exp - 1] = 1.0. Reads z from oa[z_off .. z_off + d).
+fn sp2_feat_oa z_off ulong d ulong f_exp ulong sid ulong to void
+fm1 = sub f_exp 1
+for f ulong fm1
+  seed = add mul sid 1000003 mul add f 1 65537
+  acc = 0.0f64
+  for k ulong 4
+    h = smx add seed mul k 2654435761
+    idx = rem shr h 1 d
+    v = get oa add z_off idx
+    if eq and h 1 0
+      acc = add acc v
+    else
+      acc = sub acc v
+    end
+  end
+  u = mul acc 0.5f64
+  if gt u 0.0f64
+    put sp2_phi f u
+  else
+    put sp2_phi f 0.0f64
+  end
+end
+put sp2_phi fm1 1.0f64
+end
+
+note Same projection reading z from ocs[z_off .. z_off + d).
+fn sp2_feat_ocs z_off ulong d ulong f_exp ulong sid ulong to void
+fm1 = sub f_exp 1
+for f ulong fm1
+  seed = add mul sid 1000003 mul add f 1 65537
+  acc = 0.0f64
+  for k ulong 4
+    h = smx add seed mul k 2654435761
+    idx = rem shr h 1 d
+    v = ocsg add z_off idx
+    if eq and h 1 0
+      acc = add acc v
+    else
+      acc = sub acc v
+    end
+  end
+  u = mul acc 0.5f64
+  if gt u 0.0f64
+    put sp2_phi f u
+  else
+    put sp2_phi f 0.0f64
+  end
+end
+put sp2_phi fm1 1.0f64
+end
+
+note Compute logits for z at oa[z_off .. +d) into oa[og[27] .. +V), return CE loss for target y.
+fn sp2_ce_oa z_off ulong y ulong to f64
+v = get og 0
+d = get og 2
+lo = get og 27
+klogit z_off lo v d
+mx = get oa lo
+for i ulong v
+  x = get oa add lo i
+  if gt x mx
+    mx = x
+  end
+end
+sm = 0.0f64
+for i2 ulong v
+  sm = add sm fexp sub get oa add lo i2 mx
+end
+ret sub add mx flog sm get oa add lo y
+end
+
+fn sp2_soft_lo z_off ulong v ulong d ulong to f64
+lo = get og 27
+klogit z_off lo v d
+mx = get oa lo
+for i ulong v
+  x = get oa add lo i
+  if gt x mx
+    mx = x
+  end
+end
+sm = 0.0f64
+for i2 ulong v
+  e = fexp sub get oa add lo i2 mx
+  put oa add lo i2 e
+  sm = add sm e
+end
+ret sm
+end
+
+fn sp2_sub_wte vw ulong d ulong pv f64 to void
+for j ulong d
+  put sp2_rvec j sub get sp2_rvec j mul pv owg add vw j
+end
+end
+
+note Compute exact hidden-space steepest-descent residual sp2_rvec = WTE[y] - E_p[WTE]
+note and return token surprisal (-log p[y]) for z at oa[z_off .. +d).
+fn sp2_tok_grad z_off ulong y ulong to f64
+v = get og 0
+d = get og 2
+lo = get og 27
+inv_sm = div 1.0f64 sp2_soft_lo z_off v d
+surp = sub 0.0f64 flog fmax mul get oa add lo y inv_sm 1.0e-30f64
+yw = mul y d
+for j ulong d
+  put sp2_rvec j owg add yw j
+end
+for vv ulong v
+  pv = mul get oa add lo vv inv_sm
+  if gt pv 0.000001f64
+    sp2_sub_wte mul vv d d pv
+  end
+end
+ret surp
+end
+
+fn sp2_acc_row a ulong wa f64 f_exp ulong d ulong to void
+ga = add get sp2_st 3 mul a f_exp
+b = a
+while lt b f_exp bound 1024
+  pb = get sp2_phi b
+  if gt pb 0.0f64
+    ocsp add ga b add ocsg add ga b mul wa pb
+  end
+  b = add b 1
+end
+ba = add get sp2_st 4 mul a d
+for j2 ulong d
+  ocsp add ba j2 add ocsg add ba j2 mul wa get sp2_rvec j2
+end
+end
+
+note Accumulate one token into upper-triangle Gram G (ocs[g_off..]), RHS B (ocs[b_off..]),
+note and weighted centroid mu (ocs[c_off..]).
+fn sp2_acc_tok z_off ulong w_tok f64 f_exp ulong d ulong to void
+c_off = get sp2_st 5
+for j ulong d
+  ocsp add c_off j add ocsg add c_off j mul w_tok get oa add z_off j
+end
+for a ulong f_exp
+  pa = get sp2_phi a
+  if gt pa 0.0f64
+    sp2_acc_row a mul w_tok pa f_exp d
+  end
+end
+end
+
+note Symmetrize upper-triangle G and add lam * I on diagonal.
+fn sp2_sym_reg g_off ulong f_exp ulong lam f64 to void
+for a ulong f_exp
+  ga = add g_off mul a f_exp
+  ocsp add ga a add ocsg add ga a lam
+  b = add a 1
+  while lt b f_exp bound 1024
+    v = ocsg add ga b
+    ocsp add g_off add mul b f_exp a v
+    b = add b 1
+  end
+end
+end
+
+fn sp2_add_oa ztmp ulong ba ulong d ulong sc f64 to void
+for j ulong d
+  idx = add ztmp j
+  put oa idx add get oa idx mul sc ocsg add ba j
+end
+end
+
+fn sp2_cal_apply zo ulong b_off ulong f_exp ulong eta f64 to void
+d = get og 2
+ztmp = get og 17
+sp2_feat_ocs zo d f_exp get sp2_st 6
+for a ulong f_exp
+  pa = get sp2_phi a
+  if gt pa 0.0f64
+    sp2_add_oa ztmp add b_off mul a d d mul eta pa
+  end
+end
+end
+
+fn sp2_copy_ocs_oa zo ulong ztmp ulong d ulong to void
+for j ulong d
+  put oa add ztmp j ocsg add zo j
+end
+end
+
+note Evaluate mean CE loss on calibration mini-batch (ncal tokens in ocs[cal_z..]) with step scale eta.
+fn sp2_cal_loss ncal ulong cal_z ulong f_exp ulong eta f64 to f64
+d = get og 2
+ztmp = get og 17
+ls = 0.0f64
+for i ulong ncal
+  zo = add cal_z mul i d
+  sp2_copy_ocs_oa zo ztmp d
+  if gt eta 0.0f64
+    sp2_cal_apply zo get sp2_st 4 f_exp eta
+  end
+  ls = add ls sp2_ce_oa ztmp get sp2_caly i
+end
+ret div ls f64 ncal
+end
+
+note Compute little-endian u32 into ock[o..o+4)
+fn sp2_put4 o ulong v uint to void
+put ock o uchar and v 255
+put ock add o 1 uchar and shr v 8 255
+put ock add o 2 uchar and shr v 16 255
+put ock add o 3 uchar and shr v 24 255
+end
+
+note Read little-endian u32 from opw[o..o+4)
+fn sp2_get4 o ulong to uint
+b0 = uint get opw o
+b1 = shl uint get opw add o 1 8
+b2 = shl uint get opw add o 2 16
+b3 = shl uint get opw add o 3 24
+ret or or b0 b1 or b2 b3
+end
+
+fn sp2_q4_nib v f64 sc f64 to ulong
+if le sc 0.0f64
+  ret 8
+end
+r = div v sc
+if gt r 7.0f64
+  r = 7.0f64
+end
+if lt r -7.0f64
+  r = -7.0f64
+end
+if ge r 0.0f64
+  ret ulong add 8 long add r 0.5f64
+end
+ret ulong add 8 long sub r 0.5f64
+end
+
+fn sp2_q4_pair off ulong cnt ulong p ulong sc f64 to uchar
+q0 = ulong 8
+q1 = ulong 8
+i0 = mul p 2
+if lt i0 cnt
+  q0 = sp2_q4_nib ocsg add off i0 sc
+end
+i1 = add i0 1
+if lt i1 cnt
+  q1 = sp2_q4_nib ocsg add off i1 sc
+end
+ret uchar or and q0 15 shl and q1 15 4
+end
+
+note Quantize one 32-element f64 block from ocs[off..off+cnt) into 20 bytes at ock[bo..bo+20):
+note 4B f32 scale (max_abs / 7.0) + 16B packed signed 4-bit nibbles (q in [-7..+7] stored as q + 8).
+fn sp2_q4_blk off ulong cnt ulong bo ulong to void
+mx = 0.0f64
+for i ulong cnt
+  v = fabs ocsg add off i
+  if gt v mx
+    mx = v
+  end
+end
+sc32 = f32 div mx 7.0f64
+sp2_put4 bo bitcast uint sc32
+sc = f64 sc32
+for p ulong 16
+  put ock add bo add 4 p sp2_q4_pair off cnt p sc
+end
+end
+
+note Dequantize one 20-byte W4 block from opw[bo..bo+20) into ocs[off..off+cnt).
+fn sp2_dq4_blk bo ulong off ulong cnt ulong to void
+sc = f64 bitcast f32 sp2_get4 bo
+for p ulong 16
+  bt = ulong get opw add bo add 4 p
+  i0 = mul p 2
+  if lt i0 cnt
+    ocsp add off i0 mul f64 sub long and bt 15 8 sc
+  end
+  i1 = add i0 1
+  if lt i1 cnt
+    ocsp add off i1 mul f64 sub long and shr bt 4 15 8 sc
+  end
+end
+end
+
+fn sp2_wr_f64_chunk base ulong cnt ulong to void
+for k ulong cnt
+  ocput8 mul k 8 bitcast ulong ocsg add base k
+end
+end
+
+fn sp2_wr_f64 b_off ulong nw ulong pos ulong ph ulong to ulong
+done = ulong 0
+p = pos
+h = ph
+while lt done nw bound 65536
+  cnt = sub nw done
+  if gt cnt OCKC
+    cnt = OCKC
+  end
+  sp2_wr_f64_chunk add b_off done cnt
+  nb = mul cnt 8
+  h = ocfnvk h nb
+  ocwput p nb
+  p = add p nb
+  done = add done cnt
+end
+put sp2_st 7 p
+ret h
+end
+
+fn sp2_wr_w4_chunk b_off ulong nw ulong b_done ulong bcnt ulong to void
+for bi ulong bcnt
+  elem0 = mul add b_done bi 32
+  ecnt = sub nw elem0
+  if gt ecnt 32
+    ecnt = 32
+  end
+  sp2_q4_blk add b_off elem0 ecnt mul bi 20
+end
+end
+
+fn sp2_wr_w4 b_off ulong nw ulong pos ulong ph ulong to ulong
+nblk = div add nw 31 32
+b_done = ulong 0
+p = pos
+h = ph
+while lt b_done nblk bound 65536
+  bcnt = sub nblk b_done
+  if gt bcnt 16384
+    bcnt = 16384
+  end
+  sp2_wr_w4_chunk b_off nw b_done bcnt
+  nb2 = mul bcnt 20
+  h = ocfnvk h nb2
+  ocwput p nb2
+  p = add p nb2
+  b_done = add b_done bcnt
+end
+put sp2_st 7 p
+ret h
+end
+
+note Write OLLMSP02 pack to argv[out_ai]. Centroid at ocs[c_off..+d), W_down at ocs[b_off..+nw).
+note Returns payload_bytes written.
+fn sp2_write_pack out_ai ulong base_h ulong f_exp ulong sid ulong qbits ulong to ulong
+d = get og 2
+c_off = get sp2_st 5
+b_off = get sp2_st 4
+nw = mul f_exp d
+ocwopen out_ai
+ph = ulong 14695981039346656037
+pos = OSP2_HDR
+for j ulong d
+  ocput8 mul j 8 bitcast ulong ocsg add c_off j
+end
+cb = mul d 8
+ph = ocfnvk ph cb
+ocwput pos cb
+pos = add pos cb
+if eq qbits 64
+  ph = sp2_wr_f64 b_off nw pos ph
+else
+  ph = sp2_wr_w4 b_off nw pos ph
+end
+pbytes = sub get sp2_st 7 OSP2_HDR
+ocput8 0 OSP2_MAG
+ocput8 8 base_h
+ocput8 16 get og 5
+ocput8 24 d
+ocput8 32 f_exp
+ocput8 40 sid
+ocput8 48 qbits
+ocput8 56 pbytes
+ocput8 64 ph
+hh = ocfnvk ulong 14695981039346656037 72
+ocput8 72 hh
+ocwput 0 OSP2_HDR
+ocwend out_ai
+ret pbytes
+end
+
+fn sp2_rd_f64_chunk base ulong cnt ulong to void
+for j2 ulong cnt
+  ocsp add base j2 bitcast f64 opw8 mul j2 8
+end
+end
+
+fn sp2_rd_f64 ai ulong woff ulong nw ulong pos ulong ph ulong to ulong
+done = ulong 0
+p = pos
+h = ph
+while lt done nw bound 65536
+  cnt = sub nw done
+  if gt cnt OCKC
+    cnt = OCKC
+  end
+  nb = mul cnt 8
+  if ne oprd ai p 0 nb nb
+    exit 60
+  end
+  h = ocfnvw h nb
+  sp2_rd_f64_chunk add woff done cnt
+  p = add p nb
+  done = add done cnt
+end
+put sp2_st 7 p
+ret h
+end
+
+fn sp2_rd_w4_chunk woff ulong nw ulong b_done ulong bcnt ulong to void
+for bi ulong bcnt
+  elem0 = mul add b_done bi 32
+  ecnt = sub nw elem0
+  if gt ecnt 32
+    ecnt = 32
+  end
+  sp2_dq4_blk mul bi 20 add woff elem0 ecnt
+end
+end
+
+fn sp2_rd_w4 ai ulong woff ulong nw ulong pos ulong ph ulong to ulong
+nblk = div add nw 31 32
+b_done = ulong 0
+p = pos
+h = ph
+while lt b_done nblk bound 65536
+  bcnt = sub nblk b_done
+  if gt bcnt 16384
+    bcnt = 16384
+  end
+  nb2 = mul bcnt 20
+  if ne oprd ai p 0 nb2 nb2
+    exit 60
+  end
+  h = ocfnvw h nb2
+  sp2_rd_w4_chunk woff nw b_done bcnt
+  p = add p nb2
+  b_done = add b_done bcnt
+end
+put sp2_st 7 p
+ret h
+end
+
+fn sp2_chk_hdr ai ulong base_h ulong to void
+if ne oprd ai 0 0 OSP2_HDR OSP2_HDR
+  exit 60
+end
+if ne opw8 0 OSP2_MAG
+  exit 60
+end
+if ne ocfnvw ulong 14695981039346656037 72 opw8 72
+  exit 61
+end
+for k ulong 10
+  put sp2_hdr k opw8 mul k 8
+end
+if ne get sp2_hdr 1 base_h
+  exit 62
+end
+if or ne get sp2_hdr 2 get og 5 ne get sp2_hdr 3 get og 2
+  exit 62
+end
+f_exp = get sp2_hdr 4
+qbits = get sp2_hdr 6
+if or eq f_exp 0 gt f_exp OSP2_MAXF
+  exit 60
+end
+if and ne qbits 64 ne qbits 4
+  exit 60
+end
+nw = mul f_exp get og 2
+exp_pb = mul get og 2 8
+if eq qbits 64
+  exp_pb = add exp_pb mul nw 8
+else
+  exp_pb = add exp_pb mul div add nw 31 32 20
+end
+if ne get sp2_hdr 7 exp_pb
+  exit 60
+end
+end
+
+note Load and Merkle-verify one OLLMSP02 pack from argv[ai] into strand slot s.
+note Exits: 60 bad magic/format/truncation, 61 1-bit tamper (header or payload hash), 62 base/shape mismatch.
+fn sp2_load_pack ai ulong s ulong base_h ulong to void
+sp2_chk_hdr ai base_h
+d = get og 2
+nw = mul get sp2_hdr 4 d
+cur = get sp2_st 1
+if not ocsgrow add cur add d nw
+  exit 70
+end
+put sp2_sid s get sp2_hdr 5
+put sp2_fexp s get sp2_hdr 4
+put sp2_coff s cur
+put sp2_woff s add cur d
+put sp2_st 1 add cur add d nw
+cb = mul d 8
+if ne oprd ai OSP2_HDR 0 cb cb
+  exit 60
+end
+ph = ocfnvw ulong 14695981039346656037 cb
+sp2_rd_f64_chunk cur d
+if eq get sp2_hdr 6 64
+  ph = sp2_rd_f64 ai add cur d nw add OSP2_HDR cb ph
+else
+  ph = sp2_rd_w4 ai add cur d nw add OSP2_HDR cb ph
+end
+if ne oprd ai get sp2_st 7 0 1 0
+  exit 60
+end
+if ne ph get sp2_hdr 8
+  exit 61
+end
+end
+
+fn sp2_pick_topk ns ulong kk ulong to void
+for k ulong kk
+  best_s = ulong 0
+  best_v = -1.0e30f64
+  for s2 ulong ns
+    used = false
+    for p ulong k
+      if eq get sp2_topi p s2
+        used = true
+      end
+    end
+    if not used
+      sv = get sp2_sim s2
+      if gt sv best_v
+        best_v = sv
+        best_s = s2
+      end
+    end
+  end
+  put sp2_topi k best_s
+  put sp2_topw k best_v
+end
+mx = get sp2_topw 0
+sm = 0.0f64
+for k2 ulong kk
+  w = fexp mul 4.0f64 sub get sp2_topw k2 mx
+  put sp2_topw k2 w
+  sm = add sm w
+end
+for k3 ulong kk
+  put sp2_topw k3 div get sp2_topw k3 sm
+end
+put sp2_st 2 get sp2_sid get sp2_topi 0
+end
+
+fn sp2_add_dz row ulong d ulong sc f64 to void
+for j ulong d
+  put sp2_dz j add get sp2_dz j mul sc ocsg add row j
+end
+end
+
+fn sp2_apply_1k z_off ulong si ulong gw f64 d ulong to void
+fe = get sp2_fexp si
+wo = get sp2_woff si
+sp2_feat_oa z_off d fe get sp2_sid si
+for a ulong fe
+  pa = get sp2_phi a
+  if gt pa 0.0f64
+    sp2_add_dz add wo mul a d d mul gw pa
+  end
+end
+end
+
+fn sp2_dot_oa_ocs z_off ulong co ulong d ulong to f64
+dot = 0.0f64
+for j ulong d
+  dot = add dot mul get oa add z_off j ocsg add co j
+end
+ret dot
+end
+
+fn sp2_score_strands z_off ulong ns ulong d ulong to void
+zn = 0.0f64
+for j ulong d
+  v = get oa add z_off j
+  zn = add zn mul v v
+end
+zn = fsqrt fmax zn 1.0e-30f64
+for s ulong ns
+  put sp2_sim s div sp2_dot_oa_ocs z_off get sp2_coff s d zn
+end
+end
+
+fn sp2_add_dz_to_oa z_off ulong d ulong to void
+for j ulong d
+  idx = add z_off j
+  put oa idx add get oa idx get sp2_dz j
+end
+end
+
+note Sparse-FFN Helix Router (sproute): route z at oa[z_off..+d) to Top-K loaded strands via
+note centroid cosine similarity, evaluate only the Top-K thin FFN experts, and add weighted residual to oa[z_off..+d).
+fn sp2_route_apply z_off ulong top_k ulong to void
+ns = get sp2_st 0
+d = get og 2
+sp2_score_strands z_off ns d
+kk = top_k
+if gt kk ns
+  kk = ns
+end
+sp2_pick_topk ns kk
+for j3 ulong d
+  put sp2_dz j3 0.0f64
+end
+for k4 ulong kk
+  sp2_apply_1k z_off get sp2_topi k4 get sp2_topw k4 d
+end
+sp2_add_dz_to_oa z_off d
+end
+
+fn sp2_save_cal cal_z ulong z_off ulong yt ulong d ulong to void
+ncal = get sp2_st 8
+if lt ncal OSP2_CALN
+  czo = add cal_z mul ncal d
+  for j ulong d
+    ocsp add czo j get oa add z_off j
+  end
+  put sp2_caly ncal yt
+  put sp2_st 8 add ncal 1
+end
+end
+
+fn sp2_cryst_tok t ulong f_exp ulong sid ulong cal_z ulong to void
+d = get og 2
+z_off = add get og 17 mul t d
+yt = get oby t
+w_tok = add 0.25f64 fmin sp2_tok_grad z_off yt 8.0f64
+sp2_feat_oa z_off d f_exp sid
+sp2_acc_tok z_off w_tok f_exp d
+sp2_save_cal cal_z z_off yt d
+end
+
+fn sp2_cryst_stream nwin ulong max_toks ulong f_exp ulong sid ulong cal_z ulong to ulong
+tt = get og 1
+toks = ulong 0
+put sp2_st 8 0
+for w ulong nwin
+  obrow 0 mul w tt
+  dummy = ofwd 0
+  for t ulong tt
+    if ge toks max_toks
+      break
+    end
+    sp2_cryst_tok t f_exp sid cal_z
+    toks = add toks 1
+  end
+end
+ret toks
+end
+
+fn sp2_norm_cent c_off ulong d ulong to void
+cn = 0.0f64
+for jc ulong d
+  vc = ocsg add c_off jc
+  cn = add cn mul vc vc
+end
+cn = fsqrt fmax cn 1.0e-30f64
+for jc2 ulong d
+  ocsp add c_off jc2 div ocsg add c_off jc2 cn
+end
+end
+
+fn sp2_cryst_cal ncal ulong cal_z ulong b_off ulong f_exp ulong to f64
+base_cal = sp2_cal_loss ncal cal_z f_exp 0.0f64
+put sp2_st 9 bitcast ulong base_cal
+best_l = base_cal
+best_eta = 0.0f64
+etas = new f64 7 0.0f64
+put etas 0 0.05f64
+put etas 1 0.15f64
+put etas 2 0.35f64
+put etas 3 0.7f64
+put etas 4 1.0f64
+put etas 5 1.5f64
+put etas 6 2.5f64
+for ei ulong 7
+  et = get etas ei
+  cl = sp2_cal_loss ncal cal_z f_exp et
+  if lt cl best_l
+    best_l = cl
+    best_eta = et
+  end
+end
+nw = mul f_exp get og 2
+for wi ulong nw bound 16777216
+  ocsp add b_off wi mul ocsg add b_off wi best_eta
+end
+ret best_l
+end
+
+fn sp2_cryst_print toks ulong best_l f64 pbytes ulong ms ulong to void
+oputc 83
+oputc 80
+oputc 67
+oputc 82
+oputc 89
+oputc 83
+oputc 84
+oputc 32
+oputu get og 5
+oputc 32
+oputu get og 2
+oputc 32
+oputu get sp2_st 10
+oputc 32
+oputu get sp2_st 6
+oputc 32
+oputu get sp2_st 11
+oputc 32
+oputu toks
+oputc 32
+oputl rmic bitcast f64 get sp2_st 9
+oputc 32
+oputl rmic best_l
+oputc 32
+oputu pbytes
+oputc 32
+oputu ms
+oputc 10
+oflush
+end
+
+fn sp2_cryst_parse to void
+na = oargc
+if or lt na 7 gt na 10
+  exit 2
+end
+ockloop 2
+f_exp = oargu 5
+max_toks = ulong 4096
+if ge na 8
+  if gt oargu 7 0
+    max_toks = oargu 7
+  end
+end
+sid = ulong 1
+if ge na 9
+  sid = oargu 8
+end
+qbits = ulong 4
+if ge na 10
+  qbits = oargu 9
+end
+if or lt f_exp 2 gt f_exp OSP2_MAXF
+  exit 2
+end
+if and ne qbits 4 ne qbits 64
+  exit 2
+end
+if gt get og 2 OSP2_MAXD
+  exit 12
+end
+odopen 3
+if le get odn 0 get og 1
+  exit 20
+end
+put sp2_st 6 sid
+put sp2_st 10 f_exp
+put sp2_st 11 qbits
+put sp2_st 12 max_toks
+end
+
+note spcryst BASE.ck DOMAIN.tok OUT.sp2 F_EXP LAMBDA_MILLI [MAX_TOKS] [STRAND_ID] [QUANT_BITS]
+fn cmdspcryst to void
+t0 = monons
+sp2_cryst_parse
+f_exp = get sp2_st 10
+d = get og 2
+b_off = mul f_exp f_exp
+c_off = add b_off mul f_exp d
+cal_z = add c_off d
+if not ocsgrow add cal_z mul OSP2_CALN d
+  exit 70
+end
+put sp2_st 3 0
+put sp2_st 4 b_off
+put sp2_st 5 c_off
+sp_zero_ocs 0 add cal_z mul OSP2_CALN d
+tt = get og 1
+nwin = div sub get odn 0 1 tt
+if gt nwin div add get sp2_st 12 sub tt 1 tt
+  nwin = div add get sp2_st 12 sub tt 1 tt
+end
+if eq nwin 0
+  nwin = 1
+end
+toks = sp2_cryst_stream nwin get sp2_st 12 f_exp get sp2_st 6 cal_z
+sp2_norm_cent c_off d
+sp2_sym_reg 0 f_exp fmax div f64 oargu 6 1000.0f64 0.0001f64
+if ne sp_chol f_exp 0 0
+  exit 43
+end
+sp_chol_solve f_exp d 0 b_off
+best_l = sp2_cryst_cal get sp2_st 8 cal_z b_off f_exp
+pbytes = sp2_write_pack 4 osp_basehash get og 5 get og 33 f_exp get sp2_st 6 get sp2_st 11
+sp2_cryst_print toks best_l pbytes div ulong sub monons t0 1000000
+end
+
+fn sp2_weval_win w ulong top_k ulong to f64
+tt = get og 1
+d = get og 2
+obrow 0 mul w tt
+bl = ofwd 0
+put sp2_st 13 bitcast ulong add bitcast f64 get sp2_st 13 bl
+wl = 0.0f64
+for t ulong tt
+  z_off = add get og 17 mul t d
+  sp2_route_apply z_off top_k
+  wl = add wl sp2_ce_oa z_off get oby t
+end
+ret div wl f64 tt
+end
+
+note spweval BASE.ck EVAL.tok TOP_K W S1.sp2 [S2.sp2 ...]
+fn cmdspweval to void
+na = oargc
+if lt na 7
+  exit 2
+end
+ockloop 2
+odopen 3
+top_k = oargu 4
+ww = oargu 5
+ns = sub na 6
+if or eq top_k 0 or eq ww 0 gt ns OSP2_MAXS
+  exit 2
+end
+if gt top_k 32
+  exit 2
+end
+if gt ww div sub get odn 0 1 get og 1
+  exit 23
+end
+base_h = osp_basehash get og 5 get og 33
+put sp2_st 0 ns
+put sp2_st 1 0
+for s ulong ns
+  sp2_load_pack add 6 s s base_h
+end
+put sp2_st 13 0
+wov_ls = 0.0f64
+for w ulong ww
+  wov_ls = add wov_ls sp2_weval_win w top_k
+end
+blo = div bitcast f64 get sp2_st 13 f64 ww
+wlo = div wov_ls f64 ww
+oputc 83
+oputc 80
+oputc 87
+oputc 69
+oputc 86
+oputc 65
+oputc 76
+oputc 32
+oputu ns
+oputc 32
+oputu top_k
+oputc 32
+oputu ww
+oputc 32
+oputl rmic blo
+oputc 32
+oputl rmic wlo
+oputc 32
+oputl rmic div wlo 0.6931471805599453
+oputc 10
+oflush
+end
+
+fn sp2_argmax_lo lo ulong v ulong to ulong
+best = ulong 0
+bv = get oa lo
+for i ulong v
+  x = get oa add lo i
+  if gt x bv
+    bv = x
+    best = i
+  end
+end
+ret best
+end
+
+fn sp2_soft_tau lo ulong v ulong best ulong tau f64 to f64
+mx = div get oa add lo best tau
+sm = 0.0f64
+for i ulong v
+  e = fexp sub div get oa add lo i tau mx
+  put oa add lo i e
+  sm = add sm e
+end
+ret sm
+end
+
+note Pick token from logits at oa[og[27]..+V) with temperature tm_milli and PRNG state st.
+fn sp2_pick_tok st ulong tm ulong to ulong
+v = get og 0
+lo = get og 27
+best = sp2_argmax_lo lo v
+if eq tm 0
+  ret best
+end
+sm = sp2_soft_tau lo v best div f64 tm 1000.0f64
+u = mul mul f64 shr smx st 11 1.1102230246251565e-16 sm
+acc = 0.0f64
+for i3 ulong v
+  acc = add acc get oa add lo i3
+  if lt u acc
+    ret i3
+  end
+end
+ret best
+end
+
+note Check if argv[ai] begins with OLLMSP02 magic (for spsamp auto-dispatch).
+fn sp2_is_sp2 ai ulong to bool
+if ne oprd ai 0 0 8 8
+  ret false
+end
+ret eq opw8 0 OSP2_MAG
+end
+
+fn sp2_init_prompt v ulong to ulong
+plen = oargr 3
+is_num = gt plen 0
+for pi ulong ulong plen
+  ch = get oarg pi
+  if or lt ch 48 gt ch 57
+    is_num = false
+  end
+end
+put og 9 0
+if is_num
+  ocpush 0
+  ret oargu 3
+end
+sh = ulong 14695981039346656037
+for pi2 ulong ulong plen
+  bt = ulong get oarg pi2
+  sh = mul xor sh bt 1099511628211
+  ocpush rem bt v
+end
+ret sh
+end
+
+fn sp2_samp_step seed ulong tm ulong top_k ulong to ulong
+olastf
+d = get og 2
+v = get og 0
+z_off = add get og 17 mul sub get og 9 1 d
+sp2_route_apply z_off top_k
+klogit z_off get og 27 v d
+tok = sp2_pick_tok seed tm
+if eq v 256
+  oputc tok
+else
+  oputu tok
+  oputc 32
+end
+ocpush tok
+if ne tm 0
+  ret add seed 11400714819323198485
+end
+ret seed
+end
+
+note spwsamp / spsamp BASE.ck SEED_OR_PROMPT MAX_TOK TOP_K TEMP_MILLI S1.sp2 [S2.sp2 ...]
+fn cmdspwsamp to void
+na = oargc
+if lt na 8
+  exit 2
+end
+ockloop 2
+max_tok = oargu 4
+top_k = oargu 5
+tm = oargu 6
+ns = sub na 7
+if or eq max_tok 0 or eq top_k 0 or gt top_k 32 gt ns OSP2_MAXS
+  exit 2
+end
+base_h = osp_basehash get og 5 get og 33
+put sp2_st 0 ns
+put sp2_st 1 0
+for s ulong ns
+  sp2_load_pack add 7 s s base_h
+end
+seed = sp2_init_prompt get og 0
+for step ulong max_tok bound 16384
+  seed = sp2_samp_step seed tm top_k
+end
+oputc 10
+oflush
+end

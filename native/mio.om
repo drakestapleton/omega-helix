@@ -154,6 +154,20 @@ end
 ret OCSN
 end
 
+fn ocsgrow need ulong to bool
+if gt need OCSN
+ret false
+end
+if gt need get ocsf 0
+r = enlarge ocs need
+if ne r 0
+ret false
+end
+put ocsf 0 need
+end
+ret true
+end
+
 fn ocsg i ulong to f64
 ret get ocs i
 end

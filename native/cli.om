@@ -170,7 +170,11 @@ cmdspapp
 ret 0
 end
 if eq w 123615088701555
+if and ge oargc 8 sp2_is_sp2 7
+cmdspwsamp
+else
 cmdspsamp
+end
 ret 0
 end
 if eq w 119165853986931
@@ -215,6 +219,18 @@ ret 0
 end
 if eq w 28542713840693363
 cmdspforge
+ret 0
+end
+if eq w 32778062745792627
+cmdspcryst
+ret 0
+end
+if eq w 30506458621112435
+cmdspweval
+ret 0
+end
+if eq w 31645462708056179
+cmdspwsamp
 ret 0
 end
 if eq w 6778223

@@ -121,7 +121,7 @@ EOF
 src=$here/native
 {
   printf '%s\n' "$BT_HDR"
-  for u in math.om data.om "$BT_POOL" model.om adam.om ckpt.om bpe.om spec.om "$BT_REV" arboris.om sp_solve.om omg.om pillars_cli.om cli.om "$BT_PLAT" noserve.om nogpu.om; do
+  for u in math.om data.om "$BT_POOL" model.om adam.om ckpt.om bpe.om spec.om "$BT_REV" arboris.om sp_solve.om spiral.om omg.om pillars_cli.om cli.om "$BT_PLAT" noserve.om nogpu.om; do
     sed 's/^fn main to int$/fn ocpumain to int/' "$src/$u"
   done
   cat "$work/sim_main.om" "$src/gpu/gm.om" "$src/gpu/ring.om" "$src/gpu/ejit.om" "$work/bt_driver.om"
@@ -175,5 +175,19 @@ done
 if [ "$OS" = Darwin ] || [ "$ARCH" = aarch64 ]; then
   "$BIN" rev train 8 10
 fi
+
+echo "=== 11. Spiral-2048 Pure-Omega Razor MoE (OLLMSP02 spcryst W4/f64 -> spweval -> spsamp -> 1-bit tamper rc=61) ==="
+"$BIN" spcryst "$work/base.ck" "$work/corpus.txt" "$work/s1_w4.sp2" 32 100 256 1 4
+"$BIN" spcryst "$work/base.ck" "$work/corpus.txt" "$work/s2_f64.sp2" 32 100 256 2 64
+"$BIN" spweval "$work/base.ck" "$work/corpus.txt" 2 4 "$work/s1_w4.sp2" "$work/s2_f64.sp2" > "$work/spweval.out"
+cat "$work/spweval.out"
+awk 'NR==1 && $1=="SPWEVAL" && $6 < $5 { ok=1 } END { exit ok ? 0 : 1 }' "$work/spweval.out"
+"$BIN" spsamp "$work/base.ck" 42 16 2 0 "$work/s1_w4.sp2" "$work/s2_f64.sp2" > /dev/null
+cp "$work/s1_w4.sp2" "$work/s1_tamper.sp2"
+printf '\377' | dd of="$work/s1_tamper.sp2" bs=1 seek=80 count=1 conv=notrunc 2>/dev/null
+t_rc=0
+"$BIN" spweval "$work/base.ck" "$work/corpus.txt" 1 1 "$work/s1_tamper.sp2" >/dev/null 2>&1 || t_rc=$?
+[ "$t_rc" -eq 61 ] || { echo "FAIL: expected rc=61 on 1-bit OLLMSP02 tamper, got $t_rc" >&2; exit 1; }
+echo "SPIRAL_WEAVE_OM_PASS"
 
 echo "OMEGA_HELIX_PURE_OM_PASS"
