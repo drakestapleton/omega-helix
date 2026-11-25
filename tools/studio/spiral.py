@@ -308,7 +308,7 @@ def plan_spiral(raw: dict[str, Any]) -> dict[str, Any]:
     cmds = [
         f"ollm-gb10 init seed.ck {V} {T} {D} {H} {F} {L_phys} {B} 1 {base_steps} 1500 1 0 {L_phys} {NP}",
         f"ollm-gb10 gtrainb seed.ck seed_train.tok {base_steps} {min(base_steps, 250)}",
-        f"ollm-gb10 spcryst seed.ck strand_01.tok strands/s01.sp2 {f_exp} {lambda_milli} 0 1 {quant_bits}",
+        f"ollm-gb10 spcryst seed.ck strand_01.tok strands/s01.sp2 {f_exp} {lambda_milli} 4096 1 {quant_bits}",
         f"# ... repeat across {n_strands} razor-strands (~{sec_per_strand:.1f}s/strand, ~{est_total_cryst_sec:.0f}s total) ...",
         f"ollm-gb10 spweval seed.ck seed_held.tok {top_k} 16 strands/s01.sp2 strands/s02.sp2 ...",
         f"ollm-gb10 spsamp seed.ck \"fn main\" 96 {top_k} 700 strands/s01.sp2 strands/s02.sp2 ...",
@@ -392,9 +392,17 @@ def read_sp2_header(path: Path) -> dict[str, Any]:
         "bytes": size,
         "valid_magic": raw[:8] == b"OLLMSP02",
     }
-    if len(raw) >= 56 and raw[:8] == b"OLLMSP02":
-        vals = struct.unpack("<6Q", raw[8:56])
-        info["header_u64"] = list(vals)
+    if len(raw) >= 80 and raw[:8] == b"OLLMSP02":
+        vals = struct.unpack("<9Q", raw[8:80])
+        info["base_hash"] = f"{vals[0]:016x}"
+        info["L_phys"] = vals[1]
+        info["D"] = vals[2]
+        info["F_exp"] = vals[3]
+        info["strand_id"] = vals[4]
+        info["quant_bits"] = vals[5]
+        info["payload_bytes"] = vals[6]
+        info["payload_hash"] = f"{vals[7]:016x}"
+        info["header_hash"] = f"{vals[8]:016x}"
     return info
 
 
@@ -406,7 +414,7 @@ def run_spcryst(
     *,
     f_exp: int = 256,
     lambda_milli: int = 1000,
-    max_toks: int = 0,
+    max_toks: int = 4096,
     strand_id: int = 1,
     quant_bits: int = 4,
 ) -> dict[str, Any]:
@@ -419,6 +427,7 @@ def run_spcryst(
     if not tok_p.is_file():
         raise ValueError(f"domain_tok not found: {tok_p}")
     out_p.parent.mkdir(parents=True, exist_ok=True)
+    eff_max_toks = int(max_toks) if int(max_toks) > 0 else 4096
 
     argv = [
         str(ollm_bin),
@@ -428,7 +437,7 @@ def run_spcryst(
         str(out_p),
         str(int(f_exp)),
         str(int(lambda_milli)),
-        str(int(max_toks)),
+        str(eff_max_toks),
         str(int(strand_id)),
         str(int(quant_bits)),
     ]
@@ -440,11 +449,26 @@ def run_spcryst(
         raise RuntimeError(f"spcryst exited {proc.returncode}: {detail}")
 
     hdr = read_sp2_header(out_p) if out_p.is_file() else {}
+    base_cal = None
+    cryst_cal = None
+    wall_ms = None
+    for ln in proc.stdout.splitlines():
+        parts = ln.split()
+        if len(parts) >= 11 and parts[0] == "SPCRYST":
+            try:
+                base_cal = int(parts[7]) / 1e6
+                cryst_cal = int(parts[8]) / 1e6
+                wall_ms = int(parts[10])
+            except ValueError:
+                pass
     return {
         "ok": True,
         "cmd": " ".join(argv),
         "elapsed_sec": elapsed,
-        "sec_per_strand": elapsed,
+        "sec_per_strand": round(wall_ms / 1000.0, 4) if wall_ms is not None else elapsed,
+        "wall_ms": wall_ms,
+        "base_cal_loss": base_cal,
+        "cryst_cal_loss": cryst_cal,
         "out_sp2": str(out_p),
         "pack": hdr,
         "stdout": proc.stdout.strip(),
@@ -499,11 +523,19 @@ def run_spweval(
         detail = (proc.stderr or proc.stdout or "").strip()
         raise RuntimeError(f"spweval exited {proc.returncode}: {detail}")
 
+    base_loss: float | None = None
     loss_nats: float | None = None
     bpb: float | None = None
     for ln in proc.stdout.splitlines():
         parts = ln.split()
-        if len(parts) >= 5 and parts[0] in ("E", "SPWEVAL", "WE"):
+        if len(parts) >= 7 and parts[0] == "SPWEVAL":
+            try:
+                base_loss = int(parts[4]) / 1e6
+                loss_nats = int(parts[5]) / 1e6
+                bpb = int(parts[6]) / 1e6
+            except ValueError:
+                pass
+        elif len(parts) >= 5 and parts[0] in ("E", "WE"):
             try:
                 loss_nats = int(parts[3]) / 1e6 if parts[3].isdigit() else float(parts[3])
                 bpb = int(parts[4]) / 1e6 if parts[4].isdigit() else float(parts[4])
@@ -515,6 +547,7 @@ def run_spweval(
         "elapsed_sec": elapsed,
         "top_k": int(top_k),
         "n_strands": len(sp_paths),
+        "base_loss": base_loss,
         "loss": loss_nats,
         "bpb": bpb,
         "routing": _parse_routing_lines(proc.stdout),
@@ -531,9 +564,9 @@ def run_spiral_sample(
     max_tok: int = 64,
     top_k: int = 4,
     temp_milli: int = 700,
-    subcmd: str = "spsamp",
+    subcmd: str = "spwsamp",
 ) -> dict[str, Any]:
-    """Run Spiral Weave Top-K sampling (`ollm spsamp` / `spwsamp`) and parse Top-K routing readout."""
+    """Run Spiral Weave Top-K sampling (`ollm spwsamp` / `spsamp`) and parse Top-K routing readout."""
     base_p = Path(base_ck).expanduser().resolve()
     if not base_p.is_file():
         raise ValueError(f"base_ck not found: {base_p}")
@@ -552,15 +585,17 @@ def run_spiral_sample(
         *sp_paths,
     ]
     t0 = time.monotonic()
-    proc = subprocess.run(argv, capture_output=True, text=True, check=False)
+    proc = subprocess.run(argv, capture_output=True, check=False)
     elapsed = round(time.monotonic() - t0, 4)
+    stdout_txt = (proc.stdout or b"").decode("utf-8", errors="replace")
+    stderr_txt = (proc.stderr or b"").decode("utf-8", errors="replace")
     if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "").strip()
+        detail = (stderr_txt or stdout_txt or "").strip()
         raise RuntimeError(f"{subcmd} exited {proc.returncode}: {detail}")
 
-    routing = _parse_routing_lines(proc.stdout)
+    routing = _parse_routing_lines(stdout_txt)
     text_lines = [
-        ln for ln in proc.stdout.splitlines()
+        ln for ln in stdout_txt.splitlines()
         if not re.match(r"^(?:ROUTE|SPW_ROUTE|R)\s+\S+\s+[0-9.eE+-]+", ln.strip())
     ]
     return {
@@ -572,5 +607,5 @@ def run_spiral_sample(
         "n_strands": len(sp_paths),
         "text": "\n".join(text_lines).strip(),
         "routing": routing,
-        "stdout": proc.stdout.strip(),
+        "stdout": stdout_txt.strip(),
     }
