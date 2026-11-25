@@ -71,6 +71,26 @@ global onla f64 16
 global onltn_i ulong 16
 global onltn_v f64 16
 
+note Adaptive loop (docs/LOOP.md, "Per-token exit and messages between passes"). Every control 0 ->
+note the hooks never run and every result keeps its bits. onlx: [0] exit threshold (a row's
+note normalized core delta |out - in| / |in| of a pass, times 1e6; 0 off) [1] inter-pass message gain
+note times 1e6 (0 off) [2] 1 = the LTP0 vector onlv (scaled to rms onlf[1]) is the pass-0 message
+note [6] 1 = run the hooks for telemetry only (no value changes). Hooks run only when NP > 1.
+global onlx ulong 8
+note onlxp[t]: the core passes row t ran in the last forward (NP when it never exited early)
+global onlxp ulong 256
+note onlxd[t]: row t's normalized delta of pass 0; onlmn[t]: the norm of its last message
+global onlxd f64 256
+global onlmn f64 256
+note onlmsg[t D + i]: row t's inter-pass message (the core update of its last pass);
+note onlpin[t D + i]: row t's input to the current pass (after the message is mixed in)
+global onlmsg f64 98304
+global onlpin f64 98304
+global onlxs f64 4
+note Mutant x (the cached decode skips the end-of-pass hook: no exits, no messages): 1 in the
+note product, 0 in the mutant, which adaptcmp must catch.
+const OMUTAX ulong 1
+
 note gradient pool element i (i < 2 P)
 fn ogrg i ulong to f64
 p = get og 8
@@ -981,9 +1001,23 @@ fatto l n t2
 end
 end
 for t3 ulong get og 9
-olayf2 l t3
+olayf2x l t3
 end
 oaflip l true
+end
+
+note olayf2 of row t, or, for a row that left the loop before this core pass, its input unchanged
+note (its K and V above still come from that frozen row, so later rows see the same keys)
+fn olayf2x l ulong t ulong to void
+if ne get onlx 0 0
+if onlfz l t
+d = get og 2
+r = mul t d
+onlcopy_oa add oaout l r add oahin l r d
+ret
+end
+end
+olayf2 l t
 end
 
 note row t: a = rms(h, g1); q, k, u = a.wq, a.wk, a.wv
@@ -1102,8 +1136,15 @@ fn ofwd b ulong to f64
 put okv 0 0
 put ogkm 1 b
 oemb b
+xo = onlxon
 for l ulong get og 56
+if xo
+onlxpre l 0 get og 9
+end
 olayf l
+if xo
+onlxpost l 0 get og 9
+end
 end
 ret ohead b
 end
@@ -1140,12 +1181,20 @@ put ogkm 1 0
 ct = get og 9
 nr = sub ct t0
 okvemb t0 nr
+xo = onlxon
 for l ulong get og 56
+if xo
+onlxpre l t0 nr
+end
 okvlay l t0 nr
+if and xo eq OMUTAX 1
+onlxpost l t0 nr
+end
 end
 okvend ct
 ret t0
 end
+
 
 note oemb for rows t0 .. t0 + nr - 1 of sequence 0
 fn okvemb t0 ulong nr ulong to void
@@ -1198,7 +1247,7 @@ onlsteer_head l add t0 ih
 end
 end
 for i3 ulong nr
-olayf2 l add t0 i3
+olayf2x l add t0 i3
 end
 okvkv l t0 nr true
 if ne get onlc 10 0
@@ -1231,6 +1280,7 @@ put onlc i 0
 end
 for j ulong 8
 put onlf j 0.0f64
+put onlx j 0
 end
 end
 
@@ -1496,6 +1546,174 @@ put onlc 9 add get onlc 9 cn
 if and gt get onlc 5 0 lt ent th
 break
 end
+end
+end
+
+note ======== Adaptive loop: per-token exit and inter-pass messages (onlx, docs/LOOP.md)
+note A core pass p runs applications LP + p LC .. LP + (p + 1) LC - 1. Before pass 0 (onlxpre) every
+note row of the range is active and its input is kept in onlpin. After pass p (onlxpost) every row
+note still active gets its normalized delta rel = |out - in| / max(|in|, 1e-12); its message
+note becomes out - in; when rel is below the threshold and a pass remains, the row leaves the loop
+note (onlxp[t] = p + 1) and olayf2x copies it unchanged through the remaining core applications.
+note A row still active enters pass p + 1 with out + gain * message. Every quantity of row t reads
+note only row t, so the full forward (ofwd) and the cached decode (ofwdi) compute the same bits.
+
+note true when the hooks run: a loop, and an exit threshold, a message gain or telemetry
+fn onlxon to bool
+if le get og 59 1
+ret false
+end
+ret or or ne get onlx 0 0 ne get onlx 1 0 ne get onlx 6 0
+end
+
+note the core pass of application l, or NP when l is outside the core (or there is no loop)
+fn onlxpass l ulong to ulong
+np = get og 59
+if le np 1
+ret np
+end
+lp = get og 57
+if lt l lp
+ret np
+end
+j = sub l lp
+lc = get og 58
+if ge j mul lc np
+ret np
+end
+ret div j lc
+end
+
+note true when row t left the loop before the core pass of application l
+fn onlfz l ulong t ulong to bool
+p = onlxpass l
+if or eq p 0 ge p get og 59
+ret false
+end
+ret le get onlxp t p
+end
+
+note before application l = LP (pass 0): rows t0 .. t0 + nr - 1 active, inputs kept, optional LTP0 message
+fn onlxpre l ulong t0 ulong nr ulong to void
+if ne l get og 57
+ret
+end
+for i ulong nr
+onlxpre1 l add t0 i
+end
+end
+
+fn onlxpre1 l ulong t ulong to void
+put onlxp t get og 59
+put onlmn t 0.0f64
+put onlxd t 0.0f64
+d = get og 2
+r = mul t d
+ho = add oahin l r
+if and ne get onlx 2 0 ne get onlx 1 0
+onlxseed r d
+onlxmix ho r d
+put onlmn t onlxnrm r d
+ret
+end
+for i ulong d
+put onlpin add r i get oa add ho i
+put onlmsg add r i 0.0f64
+end
+end
+
+note row t's message = onlf[1] onlv / rms(onlv) (the LTP0 vector handed off as the pass-0 message)
+fn onlxseed r ulong d ulong to void
+sc = div get onlf 1 onlv_rms d
+for i ulong d
+put onlmsg add r i mul sc get onlv i
+end
+end
+
+note |onlmsg row at r|
+fn onlxnrm r ulong d ulong to f64
+ss = 0.0f64
+for i ulong d
+v = get onlmsg add r i
+ss = add ss mul v v
+end
+ret fsqrt ss
+end
+
+note after application l: when it ends core pass p, every row still active in it (onlxrow)
+fn onlxpost l ulong t0 ulong nr ulong to void
+p = onlxpass l
+if ge p get og 59
+ret
+end
+lc = get og 58
+if ne rem sub l get og 57 lc sub lc 1
+ret
+end
+for i ulong nr
+t = add t0 i
+if gt get onlxp t p
+onlxrow l t p
+end
+end
+end
+
+note row t after core pass p (application l its last): delta, message, exit, the next pass's input
+fn onlxrow l ulong t ulong p ulong to void
+d = get og 2
+r = mul t d
+ou = add oaout l r
+rel = onlxdel ou r d
+if eq p 0
+put onlxd t rel
+end
+if ne get onlx 1 0
+put onlmn t get onlxs 0
+end
+q = add p 1
+if ge q get og 59
+ret
+end
+if ne get onlx 0 0
+if lt rel div f64 get onlx 0 1000000.0
+put onlxp t q
+ret
+end
+end
+onlxmix ou r d
+end
+
+note rel = |out - in| / max(|in|, 1e-12) of the row (out at ou in oa, in at onlpin r); |out - in| into
+note onlxs[0]; the message onlmsg row = out - in when the gain is on
+fn onlxdel ou ulong r ulong d ulong to f64
+ss = 0.0f64
+si = 0.0f64
+wm = ne get onlx 1 0
+for i ulong d
+pv = get onlpin add r i
+dv = sub get oa add ou i pv
+ss = add ss mul dv dv
+si = add si mul pv pv
+if wm
+put onlmsg add r i dv
+end
+end
+put onlxs 0 fsqrt ss
+ret div fsqrt ss fmax fsqrt si 1.0e-12f64
+end
+
+note the row at ou becomes out + gain * message (gain on) and the next pass's input onlpin
+fn onlxmix ou ulong r ulong d ulong to void
+g = div f64 get onlx 1 1000000.0
+wm = ne get onlx 1 0
+for i ulong d
+q = add ou i
+v = get oa q
+if wm
+v = add v mul g get onlmsg add r i
+put oa q v
+end
+put onlpin add r i v
 end
 end
 
