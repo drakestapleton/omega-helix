@@ -547,5 +547,17 @@ if uarg_eq 1 u_sample
 ucmd_sample
 ret 0
 end
+if uarg_eq 1 u_dkemit
+ucmd_dkemit
+ret 0
+end
+if uarg_eq 1 u_dtrain
+ucmd_dtrain
+ret 0
+end
+if uarg_eq 1 u_dcheck
+ucmd_dcheck
+ret 0
+end
 exit 2
 end

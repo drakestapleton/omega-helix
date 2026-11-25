@@ -307,6 +307,7 @@
     if (tabId === "tab-design") refreshEstimate();
     if (tabId === "tab-forge") refreshRuns();
     if (tabId === "tab-play") refreshRuns(true);
+    if (tabId === "tab-distill") refreshDistillRuns();
   }
 
   function bindTabs() {
@@ -1377,6 +1378,181 @@
       if (id) loadRunDetail(id);
     });
     $("btn-sample").addEventListener("click", runSample);
+
+    /* ---------------- Tab 5: Distillation Pipeline Network ---------------- */
+    $("btn-distill-probe").addEventListener("click", probeDistillTeachers);
+    $("btn-distill-start").addEventListener("click", startDistillRun);
+    $("btn-distill-stop").addEventListener("click", async () => {
+      if (!state.activeDistillId) return;
+      await api(`/api/distill/runs/${encodeURIComponent(state.activeDistillId)}/stop`, { method: "POST" });
+      toast(`Stop requested for ${state.activeDistillId}`);
+    });
+    $("distill-run-select").addEventListener("change", () => {
+      const id = $("distill-run-select").value;
+      if (id) { loadDistillDetail(id); subscribeDistillEvents(id); }
+    });
+  }
+
+  let distillEs = null;
+  function appendDistillLog(line) {
+    const pre = $("distill-term");
+    if (!pre) return;
+    const prev = pre.textContent ? pre.textContent.split("\n") : [];
+    prev.push(stripAnsi(line));
+    if (prev.length > 400) prev.shift();
+    pre.textContent = prev.join("\n");
+    pre.scrollTop = pre.scrollHeight;
+  }
+
+  async function probeDistillTeachers() {
+    sfx.tap();
+    const res = await api("/api/distill/teachers/probe");
+    const box = $("distill-probes");
+    if (!box) return;
+    box.replaceChildren();
+    if (!res.ok) {
+      box.textContent = "Probe failed.";
+      return;
+    }
+    const eps = res.endpoints || [];
+    eps.forEach((ep) => {
+      const chip = el("button", { type: "button", class: `probe-chip${ep.reachable ? " on" : ""}` }, `${ep.name} (${ep.reachable ? (ep.models[0] || "online") : "offline"})`);
+      chip.addEventListener("click", () => {
+        $("d-teacher-url").value = ep.base_url;
+        if (ep.models && ep.models.length) $("d-teacher-model").value = ep.models[0];
+        sfx.assign();
+      });
+      box.appendChild(chip);
+    });
+  }
+
+  function renderDistillChart(pts) {
+    const svg = $("chart-distill");
+    if (!svg) return;
+    svg.replaceChildren();
+    const W = 640, H = 220, pad = { l: 46, r: 16, t: 16, b: 26 };
+    for (let i = 0; i <= 4; i++) {
+      const y = pad.t + ((H - pad.t - pad.b) * i) / 4;
+      svg.appendChild(svgEl("line", { x1: pad.l, x2: W - pad.r, y1: y, y2: y, stroke: "rgba(148,163,184,0.12)" }));
+    }
+    if (!pts || !pts.length) {
+      svg.appendChild(svgEl("text", { x: W / 2, y: H / 2, "text-anchor": "middle", fill: "#64748b", "font-size": 12 }, "Distillation CE / KL telemetry appears here"));
+      return;
+    }
+    const tot = pts.map((p) => Number(p.loss ?? 0));
+    const ce = pts.map((p) => Number(p.ce_loss ?? p.loss ?? 0));
+    const kl = pts.map((p) => Number(p.kl_loss ?? 0));
+    const mx = Math.max(1e-6, ...tot, ...ce, ...kl);
+    const sx = (i) => pad.l + ((W - pad.l - pad.r) * (pts.length === 1 ? 0.5 : i / (pts.length - 1)));
+    const sy = (v) => pad.t + (1 - v / mx) * (H - pad.t - pad.b);
+    const linePath = (arr) => arr.map((v, i) => `${i === 0 ? "M" : "L"}${sx(i).toFixed(1)} ${sy(v).toFixed(1)}`).join(" ");
+    svg.appendChild(svgEl("path", { d: linePath(ce), fill: "none", stroke: "#fbbf24", "stroke-width": 1.8, "stroke-dasharray": "4 3" }));
+    svg.appendChild(svgEl("path", { d: linePath(kl), fill: "none", stroke: "#a78bfa", "stroke-width": 1.8 }));
+    svg.appendChild(svgEl("path", { d: linePath(tot), fill: "none", stroke: "#22d3ee", "stroke-width": 2.4 }));
+  }
+
+  function applyDistillRun(run) {
+    if (!run) return;
+    $("btn-distill-stop").disabled = run.status !== "running";
+    const m = run.metrics || [];
+    const last = m[m.length - 1] || {};
+    $("dk-step").textContent = last.step !== undefined ? fmtNum(last.step) : "0";
+    $("dk-loss").textContent = typeof last.loss === "number" ? last.loss.toFixed(4) : "—";
+    $("dk-ce").textContent = typeof last.ce_loss === "number" ? last.ce_loss.toFixed(4) : "—";
+    $("dk-kl").textContent = typeof last.kl_loss === "number" ? last.kl_loss.toFixed(4) : "—";
+    const vs = run.verify_stats || {};
+    $("dk-pass").textContent = typeof vs.pass_rate === "number" ? `${(vs.pass_rate * 100).toFixed(0)}%` : "—";
+    const dc = run.dcheck_receipt;
+    if (dc) {
+      $("distill-dcheck-meta").textContent = `dcheck PASS · ${dc.samples} params · mxrel=${Number(dc.mxrel_milli || 0).toFixed(6)} (${dc.retries || 0} retries)`;
+    }
+    const stageMap = { harvest: "dnode-src", verify: "dnode-ver", distill: "dnode-stu", dcheck: "dnode-stu" };
+    ["dnode-src", "dnode-ver", "dnode-fmt", "dnode-stu"].forEach((id) => {
+      const n = $(id);
+      if (n) n.classList.remove("active", "done");
+    });
+    if (run.status === "done") {
+      ["dnode-src", "dnode-ver", "dnode-fmt", "dnode-stu"].forEach((id) => $(id)?.classList.add("done"));
+    } else if (stageMap[run.stage]) {
+      $(stageMap[run.stage])?.classList.add("active");
+    }
+    renderDistillChart(m);
+  }
+
+  async function refreshDistillRuns() {
+    const res = await api("/api/distill/runs");
+    if (!res.ok) return;
+    const sel = $("distill-run-select");
+    if (!sel) return;
+    const prev = state.activeDistillId || sel.value;
+    sel.replaceChildren(el("option", { value: "" }, "— live / recent runs —"));
+    (res.runs || []).forEach((r) => {
+      sel.appendChild(el("option", { value: r.run_id }, `${r.run_id} (${r.mode} · ${r.status})`));
+    });
+    if (prev) sel.value = prev;
+  }
+
+  async function loadDistillDetail(runId) {
+    const res = await api(`/api/distill/runs/${encodeURIComponent(runId)}`);
+    if (res.ok && res.run) applyDistillRun(res.run);
+  }
+
+  function subscribeDistillEvents(runId) {
+    if (distillEs) { distillEs.close(); distillEs = null; }
+    if ($("distill-term")) $("distill-term").textContent = "";
+    distillEs = new EventSource(`/api/distill/runs/${encodeURIComponent(runId)}/events`);
+    distillEs.onmessage = (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+      if (msg.kind === "log" && msg.text) appendDistillLog(msg.text);
+      else if (msg.kind === "stage") appendDistillLog(`[stage] ${msg.label || msg.stage || ""}`);
+      else if (msg.kind === "dcheck") { appendDistillLog(`[dcheck] PASS samples=${msg.samples} mxrel=${msg.mxrel_milli}`); loadDistillDetail(runId); }
+      else if (msg.kind === "metric") loadDistillDetail(runId);
+      else if (msg.kind === "done") {
+        appendDistillLog(`[done] bom=${msg.bom_sha256 || ""}`);
+        sfx.celebrate();
+        celebrateBurst();
+        loadDistillDetail(runId);
+        refreshDistillRuns();
+        distillEs.close();
+      } else if (msg.kind === "error") {
+        appendDistillLog(`[error] ${msg.error || "failed"}`);
+        sfx.err();
+        toast(msg.error || "Distillation failed", "err");
+        distillEs.close();
+      }
+    };
+  }
+
+  async function startDistillRun() {
+    sfx.tap();
+    const vers = Array.from(document.querySelectorAll('input[name="d-ver"]:checked')).map((i) => i.value);
+    const traces = $("d-traces").value.split("\n").map((s) => s.trim()).filter(Boolean);
+    const prompts = $("d-prompts").value.split("\n").map((s) => s.trim()).filter(Boolean);
+    const tUrl = $("d-teacher-url").value.trim();
+    const tMod = $("d-teacher-model").value.trim();
+    const spec = {
+      mode: $("d-mode").value,
+      arch: $("d-arch").value,
+      K: Number($("d-k").value || 8),
+      alpha: Number($("d-alpha").value || 0.7),
+      temperature: Number($("d-tau").value || 1.5),
+      steps: Number($("d-steps").value || 10),
+      verifiers: vers.length ? vers : ["nonempty"],
+      trace_paths: traces,
+      prompts: prompts,
+      teachers: tUrl ? [{ kind: "openai_compat", base_url: tUrl, model: tMod || "q36-35b" }] : [],
+    };
+    const res = await api("/api/distill/runs", { method: "POST", body: spec });
+    if (!res.ok) {
+      toast(res.error || "Invalid distillation spec", "err");
+      sfx.err();
+      return;
+    }
+    state.activeDistillId = res.run_id;
+    toast(`Distill run started: ${res.run_id}`, "ok");
+    await refreshDistillRuns();
+    subscribeDistillEvents(res.run_id);
   }
 
   async function boot() {
@@ -1391,6 +1567,7 @@
     syncDesignControlsFromSpec();
     renderStepper("", "idle");
     renderChart([]);
+    renderDistillChart([]);
     renderDag("dag-svg", null);
     renderDag("forge-dag", null);
     bindEvents();

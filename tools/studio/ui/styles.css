@@ -17,6 +17,7 @@
   --c2: #a78bfa; /* Indigo-Violet */
   --c3: #34d399; /* Emerald */
   --c4: #fbbf24; /* Amber */
+  --c5: #38bdf8; /* Sky */
   --danger: #fb7185;
 
   --radius: 14px;
@@ -404,6 +405,7 @@ main {
 .tabs [role="tab"][data-accent="c2"][aria-selected="true"]::after { border-block-end-color: var(--c2); }
 .tabs [role="tab"][data-accent="c3"][aria-selected="true"]::after { border-block-end-color: var(--c3); }
 .tabs [role="tab"][data-accent="c4"][aria-selected="true"]::after { border-block-end-color: var(--c4); }
+.tabs [role="tab"][data-accent="c5"][aria-selected="true"]::after { border-block-end-color: var(--c5); }
 
 .tab-n {
   display: inline-grid;
@@ -421,6 +423,7 @@ main {
 [data-accent="c2"][aria-selected="true"] .tab-n { background: rgba(167, 139, 250, 0.22); color: var(--c2); }
 [data-accent="c3"][aria-selected="true"] .tab-n { background: rgba(52, 211, 153, 0.22); color: var(--c3); }
 [data-accent="c4"][aria-selected="true"] .tab-n { background: rgba(251, 191, 36, 0.22); color: var(--c4); }
+[data-accent="c5"][aria-selected="true"] .tab-n { background: rgba(56, 189, 248, 0.22); color: var(--c5); }
 
 .panel[hidden] {
   display: none;
@@ -1297,15 +1300,30 @@ input[type="checkbox"] {
 }
 
 .lg.c1 { background: var(--c1); }
+.lg.c2 { background: var(--c2); }
 .lg.c4 { background: var(--c4); }
 
-#chart {
+#chart,
+#chart-distill {
   width: 100%;
   height: auto;
   display: block;
   background: rgba(5, 8, 20, 0.68);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+}
+
+.distill-hero { margin-bottom: 16px; }
+.grid-distill { display: grid; grid-template-columns: minmax(340px, 1.05fr) minmax(360px, 1.25fr); gap: 16px; align-items: start; }
+.probe-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.probe-chip { padding: 6px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface); font-size: 12px; cursor: pointer; }
+.probe-chip.on { border-color: var(--c3); color: var(--text); }
+.ver-chips { display: flex; flex-wrap: wrap; gap: 10px; padding: 4px 0; }
+.distill-meta { margin-top: 8px; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 8px; }
+
+@media (max-width: 1080px) {
+  .grid-distill { grid-template-columns: 1fr; }
 }
 
 .term {

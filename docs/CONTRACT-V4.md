@@ -67,3 +67,21 @@ Math constants in `native/univ/umath.om` (`ufexp`, `uflog`, `ufsin`, `ufcos`, `u
 - `export-hf IN.ck OUT_DIR [f32|bf16]` — writes `OUT_DIR/config.json` via `jsonw.om` and `OUT_DIR/model.safetensors` (`OUT_DIR` must exist).
 - `export-gguf IN.ck OUT.gguf` — writes GGUF v3 (`magic = 1179993927`, `version = 3`, 20 KV metadata entries, 32-byte aligned `F32` tensors, `convert_hf_to_gguf` `Q/K` row permutation for `llama`).
 - `upgrade LEGACY.ck OUT.ck` — upgrades legacy `OLLMCK01`/`02`/`03` checkpoints bit-for-bit to `OLLMCK04`.
+
+---
+
+## Sparse Top-K Distillation Shard (`OLLMDK01`)
+
+Implemented in `native/univ/udistill.om` (`ollm-univ` commands `dkemit`, `dtrain`, `dcheck`):
+
+- **64-byte header (`<8Q>` LE):** `[magic=3544415663467285583 ("OLLMDK01"), version=1, V, K, T, N, flags=0, fnv_body]`.
+- **Body (`N` records, each `4*(T+1) + T + 8*T*K` bytes, FNV-1a 64 authenticated):**
+  - `tokens`: `(T + 1)` × `u32` LE (`< V`)
+  - `mask`: `T` × `u8` (`0` or `1`)
+  - `top_ids`: `T * K` × `u32` LE (`< V`)
+  - `top_probs`: `T * K` × `f32` LE (finite `>= 0`, per-position sum `<= 1.0001`)
+- **CLI Commands:**
+  - `ollm-univ dkemit CK TOKENS.bin OUT.dk K TEMP_MILLI [MAX_SEQS]` -> `K <N> <V> <K> <T> <fnv_hex>`
+  - `ollm-univ dcheck CK DK.bin ALPHA_MICRO TEMP_MILLI [NSAMP]` -> `C <nsamp> <mxrel_hex> <mxrel_milli> <worst> <retries>` (exits `40` if `mxrel > 1e-3`)
+  - `ollm-univ dtrain CK DK.bin STEPS EVAL_EVERY ALPHA_MICRO TEMP_MILLI` -> `D <step> <total_micro> <ce_micro> <kl_micro>`
+- **Fail-closed Exit Codes:** `10` I/O/truncated file, `11` bad magic/version/flags/`K`, `12` `(V, T)` mismatch or mask byte `> 1`, `14` body FNV-1a mismatch, `15` trailing extra bytes, `24` empty unmasked batch (`dcheck`), `25` out-of-range token/`top_id` or invalid probability, `40` `dcheck` gradient mismatch. See [`docs/DISTILLATION.md`](DISTILLATION.md).

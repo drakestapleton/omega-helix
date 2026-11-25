@@ -92,6 +92,12 @@ OLLM_INTERCHANGE_BIN="$OUT/ollm-interchange" OLLM_BIN="$BIN" \
 OMEGA_HELIX_BIN_DIR="$OUT" "$here/bin/omega-helix" doctor --json >/dev/null
 OMEGA_HELIX_BIN_DIR="$OUT" "$here/bin/omega-helix" catalog --search permissive --json >/dev/null
 
+echo "--- 4c. Sovereign Distillation Pipeline Network (OLLMDK01, verifiers, teachers, Studio API, CLI) ---"
+OLLM_WALDO_BIN="$OUT/ollm-waldo" OLLM_UNIV_BIN="$OUT/ollm-univ" \
+OLLM_INTERCHANGE_BIN="$OUT/ollm-interchange" OLLM_BIN="$BIN" \
+  python3 -W error::ResourceWarning -m unittest discover -s "$here/tools/distill" -p "test_*.py" -v
+OMEGA_HELIX_BIN_DIR="$OUT" "$here/bin/omega-helix" distill probe --json >/dev/null
+
 if [ "$OS" = Linux ] && [ "$ARCH" = aarch64 ]; then
   GSL_WORK="$xdir/gsl" sh "$here/tests/test_gpu_spec_loop.sh" build
   GSL_WORK="$xdir/gsl" sh "$here/tests/test_gpu_spec_loop.sh" host

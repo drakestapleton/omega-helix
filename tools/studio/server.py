@@ -14,13 +14,20 @@ from pathlib import Path
 from typing import Any
 
 STUDIO_DIR = Path(__file__).resolve().parent
+TOOLS_DIR = STUDIO_DIR.parent
+DISTILL_DIR = TOOLS_DIR / "distill"
 UI_DIR = STUDIO_DIR / "ui"
 
-if str(STUDIO_DIR) not in sys.path:
-    sys.path.insert(0, str(STUDIO_DIR))
+for _p in (str(STUDIO_DIR), str(TOOLS_DIR)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import catalog as studio_catalog  # noqa: E402
 import chain_runner as runner  # noqa: E402
+from distill import harvest as distill_harvest  # noqa: E402
+from distill import pipeline as distill_pipeline  # noqa: E402
+from distill import teachers as distill_teachers  # noqa: E402
+from distill import verifiers as distill_verifiers  # noqa: E402
 
 
 class StudioServer(ThreadingHTTPServer):
@@ -32,8 +39,14 @@ class StudioServer(ThreadingHTTPServer):
         server_address: tuple[str, int],
         manager: runner.ChainManager,
         ui_dir: Path = UI_DIR,
+        distill_manager: distill_pipeline.DistillManager | None = None,
     ) -> None:
         self.manager = manager
+        self.distill_manager = distill_manager or distill_pipeline.DistillManager(
+            runs_dir=manager.runs_dir / "_distill",
+            bin_dir=manager.bin_dir,
+            root=manager.root,
+        )
         self.ui_dir = ui_dir.resolve()
         super().__init__(server_address, StudioHandler)
 
@@ -146,6 +159,30 @@ class StudioHandler(BaseHTTPRequestHandler):
                 self._stream_sse(run)
                 return
 
+        if path == "/api/distill/teachers/probe":
+            eps = distill_teachers.probe_local_teachers()
+            self._send_json(HTTPStatus.OK, {"ok": True, "endpoints": eps})
+            return
+
+        if path == "/api/distill/runs":
+            self._send_json(HTTPStatus.OK, {"ok": True, "runs": self.server.distill_manager.list_runs()})
+            return
+
+        if path.startswith("/api/distill/runs/"):
+            rest = path[len("/api/distill/runs/"):].strip("/")
+            parts = rest.split("/")
+            run_id = urllib.parse.unquote(parts[0])
+            drun = self.server.distill_manager.get_run(run_id)
+            if drun is None:
+                self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": f"distill run not found: {run_id}"})
+                return
+            if len(parts) == 1:
+                self._send_json(HTTPStatus.OK, {"ok": True, "run": drun.to_dict()})
+                return
+            if len(parts) == 2 and parts[1] == "events":
+                self._stream_sse(drun)
+                return
+
         if not path.startswith("/api/"):
             self._serve_static(path)
             return
@@ -244,6 +281,63 @@ class StudioHandler(BaseHTTPRequestHandler):
                     except Exception as exc:
                         self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": str(exc)})
                     return
+
+        if path == "/api/distill/harvest":
+            try:
+                inputs = body.get("inputs") or body.get("trace_paths") or []
+                if isinstance(inputs, str):
+                    inputs = [inputs]
+                verifiers = body.get("verifiers") or ["nonempty"]
+                harv = distill_harvest.harvest_paths(
+                    inputs,
+                    source_tag=str(body.get("corpus_name") or "distilled-traces"),
+                    license_id=str(body.get("license") or "Apache-2.0"),
+                )
+                vpipe = distill_verifiers.VerifierPipeline(
+                    verifiers,
+                    regex_pattern=body.get("regex_pattern") or None,
+                    json_required_keys=body.get("json_required_keys") or None,
+                )
+                vres = vpipe.filter_records(harv["records"])
+                export_meta = None
+                out_dir = body.get("out_dir")
+                if out_dir and vres["accepted"]:
+                    export_meta = distill_harvest.write_openwaldo_export(
+                        vres["accepted"],
+                        out_dir,
+                        corpus_name=str(body.get("corpus_name") or "distilled-traces"),
+                        license_id=str(body.get("license") or "Apache-2.0"),
+                    )
+                self._send_json(HTTPStatus.OK, {
+                    "ok": True,
+                    "harvest_stats": harv["stats"],
+                    "verify_stats": vres["stats"],
+                    "export": export_meta,
+                })
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/api/distill/runs":
+            try:
+                drun = self.server.distill_manager.start_run(body, wait=False)
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+                return
+            except Exception as exc:
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": str(exc)})
+                return
+            self._send_json(HTTPStatus.OK, {"ok": True, "run_id": drun.run_id, "run": drun.summary()})
+            return
+
+        if path.startswith("/api/distill/runs/"):
+            rest = path[len("/api/distill/runs/"):].strip("/")
+            parts = rest.split("/")
+            if len(parts) == 2 and parts[1] == "stop":
+                run_id = urllib.parse.unquote(parts[0])
+                stopped = self.server.distill_manager.stop_run(run_id)
+                self._send_json(HTTPStatus.OK, {"ok": True, "stopped": stopped})
+                return
 
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": f"unknown endpoint: {path}"})
 

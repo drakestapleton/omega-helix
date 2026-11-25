@@ -1,0 +1,869 @@
+note SPDX-License-Identifier: Apache-2.0
+note native/univ/udistill.om: Pure seeded-OM-2 Sparse Top-K Knowledge Distillation (OLLMDK01).
+note Supports: dkemit (teacher sparse top-K emitter), dtrain (hybrid CE+KL optimizer),
+note dcheck (central finite-difference verifier for hybrid CE+KL gradient).
+note Binary contract OLLMDK01 (64-byte header, FNV-1a body, u32 tokens, u8 mask, f32 sparse probs).
+note Magic u64 LE verified via WolframLanguageEvaluator: 3544415663467285583.
+
+const UMAGIC_DK1 ulong 3544415663467285583
+const UDKHDR ulong 64
+const UDK_MAXK ulong 64
+const UDK_WCHUNK ulong 65536
+
+global udk_id ulong *
+global udk_pr f64 *
+global udk_mk ulong *
+global udk_z f64 *
+global udk_pt f64 *
+global udk_dl f64 *
+
+note udk_st slots:
+note 0=ai 1=V 2=K 3=T 4=N 5=flags 6=fnv 7=rec_sz
+note 8=alpha_bits 9=tau_bits 10=ce_bits 11=kl_bits 12=n_mask 13=wpos 14=wcnt 15=fd
+note 16=qsum_bits 17=chk_worst 18=chk_retries 19=chk_mxrel_bits
+global udk_st ulong 24
+global udk_kp f64 64
+global udk_ki ulong 64
+
+text u_dkemit "dkemit"
+text u_dtrain "dtrain"
+text u_dcheck "dcheck"
+
+fn udk_bx_put i ulong v ulong to void
+put ubx i v
+end
+
+fn udk_by_put i ulong v ulong to void
+put uby i v
+end
+
+fn udk_id_put i ulong v ulong to void
+put udk_id i v
+end
+
+fn udk_pr_put i ulong v f64 to void
+put udk_pr i v
+end
+
+fn udk_mk_put i ulong v ulong to void
+put udk_mk i v
+end
+
+fn udk_dl_put i ulong v f64 to void
+put udk_dl i v
+end
+
+fn udk_dl_add i ulong v f64 to void
+x = get udk_dl i
+put udk_dl i add x v
+end
+
+fn udk_z_put i ulong v f64 to void
+put udk_z i v
+end
+
+fn udk_pt_put i ulong v f64 to void
+put udk_pt i v
+end
+
+fn udk_f32_bits_to_f64 bits ulong to f64
+w32 = uint bits
+ret f64 bitcast f32 w32
+end
+
+fn udk_f64_to_f32_bits v f64 to ulong
+ret ulong bitcast uint f32 v
+end
+
+fn udk_is_fin x f64 to bool
+if ne x x
+ret false
+end
+ax = fabs x
+ret le ax 1.0e300f64
+end
+
+fn udk_uopw_u32 o ulong to ulong
+v = ulong get uopw o
+v = or v shl ulong get uopw add o 1 8
+v = or v shl ulong get uopw add o 2 16
+ret or v shl ulong get uopw add o 3 24
+end
+
+fn udk_fdopen ai ulong to ulong
+n = uargp ai
+fd = int fopen uarg 0 n 0 0
+if lt fd 0
+exit 70
+end
+ret ulong fd
+end
+
+fn udk_fdclose fd ulong to void
+if ne fclose int fd 0
+exit 70
+end
+end
+
+fn udk_fdrd fd ulong pos ulong off ulong n ulong to ulong
+got = ulong 0
+while lt got n bound 999999
+r = pread int fd uopw add off got sub n got long add pos got
+if lt r 0
+exit 70
+end
+if eq r 0
+break
+end
+got = add got ulong r
+end
+ret got
+end
+
+fn udk_tok_fill cn ulong idx ulong xb ulong yb ulong to void
+v = get ug 0
+t = get ug 1
+for i ulong cn
+tok = udk_uopw_u32 mul i 4
+if ge tok v
+exit 25
+end
+p = add idx i
+if lt p t
+udk_bx_put add xb p tok
+end
+if gt p 0
+udk_by_put add yb sub p 1 tok
+end
+end
+end
+
+fn udk_rd_toks fd ulong pos ulong xb ulong yb ulong to void
+rem_t = add get ug 1 1
+tp = pos
+idx = ulong 0
+while gt rem_t 0 bound 999999
+cn = rem_t
+if gt cn 131072
+cn = ulong 131072
+end
+if ne udk_fdrd fd tp 0 mul cn 4 mul cn 4
+exit 10
+end
+udk_tok_fill cn idx xb yb
+rem_t = sub rem_t cn
+idx = add idx cn
+tp = add tp mul cn 4
+end
+end
+
+fn udk_msk_fill cn ulong off ulong to void
+for i ulong cn
+m = ulong get uopw i
+if gt m 1
+exit 12
+end
+udk_mk_put add off i m
+end
+end
+
+fn udk_rd_mask fd ulong pos ulong mb ulong to void
+rem_m = get ug 1
+mp = pos
+off = mb
+while gt rem_m 0 bound 999999
+cn = rem_m
+if gt cn UDK_WCHUNK
+cn = UDK_WCHUNK
+end
+if ne udk_fdrd fd mp 0 cn cn
+exit 10
+end
+udk_msk_fill cn off
+rem_m = sub rem_m cn
+off = add off cn
+mp = add mp cn
+end
+end
+
+fn udk_id_fill cn ulong off ulong to void
+v = get ug 0
+for i ulong cn
+tok = udk_uopw_u32 mul i 4
+if ge tok v
+exit 25
+end
+udk_id_put add off i tok
+end
+end
+
+fn udk_rd_ids fd ulong pos ulong tk ulong ib ulong to void
+rem_k = tk
+ip = pos
+off = ib
+while gt rem_k 0 bound 999999
+cn = rem_k
+if gt cn 131072
+cn = ulong 131072
+end
+if ne udk_fdrd fd ip 0 mul cn 4 mul cn 4
+exit 10
+end
+udk_id_fill cn off
+rem_k = sub rem_k cn
+off = add off cn
+ip = add ip mul cn 4
+end
+end
+
+fn udk_pr_fill cn ulong off ulong to void
+for i ulong cn
+val = udk_f32_bits_to_f64 udk_uopw_u32 mul i 4
+if not udk_is_fin val
+exit 25
+end
+if lt val 0.0
+exit 25
+end
+udk_pr_put add off i val
+end
+end
+
+fn udk_pr_chk pb ulong to void
+t = get ug 1
+k = get udk_st 2
+for pos_i ulong t
+sm = 0.0f64
+base = add pb mul pos_i k
+for j ulong k
+sm = add sm get udk_pr add base j
+end
+if gt sm 1.0001
+exit 25
+end
+end
+end
+
+fn udk_rd_probs fd ulong pos ulong tk ulong pb ulong to void
+rem_p = tk
+pp = pos
+off = pb
+while gt rem_p 0 bound 999999
+cn = rem_p
+if gt cn 131072
+cn = ulong 131072
+end
+if ne udk_fdrd fd pp 0 mul cn 4 mul cn 4
+exit 10
+end
+udk_pr_fill cn off
+rem_p = sub rem_p cn
+off = add off cn
+pp = add pp mul cn 4
+end
+udk_pr_chk pb
+end
+
+fn udk_load_row b ulong row ulong to void
+t = get ug 1
+tk = mul t get udk_st 2
+fd = get udk_st 15
+base = add UDKHDR mul row get udk_st 7
+udk_rd_toks fd base mul b t mul b t
+p = add base mul add t 1 4
+udk_rd_mask fd p mul b t
+p = add p t
+udk_rd_ids fd p tk mul b tk
+p = add p mul tk 4
+udk_rd_probs fd p tk mul b tk
+end
+
+fn udk_verify_fnv fd ulong want_sz ulong want_fnv ulong to void
+h = ulong 14695981039346656037
+pos = UDKHDR
+while lt pos want_sz bound 999999
+cn = sub want_sz pos
+if gt cn UOPWCAP
+cn = UOPWCAP
+end
+if ne udk_fdrd fd pos 0 cn cn
+exit 10
+end
+h = ufnvw h cn
+pos = add pos cn
+end
+if ne h want_fnv
+exit 14
+end
+end
+
+fn udk_alloc to void
+bb = get ug 7
+v = get ug 0
+tk = mul get ug 1 get udk_st 2
+r = enlarge udk_id mul bb tk
+if ne r 0
+exit 70
+end
+r = enlarge udk_pr mul bb tk
+if ne r 0
+exit 70
+end
+r = enlarge udk_mk mul bb get ug 1
+if ne r 0
+exit 70
+end
+r = enlarge udk_z v
+if ne r 0
+exit 70
+end
+r = enlarge udk_pt v
+if ne r 0
+exit 70
+end
+r = enlarge udk_dl v
+if ne r 0
+exit 70
+end
+end
+
+fn udk_open_chk ai ulong fd ulong to ulong
+if ne udk_fdrd fd 0 0 UDKHDR UDKHDR
+udk_fdclose fd
+exit 10
+end
+if or ne uopw_get8 0 UMAGIC_DK1 ne uopw_get8 8 1
+udk_fdclose fd
+exit 11
+end
+vv = uopw_get8 16
+kk = uopw_get8 24
+tt = uopw_get8 32
+nn = uopw_get8 40
+if or ne uopw_get8 48 0 lt vv 2
+udk_fdclose fd
+exit 11
+end
+if or eq kk 0 gt kk UDK_MAXK
+udk_fdclose fd
+exit 11
+end
+if or gt kk vv or eq tt 0 eq nn 0
+udk_fdclose fd
+exit 11
+end
+if or ne vv get ug 0 ne tt get ug 1
+udk_fdclose fd
+exit 12
+end
+put udk_st 0 ai
+put udk_st 1 vv
+put udk_st 2 kk
+put udk_st 3 tt
+put udk_st 4 nn
+put udk_st 5 0
+put udk_st 6 uopw_get8 56
+ret add 4 add mul tt 5 mul 8 mul tt kk
+end
+
+fn udk_open ai ulong to void
+sz = uofsz ai
+if lt sz UDKHDR
+exit 10
+end
+fd = udk_fdopen ai
+rec_sz = udk_open_chk ai fd
+want_sz = add UDKHDR mul get udk_st 4 rec_sz
+if lt sz want_sz
+udk_fdclose fd
+exit 10
+end
+if gt sz want_sz
+udk_fdclose fd
+exit 15
+end
+put udk_st 7 rec_sz
+udk_verify_fnv fd want_sz get udk_st 6
+udk_fdclose fd
+udk_alloc
+end
+
+fn udk_batch s ulong to ulong
+bb = get ug 7
+nn = get udk_st 4
+fd = udk_fdopen get udk_st 0
+put udk_st 15 fd
+for b ulong bb
+row = rem usmx xor get ug 20 mul add mul s bb b 11400714819323198485 nn
+udk_load_row b row
+end
+udk_fdclose fd
+nm = ulong 0
+bt = mul bb get ug 1
+for i ulong bt
+nm = add nm get udk_mk i
+end
+put udk_st 12 nm
+ret nm
+end
+
+fn udk_logits_pos pos ulong to f64
+v = get ug 0
+d = get ug 2
+lmw = ulong 0
+if eq get ug 30 1
+lmw = get ug 36
+end
+zb = add get ug 41 mul pos d
+mx = -1.0e300f64
+for c ulong v
+dot = udot_ap zb add lmw mul c d d
+udk_z_put c dot
+if gt dot mx
+mx = dot
+end
+end
+ret mx
+end
+
+fn udk_soft1 pb ulong mx f64 to f64
+v = get ug 0
+sm = 0.0f64
+for c ulong v
+w = ufexp sub get udk_z c mx
+ua_put add pb c w
+sm = add sm w
+end
+invs = div 1.0 sm
+for c2 ulong v
+pv = get ua add pb c2
+ua_put add pb c2 mul pv invs
+end
+ret sm
+end
+
+fn udk_softt mx f64 tau f64 to f64
+v = get ug 0
+sm = 0.0f64
+for c ulong v
+zv = get udk_z c
+arg = div sub zv mx tau
+w = ufexp arg
+udk_pt_put c w
+sm = add sm w
+end
+invs = div 1.0 sm
+for c2 ulong v
+pv = get udk_pt c2
+udk_pt_put c2 mul pv invs
+end
+ret sm
+end
+
+fn udk_kl_one id ulong q f64 mx f64 tau f64 lsmt f64 to f64
+zv = get udk_z id
+dz = sub zv mx
+lpt = sub div dz tau lsmt
+lq = uflog q
+ret mul q sub lq lpt
+end
+
+fn udk_kl_pos kbase ulong mx f64 tau f64 lsmt f64 to f64
+k = get udk_st 2
+qsum = 0.0f64
+kl = 0.0f64
+for j ulong k
+idx = add kbase j
+q = get udk_pr idx
+qsum = add qsum q
+if gt q 0.0
+id = get udk_id idx
+tkl = udk_kl_one id q mx tau lsmt
+kl = add kl tkl
+end
+end
+put udk_st 16 bitcast ulong qsum
+ret mul mul kl tau tau
+end
+
+fn udk_dl_base pb ulong yt ulong oma_s f64 atq_s f64 to void
+for c ulong get ug 0
+t1 = mul oma_s get ua add pb c
+t2 = mul atq_s get udk_pt c
+udk_dl_put c add t1 t2
+end
+udk_dl_add yt neg oma_s
+end
+
+fn udk_dl_sparse kbase ulong ats f64 to void
+for j ulong get udk_st 2
+id = get udk_id add kbase j
+qv = get udk_pr add kbase j
+udk_dl_add id mul neg ats qv
+end
+end
+
+fn udk_dl_accum pb ulong yt ulong kbase ulong scale f64 to void
+alpha = bitcast f64 get udk_st 8
+tau = bitcast f64 get udk_st 9
+oma_s = mul sub 1.0 alpha scale
+qsum = bitcast f64 get udk_st 16
+atq_s = mul mul alpha tau mul qsum scale
+udk_dl_base pb yt oma_s atq_s
+ats = mul mul alpha tau scale
+udk_dl_sparse kbase ats
+end
+
+fn udk_bwd_logits_pos pos ulong to void
+d = get ug 2
+lmw = ulong 0
+if eq get ug 30 1
+lmw = get ug 36
+end
+zb = add get ug 41 mul pos d
+dzb = add get ug 49 mul pos d
+for c ulong get ug 0
+dl = get udk_dl c
+ulogit_bwd_row zb add lmw mul c d dzb dl
+end
+end
+
+fn udk_eval_pos_ce pb ulong mx f64 yt ulong to f64
+lsm1 = uflog udk_soft1 pb mx
+ret sub lsm1 sub get udk_z yt mx
+end
+
+fn udk_eval_pos b ulong pos ulong want_bwd bool scale f64 to void
+if eq get udk_mk add mul b get ug 1 pos 0
+ret
+end
+mx = udk_logits_pos pos
+pb = add get ug 42 mul pos get ug 0
+yt = get uby add mul b get ug 1 pos
+ce_p = udk_eval_pos_ce pb mx yt
+put udk_st 10 bitcast ulong add bitcast f64 get udk_st 10 ce_p
+tau = bitcast f64 get udk_st 9
+kbase = mul add mul b get ug 1 pos get udk_st 2
+kl_p = udk_kl_pos kbase mx tau uflog udk_softt mx tau
+put udk_st 11 bitcast ulong add bitcast f64 get udk_st 11 kl_p
+if want_bwd
+udk_dl_accum pb yt kbase scale
+udk_bwd_logits_pos pos
+end
+end
+
+fn udk_eval_seq b ulong want_bwd bool scale f64 to void
+ct = get ug 24
+d = get ug 2
+if want_bwd
+ua_zero get ug 49 mul ct d
+end
+for pos ulong ct
+udk_eval_pos b pos want_bwd scale
+end
+if want_bwd
+ua_zero get ug 43 mul ct d
+urms_bwd get ug 39 get ug 35 get ug 49 get ug 43 get ug 40 ct
+lv = get ug 11
+for r ulong lv
+ulay_bwd sub sub lv 1 r ct
+end
+useq_bwd_emb b ct
+end
+end
+
+fn udk_grad want_bwd bool to f64
+if want_bwd
+ug_zero
+end
+put udk_st 10 bitcast ulong 0.0f64
+put udk_st 11 bitcast ulong 0.0f64
+nm = get udk_st 12
+if eq nm 0
+ret 0.0f64
+end
+scale = div 1.0 f64 nm
+put ug 24 get ug 1
+for b ulong get ug 7
+ls = useq_fwd b false
+udk_eval_seq b want_bwd scale
+end
+ce = mul bitcast f64 get udk_st 10 scale
+kl = mul bitcast f64 get udk_st 11 scale
+put udk_st 10 bitcast ulong ce
+put udk_st 11 bitcast ulong kl
+alpha = bitcast f64 get udk_st 8
+ret add mul sub 1.0 alpha ce mul alpha kl
+end
+
+fn udk_fd idx ulong h f64 to f64
+orig = get up idx
+put up idx add orig h
+lp = udk_grad false
+put up idx sub orig h
+lm = udk_grad false
+put up idx orig
+ret div sub lp lm sub add orig h sub orig h
+end
+
+fn udk_wflush to void
+cnt = get udk_st 14
+if eq cnt 0
+ret
+end
+put udk_st 6 ufnvk get udk_st 6 cnt
+wp = get udk_st 13
+ucwput wp cnt
+put udk_st 13 add wp cnt
+put udk_st 14 0
+end
+
+fn udk_wbyte b ulong to void
+cnt = get udk_st 14
+if ge cnt UDK_WCHUNK
+udk_wflush
+cnt = ulong 0
+end
+put uck cnt uchar and b 255
+put udk_st 14 add cnt 1
+end
+
+fn udk_wu32 v ulong to void
+for i ulong 4
+udk_wbyte and shr v mul i 8 255
+end
+end
+
+fn udk_emit_pos pos ulong k ulong tau f64 to void
+v = get ug 0
+smt = udk_softt udk_logits_pos pos tau
+for c ulong v
+udk_dl_put c get udk_pt c
+end
+off = mul pos k
+for j ulong k
+best_i = ulong 0
+best_p = -1.0f64
+for c2 ulong v
+pv = get udk_dl c2
+if gt pv best_p
+best_p = pv
+best_i = c2
+end
+end
+udk_id_put add off j best_i
+udk_pr_put add off j best_p
+udk_dl_put best_i -1.0f64
+end
+end
+
+fn udk_emit_seq o ulong k ulong tau f64 to void
+t = get ug 1
+ubrow 0 o
+ls = useq_fwd 0 false
+for pos ulong add t 1
+udk_wu32 udtk pos
+end
+for p2 ulong t
+udk_wbyte 1
+end
+for p3 ulong t
+udk_emit_pos p3 k tau
+end
+tk = mul t k
+for i ulong tk
+udk_wu32 get udk_id i
+end
+for i2 ulong tk
+udk_wu32 udk_f64_to_f32_bits get udk_pr i2
+end
+end
+
+fn ucmd_dkemit_hdr n_seqs ulong kk ulong to void
+v = get ug 0
+t = get ug 1
+fnv = get udk_st 6
+uck_put8 0 UMAGIC_DK1
+uck_put8 8 1
+uck_put8 16 v
+uck_put8 24 kk
+uck_put8 32 t
+uck_put8 40 n_seqs
+uck_put8 48 0
+uck_put8 56 fnv
+ucwput 0 UDKHDR
+ucwend 4
+uputc 75
+uputc 32
+uputu n_seqs
+uputc 32
+uputu v
+uputc 32
+uputu kk
+uputc 32
+uputu t
+uputc 32
+uputx fnv
+uputc 10
+uflush
+end
+
+fn ucmd_dkemit to void
+na = ulong argcnt
+if and ne na 7 ne na 8
+exit 2
+end
+uck_load 2
+udopen 3
+kk = uargu 5
+tm = uargu 6
+if or eq kk 0 gt kk UDK_MAXK
+exit 2
+end
+if or gt kk get ug 0 eq tm 0
+exit 2
+end
+put udk_st 2 kk
+udk_alloc
+n_seqs = div sub get ug 27 1 get ug 1
+if eq n_seqs 0
+exit 20
+end
+if eq na 8
+mxn = uargu 7
+if eq mxn 0
+exit 2
+end
+if lt mxn n_seqs
+n_seqs = mxn
+end
+end
+put ug 24 get ug 1
+ucopen_tmp 4
+put udk_st 6 14695981039346656037
+put udk_st 13 UDKHDR
+put udk_st 14 0
+for s ulong n_seqs
+udk_emit_seq mul s get ug 1 kk div f64 tm 1000.0
+end
+udk_wflush
+ucmd_dkemit_hdr n_seqs kk
+end
+
+fn udk_parse_hp ai_a ulong ai_t ulong to void
+am = uargu ai_a
+tm = uargu ai_t
+if or gt am 1000000 eq tm 0
+exit 2
+end
+put udk_st 8 bitcast ulong div f64 am 1000000.0
+put udk_st 9 bitcast ulong div f64 tm 1000.0
+end
+
+fn ucmd_dtrain to void
+if ne ulong argcnt 8
+exit 2
+end
+uck_load 2
+udk_open 3
+un = uargu 4
+ev = uargu 5
+if eq ev 0
+exit 2
+end
+udk_parse_hp 6 7
+en = get ug 22
+if lt un en
+en = un
+end
+while lt get ug 21 en bound 999999
+nm = udk_batch get ug 21
+ls = udk_grad true
+uadam
+s1 = get ug 21
+if or eq rem s1 ev 0 eq s1 en
+uck_save 2
+uputc 68
+uputc 32
+uputu s1
+uputc 32
+uputl urmic ls
+uputc 32
+uputl urmic bitcast f64 get udk_st 10
+uputc 32
+uputl urmic bitcast f64 get udk_st 11
+uputc 10
+uflush
+end
+end
+end
+
+fn udk_rel g_ana f64 g_num f64 to f64
+dn = fabs g_ana
+if gt fabs g_num dn
+dn = fabs g_num
+end
+if lt dn 1.0e-6
+dn = 1.0e-6
+end
+ret div fabs sub g_num g_ana dn
+end
+
+fn udk_chk_step k ulong to void
+idx = rem usmx add 918273645 k get ug 10
+ga = get ugd idx
+rel = udk_rel ga udk_fd idx 1.0e-6
+if gt rel 1.0e-3
+put udk_st 18 add get udk_st 18 1
+r2 = udk_rel ga udk_fd idx 2.5e-7
+if lt r2 rel
+rel = r2
+end
+end
+if gt rel bitcast f64 get udk_st 19
+put udk_st 19 bitcast ulong rel
+put udk_st 17 idx
+end
+end
+
+fn ucmd_dcheck to void
+na = ulong argcnt
+if and ne na 6 ne na 7
+exit 2
+end
+uck_load 2
+udk_open 3
+udk_parse_hp 4 5
+nsamp = ulong 48
+if eq na 7
+nsamp = uargu 6
+end
+if eq udk_batch get ug 21 0
+exit 24
+end
+l0 = udk_grad true
+put ug 24 get ug 1
+put udk_st 17 0
+put udk_st 18 0
+put udk_st 19 bitcast ulong 0.0f64
+for k ulong nsamp
+udk_chk_step k
+end
+mxrel = bitcast f64 get udk_st 19
+uputc 67
+uputc 32
+uputu nsamp
+uputc 32
+uputx get udk_st 19
+uputc 32
+uputl urmic mul mxrel 1000.0
+uputc 32
+uputu get udk_st 17
+uputc 32
+uputu get udk_st 18
+uputc 10
+uflush
+if gt mxrel 1.0e-3
+exit 40
+end
+end

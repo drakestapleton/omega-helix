@@ -368,8 +368,125 @@ def cmd_sample(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(res, indent=2))
         return 0
-    print(f"{cyan('[mode=' + res['mode_used'] + ']')}")
-    print(res["text"])
+    return 0 if res["text"] is not None else 1
+
+
+def _load_distill():
+    tools_dir = STUDIO_DIR.parent
+    if str(tools_dir) not in sys.path:
+        sys.path.insert(0, str(tools_dir))
+    from distill import harvest as d_harvest
+    from distill import pipeline as d_pipeline
+    from distill import teachers as d_teachers
+    from distill import verifiers as d_verifiers
+    return d_harvest, d_pipeline, d_teachers, d_verifiers
+
+
+def cmd_distill_probe(args: argparse.Namespace) -> int:
+    _, _, d_teachers, _ = _load_distill()
+    eps = d_teachers.probe_local_teachers(timeout=float(args.timeout))
+    if args.json:
+        print(json.dumps({"ok": True, "endpoints": eps}, indent=2))
+        return 0
+    print_banner("Local Open-Source Teacher Endpoint Probe")
+    for ep in eps:
+        st = emerald("ONLINE ") if ep["reachable"] else dim("offline")
+        mods = ", ".join(ep["models"][:4]) if ep["models"] else (ep.get("error") or "no models")
+        lat_s = f"{float(ep.get('latency_ms', 0.0)):.1f}ms"
+        print(f"  {st} {bold(ep['name']):<14} {cyan(ep['base_url']):<30} {dim(lat_s)}  {mods}")
+    print()
+    return 0
+
+
+def cmd_distill_harvest(args: argparse.Namespace) -> int:
+    d_harvest, _, _, d_verifiers = _load_distill()
+    verifiers = [v.strip() for v in args.verify.split(",") if v.strip()] if args.verify else ["nonempty"]
+    harv = d_harvest.harvest_paths(args.input, source_tag=args.corpus_name, license_id=args.license)
+    vpipe = d_verifiers.VerifierPipeline(verifiers)
+    vres = vpipe.filter_records(harv["records"])
+    export_meta = None
+    if args.out and vres["accepted"]:
+        export_meta = d_harvest.write_openwaldo_export(
+            vres["accepted"],
+            args.out,
+            corpus_name=args.corpus_name,
+            license_id=args.license,
+        )
+    if args.json:
+        print(json.dumps({"ok": True, "harvest_stats": harv["stats"], "verify_stats": vres["stats"], "export": export_meta}, indent=2))
+        return 0
+    print_banner("Trace Harvest & Verifier Gate")
+    print(f"  Scanned files  : {harv['stats']['files_scanned']}")
+    print(f"  Unique records : {harv['stats']['unique_records']} (dups skipped: {harv['stats']['duplicates_skipped']})")
+    print(f"  Accepted       : {emerald(str(vres['stats']['passed']))} / {vres['stats']['total']} ({vres['stats']['pass_rate']*100:.1f}%)")
+    if export_meta:
+        print(f"  OpenWALDO BOM  : {cyan(export_meta['export_json'])} (sha256={dim(export_meta['export_json_sha256'][:16])}…)")
+    print()
+    return 0 if vres["stats"]["passed"] > 0 else 1
+
+
+def cmd_distill_run(args: argparse.Namespace) -> int:
+    _, d_pipeline, _, _ = _load_distill()
+    spec: dict[str, Any] = {}
+    if args.spec:
+        spec = json.loads(Path(args.spec).read_text(encoding="utf-8"))
+    for k in ("mode", "arch", "V", "T", "D", "H", "H_KV", "F", "L", "B", "K", "steps", "alpha", "temperature", "teacher_ckpt", "dk_path", "tokens_bin", "export_hf", "export_gguf"):
+        v = getattr(args, k, None)
+        if v is not None and v is not False:
+            spec[k] = v
+    if args.verify:
+        spec["verifiers"] = [x.strip() for x in args.verify.split(",") if x.strip()]
+    if args.trace:
+        spec["trace_paths"] = list(spec.get("trace_paths") or []) + list(args.trace)
+    if args.prompt:
+        spec["prompts"] = list(spec.get("prompts") or []) + list(args.prompt)
+    if args.teacher_url:
+        tlist = list(spec.get("teachers") or [])
+        tlist.append({"kind": "openai_compat", "base_url": args.teacher_url, "model": args.teacher_model or "default"})
+        spec["teachers"] = tlist
+
+    est = d_pipeline.estimate_distill(spec)
+    if not est["valid"]:
+        print(red(f"ERROR: {est['error']}"), file=sys.stderr)
+        return 1
+
+    mgr = d_pipeline.DistillManager(runs_dir=args.workspace_dir, bin_dir=args.bin_dir)
+    if not args.json:
+        print_banner(f"Distilling {est['spec']['name']} ({est['spec']['mode']} · {est['spec']['arch']})")
+    run = mgr.start_run(est["spec"], wait=False)
+    for ev in run.iter_events():
+        if ev is None or args.json:
+            continue
+        k = ev["kind"]
+        if k == "stage":
+            print(f"  {cyan('▶')} {bold(ev.get('label', ev.get('stage')))}")
+        elif k == "dcheck":
+            print(f"    {emerald('✓')} dcheck {ev.get('samples')} params mxrel={ev.get('mxrel_milli'):.6f} retries={ev.get('retries')}")
+        elif k == "metric":
+            st = ev.get("step", 0)
+            lv = f"{float(ev.get('loss', 0.0)):.4f}"
+            cv = f"{float(ev.get('ce_loss', 0.0)):.4f}"
+            kv = f"{float(ev.get('kl_loss', 0.0)):.4f}"
+            print(f"    step {st:<4} loss={emerald(lv)} ce={amber(cv)} kl={violet(kv)}")
+        elif k == "error":
+            print(f"  {red('✗')} {ev.get('error')}", file=sys.stderr)
+    if args.json:
+        print(json.dumps(run.to_dict(), indent=2))
+    return 0 if run.status == "done" else 1
+
+
+def cmd_distill_status(args: argparse.Namespace) -> int:
+    _, d_pipeline, _, _ = _load_distill()
+    mgr = d_pipeline.DistillManager(runs_dir=args.workspace_dir, bin_dir=args.bin_dir)
+    if args.run_id:
+        r = mgr.get_run(args.run_id)
+        if not r:
+            print(red(f"Distill run not found: {args.run_id}"), file=sys.stderr)
+            return 1
+        print(json.dumps(r.to_dict(), indent=2))
+        return 0
+    runs = mgr.list_runs()
+    print(json.dumps({"ok": True, "runs": runs}, indent=2))
     return 0
 
 
@@ -446,6 +563,57 @@ def build_parser() -> argparse.ArgumentParser:
     p_samp.add_argument("--msg-gain-micro", dest="msg_gain_micro", type=int, default=0)
     p_samp.add_argument("--json", action="store_true")
     p_samp.set_defaults(func=cmd_sample)
+
+    p_dist = sub.add_parser("distill", parents=[common], help="Sovereign Distillation Pipeline Network (probe | harvest | run | status)")
+    dsub = p_dist.add_subparsers(dest="distill_cmd")
+
+    p_dprobe = dsub.add_parser("probe", parents=[common], help="Probe local OpenAI-compatible open-source teachers")
+    p_dprobe.add_argument("--timeout", type=float, default=0.6)
+    p_dprobe.add_argument("--json", action="store_true")
+    p_dprobe.set_defaults(func=cmd_distill_probe)
+
+    p_dharv = dsub.add_parser("harvest", parents=[common], help="Harvest & verify traces into canonical OpenWALDO export")
+    p_dharv.add_argument("--input", "-i", action="append", required=True, help="JSONL trace, EXPORT.json, or directory")
+    p_dharv.add_argument("--out", "-o", default=None, help="Destination directory for canonical OpenWALDO export")
+    p_dharv.add_argument("--verify", default="nonempty", help="Comma-separated verifiers: nonempty,json_schema,python_ast,omc_compile,regex")
+    p_dharv.add_argument("--corpus-name", dest="corpus_name", default="distilled-traces")
+    p_dharv.add_argument("--license", default="Apache-2.0")
+    p_dharv.add_argument("--json", action="store_true")
+    p_dharv.set_defaults(func=cmd_distill_harvest)
+
+    p_drun = dsub.add_parser("run", parents=[common], help="Execute dk-univ, seq-univ, or dna-strand distillation")
+    p_drun.add_argument("--spec", default=None)
+    p_drun.add_argument("--mode", choices=("dk-univ", "seq-univ", "dna-strand"), default=None)
+    p_drun.add_argument("--arch", default=None)
+    p_drun.add_argument("--V", type=int, default=None)
+    p_drun.add_argument("--T", type=int, default=None)
+    p_drun.add_argument("--D", type=int, default=None)
+    p_drun.add_argument("--H", type=int, default=None)
+    p_drun.add_argument("--H-KV", dest="H_KV", type=int, default=None)
+    p_drun.add_argument("--F", type=int, default=None)
+    p_drun.add_argument("--L", type=int, default=None)
+    p_drun.add_argument("--B", type=int, default=None)
+    p_drun.add_argument("--K", type=int, default=None)
+    p_drun.add_argument("--alpha", type=float, default=None)
+    p_drun.add_argument("--temperature", type=float, default=None)
+    p_drun.add_argument("--steps", type=int, default=None)
+    p_drun.add_argument("--verify", default=None)
+    p_drun.add_argument("--trace", action="append", default=[])
+    p_drun.add_argument("--prompt", action="append", default=[])
+    p_drun.add_argument("--teacher-url", dest="teacher_url", default=None)
+    p_drun.add_argument("--teacher-model", dest="teacher_model", default=None)
+    p_drun.add_argument("--teacher-ckpt", dest="teacher_ckpt", default=None)
+    p_drun.add_argument("--dk-path", dest="dk_path", default=None)
+    p_drun.add_argument("--tokens-bin", dest="tokens_bin", default=None)
+    p_drun.add_argument("--export-hf", dest="export_hf", action="store_true")
+    p_drun.add_argument("--export-gguf", dest="export_gguf", action="store_true")
+    p_drun.add_argument("--json", action="store_true")
+    p_drun.set_defaults(func=cmd_distill_run)
+
+    p_dstat = dsub.add_parser("status", parents=[common], help="Inspect distillation runs and BOMs")
+    p_dstat.add_argument("run_id", nargs="?", default=None)
+    p_dstat.set_defaults(func=cmd_distill_status)
+    p_dist.set_defaults(func=lambda a: (p_dist.print_help(), 0)[1])
 
     return p
 
