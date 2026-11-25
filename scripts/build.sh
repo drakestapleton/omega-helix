@@ -217,7 +217,8 @@ om_file="$OUT/$bin.om"
       "$src/$rev_mod" \
       "$src/arboris.om" \
       "$src/sp_solve.om" \
-      "$src/omg.om"
+      "$src/omg.om" \
+      "$src/pillars_cli.om"
   else
     cat "$src/$rev_mod"
     cat <<'EOF'
@@ -227,7 +228,13 @@ end
 fn cmdomg to void
 exit 2
 end
+fn cmdomg_cli to void
+exit 2
+end
 fn cmdarboris to void
+exit 2
+end
+fn cmdarboris_cli to void
 exit 2
 end
 EOF

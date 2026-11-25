@@ -118,7 +118,7 @@ EOF
 src=$here/native
 {
   printf '%s\n' "$BT_HDR"
-  for u in math.om data.om lpool.om model.om adam.om ckpt.om bpe.om spec.om "$BT_REV" arboris.om sp_solve.om omg.om cli.om "$BT_PLAT" noserve.om nogpu.om; do
+  for u in math.om data.om lpool.om model.om adam.om ckpt.om bpe.om spec.om "$BT_REV" arboris.om sp_solve.om omg.om pillars_cli.om cli.om "$BT_PLAT" noserve.om nogpu.om; do
     sed 's/^fn main to int$/fn ocpumain to int/' "$src/$u"
   done
   cat "$work/sim_main.om" "$src/gpu/gm.om" "$src/gpu/ring.om" "$src/gpu/ejit.om" "$work/bt_driver.om"
