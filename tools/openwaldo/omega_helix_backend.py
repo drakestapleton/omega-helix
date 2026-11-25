@@ -621,6 +621,7 @@ def run_backend(raw_spec: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         exports: list[dict[str, Any]] = []
         if spec["export_hf"]:
             hf_out = workdir / "export-hf"
+            hf_out.mkdir(parents=True, exist_ok=True)  # ollm-interchange requires OUT_DIR to exist
             runner.run("export-hf", [str(inter), "export-hf", str(ck), str(hf_out), spec["hf_dtype"]])
             files = sorted(p for p in hf_out.rglob("*") if p.is_file()) if hf_out.is_dir() else []
             if not any(p.name == "model.safetensors" for p in files) or not any(p.name == "config.json" for p in files):
