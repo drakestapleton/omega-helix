@@ -1,0 +1,659 @@
+note SPDX-License-Identifier: AGPL-3.0-only
+note native/arboris.om: Pillar 5 - Arboris 1 us Associative CPU Bypass + Warp-Compacted Early Exit Gating
+note + OMG Native Semantic-Graph Recall, 3-Layer Guided Decoding & Hippocampus->Cortex Sleep Export.
+note Pure seeded OM-2 library unit (compose under `om2` or `target a64macos\nom2`).
+
+const ARB_CAP ulong 4096
+const ARB_MASK ulong 4095
+const ARB_MAX_PROBE ulong 32
+const ARB_MAX_NGRAM ulong 8
+const ARB_MAX_TOK ulong 512
+const ARB_WARP_SZ ulong 32
+const ARB_MAX_WARPS ulong 16
+
+const ARB_EXIT_CPU ulong 0
+const ARB_EXIT_L1 ulong 1
+const ARB_EXIT_L2 ulong 2
+const ARB_EXIT_CONTESTED ulong 99
+
+const ARB_OMG_CAP ulong 256
+const ARB_OMG_SLEN ulong 64
+
+note Open-addressed associative table (4096 slots, L1/L2 resident for sub-microsecond probe)
+global arb_key ulong 4096
+global arb_sig ulong 4096
+global arb_len uchar 4096
+global arb_tok ulong 4096
+global arb_conf ulong 4096
+global arb_hits ulong 4096
+global arb_stat ulong 8
+
+note Per-token bypass / adaptive-loop / spclip routing arrays + dense compacted active list + warp ballot masks
+global arb_bypass_conf ulong 512
+global arb_loop_delta ulong 512
+global arb_sp_jsd ulong 512
+global arb_exit_layer ulong 512
+global arb_active_idx ulong 512
+global arb_warp_mask ulong 16
+global arb_cfg ulong 8
+
+note OMG semantic-graph Hippocampus->Cortex memory (256 verified subgraphs, up to 64 tokens each)
+global arb_omg_n ulong 1
+global arb_omg_sem ulong 256
+global arb_omg_io ulong 256
+global arb_omg_opm ulong 256
+global arb_omg_mtok ulong 256
+global arb_omg_util ulong 256
+global arb_omg_slen ulong 256
+global arb_omg_act ulong 256
+global arb_omg_toks ulong 16384
+
+note 3-layer guided decoding step buffers (OMG vocab <= 512)
+global arb_omg_logits f64 512
+global arb_omg_mask uchar 512
+global arb_omg_biased f64 512
+
+note ---- Self-contained Wolfram-verified f64 log for JSD strand disagreement (matches math.om) ----
+
+fn arb_flog x f64 to f64
+if ne x x
+ret x
+end
+if lt x 0.0
+ret bitcast f64 ulong 9221120237041090560
+end
+if eq x 0.0
+ret bitcast f64 ulong 18442240474082181120
+end
+b = bitcast ulong x
+if eq b 9218868437227405312
+ret x
+end
+e = long 0
+if lt b 4503599627370496
+b = bitcast ulong mul x 18014398509481984.0
+e = long -54
+end
+e = add e sub long shr b 52 1023
+m = bitcast f64 or and b 4503599627370495 4607182418800017408
+if gt m 1.4142135623730951
+m = mul m 0.5
+e = add e 1
+end
+f = sub m 1.0
+s = div f add f 2.0
+z = mul s s
+q = add mul z 0.043478260869565216 0.047619047619047616
+q = add mul q z 0.05263157894736842
+q = add mul q z 0.058823529411764705
+q = add mul q z 0.06666666666666667
+q = add mul q z 0.07692307692307693
+q = add mul q z 0.09090909090909091
+q = add mul q z 0.1111111111111111
+q = add mul q z 0.14285714285714285
+q = add mul q z 0.2
+q = add mul q z 0.3333333333333333
+q = add mul q z 1.0
+lm = mul add s s q
+fe = f64 e
+ret add mul fe 0.6931471803691238 add lm mul fe 1.9082149292705877e-10
+end
+
+note ---- Fast FNV-1a-64 + SplitMix64 Context N-Gram Hashing ----
+
+fn arb_smx x ulong to ulong
+z = add x 0x9e3779b97f4a7c15
+z = mul xor z shr z 30 0xbf58476d1ce4e5b9
+z = mul xor z shr z 27 0x94d049bb133111eb
+ret xor z shr z 31
+end
+
+fn arboris_fnv64_ngram ctx view ulong * off ulong n ulong to ulong
+h = ulong 0xcbf29ce484222325
+for i ulong n bound 16
+w = get ctx add off i
+for b ulong 4
+by = and shr w mul b 8 255
+h = mul xor h by 0x100000001b3
+end
+end
+if eq h 0
+h = ulong 1
+end
+ret h
+end
+
+fn arboris_sig64_ngram ctx view ulong * off ulong n ulong to ulong
+s = mul n 0x9e3779b97f4a7c15
+for i ulong n bound 16
+s = arb_smx xor s get ctx add off i
+end
+ret s
+end
+
+note ---- Open-Addressed Associative Pattern Table ----
+
+fn arboris_clear to void
+for i ulong ARB_CAP bound 4096
+put arb_key i 0
+put arb_sig i 0
+put arb_len i 0
+put arb_tok i 0
+put arb_conf i 0
+put arb_hits i 0
+end
+for j ulong 8
+put arb_stat j 0
+end
+for t ulong ARB_MAX_TOK bound 512
+put arb_bypass_conf t 0
+put arb_loop_delta t 0
+put arb_sp_jsd t 0
+put arb_exit_layer t ARB_EXIT_CONTESTED
+put arb_active_idx t 0
+put arb_omg_logits t 0.0f64
+put arb_omg_mask t 1
+put arb_omg_biased t 0.0f64
+end
+for w ulong ARB_MAX_WARPS bound 16
+put arb_warp_mask w 0
+end
+put arb_omg_n 0 0
+for m ulong ARB_OMG_CAP bound 256
+put arb_omg_sem m 0
+put arb_omg_io m 0
+put arb_omg_opm m 0
+put arb_omg_mtok m 0
+put arb_omg_util m 0
+put arb_omg_slen m 0
+put arb_omg_act m 0
+end
+put arb_cfg 0 900000
+put arb_cfg 1 50000
+put arb_cfg 2 100
+put arb_cfg 3 25000
+put arb_cfg 4 900000
+put arb_cfg 5 2000
+put arb_cfg 6 2500
+put arb_cfg 7 0
+end
+
+fn arboris_slot_match slot ulong h ulong sg ulong n ulong to bool
+if ne get arb_key slot h
+ret false
+end
+if ne get arb_sig slot sg
+ret false
+end
+ret eq ulong get arb_len slot n
+end
+
+fn arboris_slot_store slot ulong h ulong sg ulong n ulong pred_tok ulong conf ulong to void
+put arb_key slot h
+put arb_sig slot sg
+put arb_len slot uchar n
+put arb_tok slot pred_tok
+put arb_conf slot conf
+put arb_hits slot 1
+put arb_stat 0 add get arb_stat 0 1
+put arb_stat 1 add get arb_stat 1 1
+end
+
+fn arboris_slot_update slot ulong pred_tok ulong conf ulong to void
+put arb_hits slot add get arb_hits slot 1
+put arb_stat 1 add get arb_stat 1 1
+if eq get arb_tok slot pred_tok
+if gt conf get arb_conf slot
+put arb_conf slot conf
+end
+else
+put arb_conf slot 0
+put arb_stat 5 add get arb_stat 5 1
+end
+end
+
+note Insert or reinforce context n-gram -> predicted token.
+note Ambiguous continuations (same n-gram seen with different pred_tok) automatically demote conf to 0.
+fn arboris_put ctx view ulong * off ulong n ulong pred_tok ulong conf_micro ulong to bool
+if or eq n 0 gt n ARB_MAX_NGRAM
+ret false
+end
+if gt add off n len ctx
+ret false
+end
+if gt conf_micro 1000000
+ret false
+end
+h = arboris_fnv64_ngram ctx off n
+sg = arboris_sig64_ngram ctx off n
+idx = and h ARB_MASK
+for p ulong ARB_MAX_PROBE bound 32
+slot = and add idx p ARB_MASK
+if eq get arb_key slot 0
+arboris_slot_store slot h sg n pred_tok conf_micro
+ret true
+end
+if arboris_slot_match slot h sg n
+arboris_slot_update slot pred_tok conf_micro
+ret true
+end
+put arb_stat 4 add get arb_stat 4 1
+end
+ret false
+end
+
+note Probe associative pattern table in ~1 us; out_res[0]=pred_tok, out_res[1]=conf_micro
+fn arboris_probe ctx view ulong * off ulong n ulong out_res edit ulong 2 to bool
+if or eq n 0 gt n ARB_MAX_NGRAM
+ret false
+end
+if gt add off n len ctx
+ret false
+end
+put arb_stat 2 add get arb_stat 2 1
+h = arboris_fnv64_ngram ctx off n
+sg = arboris_sig64_ngram ctx off n
+idx = and h ARB_MASK
+for p ulong ARB_MAX_PROBE bound 32
+slot = and add idx p ARB_MASK
+if eq get arb_key slot 0
+ret false
+end
+if arboris_slot_match slot h sg n
+cf = get arb_conf slot
+if eq cf 0
+ret false
+end
+put out_res 0 get arb_tok slot
+put out_res 1 cf
+put arb_stat 3 add get arb_stat 3 1
+ret true
+end
+end
+ret false
+end
+
+note ---- 1 us Associative CPU Sequence Bypass (Zero GPU Matmuls) ----
+
+fn arboris_probe_pos seq view ulong * pos ulong max_ng ulong th ulong out_res edit ulong 2 to bool
+ng = max_ng
+if gt ng add pos 1
+ng = add pos 1
+end
+if gt ng ARB_MAX_NGRAM
+ng = ARB_MAX_NGRAM
+end
+while ge ng 2 bound 8
+off = sub add pos 1 ng
+if arboris_probe seq off ng out_res
+if ge get out_res 1 th
+ret true
+end
+end
+ng = sub ng 1
+end
+ret false
+end
+
+note Scan seq[0..n_seq), populate out_pred[pos], arb_bypass_conf[pos], and arb_active_idx[0..n_contested).
+note Returns count of tokens bypassed on CPU with zero GPU matmuls; sets arb_stat[6] = n_contested.
+fn arboris_bypass_seq seq view ulong * n_gram ulong thresh_micro ulong out_pred edit ulong * to ulong
+n_seq = len seq
+if or gt n_seq ARB_MAX_TOK gt n_seq len out_pred
+ret 0
+end
+res = new ulong 2 0
+n_bypass = ulong 0
+n_cont = ulong 0
+for pos ulong n_seq bound 512
+put arb_bypass_conf pos 0
+put out_pred pos 0
+if arboris_probe_pos seq pos n_gram thresh_micro res
+put out_pred pos get res 0
+put arb_bypass_conf pos get res 1
+put arb_exit_layer pos ARB_EXIT_CPU
+n_bypass = add n_bypass 1
+else
+put arb_exit_layer pos ARB_EXIT_CONTESTED
+put arb_active_idx n_cont pos
+n_cont = add n_cont 1
+end
+end
+put arb_stat 6 n_cont
+ret n_bypass
+end
+
+note ---- d9b7422 Adaptive Loop Exit + spclip Strand Disagreement Warp Compaction ----
+
+fn arboris_set_thresholds bypass_th ulong delta_th ulong jsd_th ulong l1_delta_th ulong to void
+put arb_cfg 0 bypass_th
+put arb_cfg 1 delta_th
+put arb_cfg 2 jsd_th
+put arb_cfg 3 l1_delta_th
+end
+
+fn arboris_set_token_signals t ulong bypass_conf ulong loop_delta_micro ulong sp_jsd_milli ulong to void
+if lt t ARB_MAX_TOK
+put arb_bypass_conf t bypass_conf
+put arb_loop_delta t loop_delta_micro
+put arb_sp_jsd t sp_jsd_milli
+end
+end
+
+note Compute Jensen-Shannon Disagreement in milli-nats between two strand probability vectors (matches spclip)
+fn arboris_jsd_milli pa view f64 * pb view f64 * to ulong
+v = len pa
+if or eq v 0 ne v len pb
+ret 0
+end
+ha = 0.0f64
+hb = 0.0f64
+hm = 0.0f64
+for j ulong v bound 4096
+va = get pa j
+vb = get pb j
+if gt va 1.0e-15f64
+ha = sub ha mul va arb_flog va
+end
+if gt vb 1.0e-15f64
+hb = sub hb mul vb arb_flog vb
+end
+vm = mul 0.5 add va vb
+if gt vm 1.0e-15f64
+hm = sub hm mul vm arb_flog vm
+end
+end
+jsd = sub hm mul 0.5 add ha hb
+if lt jsd 0.0
+jsd = 0.0f64
+end
+ret ulong add mul jsd 1000.0 0.5
+end
+
+note Classify tokens and compact contested tokens into dense arb_active_idx[] + 32-bit arb_warp_mask[].
+note Returns n_active (number of contested tokens routed to deeper LTP0 passes).
+fn arboris_compact_one t ulong n_act ulong to ulong
+jsd = get arb_sp_jsd t
+bc = get arb_bypass_conf t
+dl = get arb_loop_delta t
+disagree = ge jsd get arb_cfg 2
+if and not disagree ge bc get arb_cfg 0
+put arb_exit_layer t ARB_EXIT_CPU
+ret n_act
+end
+if and not disagree lt dl get arb_cfg 3
+put arb_exit_layer t ARB_EXIT_L1
+ret n_act
+end
+if and not disagree lt dl get arb_cfg 1
+put arb_exit_layer t ARB_EXIT_L2
+ret n_act
+end
+put arb_exit_layer t ARB_EXIT_CONTESTED
+put arb_active_idx n_act t
+wid = div t 32
+lane = rem t 32
+put arb_warp_mask wid or get arb_warp_mask wid shl ulong 1 lane
+ret add n_act 1
+end
+
+fn arboris_compact_mask n_tok ulong to ulong
+if gt n_tok ARB_MAX_TOK
+ret 0
+end
+n_warps = div add n_tok 31 32
+for w ulong n_warps bound 16
+put arb_warp_mask w 0
+end
+n_act = ulong 0
+for t ulong n_tok bound 512
+n_act = arboris_compact_one t n_act
+end
+put arb_stat 7 n_act
+ret n_act
+end
+
+fn arboris_popcnt32 mask ulong to ulong
+m = and mask 0xffffffff
+c = ulong 0
+for i ulong 32
+if ne and shr m i 1 0
+c = add c 1
+end
+end
+ret c
+end
+
+fn arboris_popcnt64 mask ulong to ulong
+c = ulong 0
+for i ulong 64
+if ne and shr mask i 1 0
+c = add c 1
+end
+end
+ret c
+end
+
+note ---- OMG Semantic-Graph Recall + 3-Layer Guided Decoding + Hippocampus->Cortex Sleep Export ----
+
+fn arboris_omg_find sem_id ulong to ulong
+cnt = get arb_omg_n 0
+for m ulong cnt bound 256
+if eq get arb_omg_sem m sem_id
+ret m
+end
+end
+ret ARB_OMG_CAP
+end
+
+fn arboris_omg_victim to ulong
+cnt = get arb_omg_n 0
+if lt cnt ARB_OMG_CAP
+put arb_omg_n 0 add cnt 1
+ret cnt
+end
+best = ulong 0
+bu = get arb_omg_util 0
+for m ulong ARB_OMG_CAP bound 256
+u = get arb_omg_util m
+if lt u bu
+bu = u
+best = m
+end
+end
+ret best
+end
+
+note Hippocampus->Cortex online insert on verified oracle pass; returns slot index (0..255).
+fn arboris_insert_verified_omg sem_id ulong io_sig ulong op_mask ulong macro_tok ulong utility_milli ulong to long
+if eq sem_id 0
+ret long -1
+end
+idx = arboris_omg_find sem_id
+if lt idx ARB_OMG_CAP
+put arb_omg_util idx add get arb_omg_util idx utility_milli
+put arb_omg_mtok idx macro_tok
+ret long idx
+end
+slot = arboris_omg_victim
+put arb_omg_sem slot sem_id
+put arb_omg_io slot io_sig
+put arb_omg_opm slot op_mask
+put arb_omg_mtok slot macro_tok
+put arb_omg_util slot utility_milli
+put arb_omg_slen slot 0
+ret long slot
+end
+
+fn arboris_set_omg_stream slot ulong pos ulong tok ulong to void
+if and lt slot ARB_OMG_CAP lt pos ARB_OMG_SLEN
+put arb_omg_toks add mul slot ARB_OMG_SLEN pos tok
+if ge add pos 1 get arb_omg_slen slot
+put arb_omg_slen slot add pos 1
+end
+end
+end
+
+note Exact OMG subgraph recall via ~1 us spreading activation over SEMANTIC_ID, IO signature, and opcode cues.
+note out_res: [0]=best_slot, [1]=best_sem_id, [2]=best_macro_tok, [3]=peak_activation_milli.
+fn arboris_omg_score m ulong cue_sem ulong cue_io ulong cue_opm ulong to ulong
+act = ulong 0
+if and ne cue_sem 0 eq get arb_omg_sem m cue_sem
+act = add act 4000
+end
+if and ne cue_io 0 eq get arb_omg_io m cue_io
+act = add act 2000
+end
+ov = arboris_popcnt64 and get arb_omg_opm m cue_opm
+act = add act mul ov 250
+ub = div get arb_omg_util m 10
+if gt ub 500
+ub = ulong 500
+end
+ret add act ub
+end
+
+fn arboris_omg_recall cue_sem ulong cue_io ulong cue_opm ulong out_res edit ulong 4 to bool
+cnt = get arb_omg_n 0
+if eq cnt 0
+ret false
+end
+best = ulong 0
+bact = ulong 0
+for m ulong cnt bound 256
+act = arboris_omg_score m cue_sem cue_io cue_opm
+put arb_omg_act m act
+if gt act bact
+bact = act
+best = m
+end
+end
+if eq bact 0
+ret false
+end
+put out_res 0 best
+put out_res 1 get arb_omg_sem best
+put out_res 2 get arb_omg_mtok best
+put out_res 3 bact
+put arb_cfg 7 get arb_omg_mtok best
+ret true
+end
+
+note 3-layer guided decoding step:
+note   (a) gsamp/OMG bitmask wall (illegal tokens zeroed via -1e300 logit floor)
+note   (b) Arboris 1 us logit bias toward recalled high-activation OMG opcode/macro
+note   (c) LTP0 deep-compute trigger (set to 1 when peak_act < ltp0_act_thresh OR jsd_milli >= jsd_thresh)
+note out_step: [0]=selected_tok, [1]=need_ltp0 (0 or 1), [2]=peak_act, [3]=jsd_milli
+fn arboris_set_omg_step_in tok ulong logit f64 valid uchar to void
+if lt tok ARB_MAX_TOK
+put arb_omg_logits tok logit
+put arb_omg_mask tok valid
+end
+end
+
+fn arboris_set_guide_cfg bias_gain_milli ulong ltp0_act_th ulong bias_tok ulong to void
+put arb_cfg 5 bias_gain_milli
+put arb_cfg 6 ltp0_act_th
+put arb_cfg 7 bias_tok
+end
+
+fn arboris_guide_pick v ulong btok ulong b_on bool gain f64 to ulong
+best_tok = ulong 0
+best_val = -1.0e300f64
+found = false
+for c ulong v bound 512
+if eq get arb_omg_mask c 0
+put arb_omg_biased c -1.0e300f64
+else
+lv = get arb_omg_logits c
+if and b_on eq c btok
+lv = add lv gain
+end
+put arb_omg_biased c lv
+if or not found gt lv best_val
+best_val = lv
+best_tok = c
+found = true
+end
+end
+end
+ret best_tok
+end
+
+fn arboris_guide_omg_step v ulong peak_act ulong jsd_milli ulong out_step edit ulong 4 to ulong
+if or eq v 0 gt v ARB_MAX_TOK
+ret 0
+end
+gain = div f64 get arb_cfg 5 1000.0
+b_on = ge peak_act get arb_cfg 6
+best_tok = arboris_guide_pick v get arb_cfg 7 b_on gain
+need_ltp0 = ulong 0
+if or lt peak_act get arb_cfg 6 ge jsd_milli get arb_cfg 2
+need_ltp0 = ulong 1
+end
+put out_step 0 best_tok
+put out_step 1 need_ltp0
+put out_step 2 peak_act
+put out_step 3 jsd_milli
+ret best_tok
+end
+
+note Export high-utility OMG traces (records: sem_id, io_sig, op_mask, macro_tok, util, len, toks...)
+note into out_buf for Hippocampus->Cortex sleep consolidation (fcachem / sp_solve.om).
+fn arboris_export_one m ulong pos ulong out_buf edit ulong * to ulong
+sl = get arb_omg_slen m
+put out_buf pos get arb_omg_sem m
+put out_buf add pos 1 get arb_omg_io m
+put out_buf add pos 2 get arb_omg_opm m
+put out_buf add pos 3 get arb_omg_mtok m
+put out_buf add pos 4 get arb_omg_util m
+put out_buf add pos 5 sl
+base = mul m ARB_OMG_SLEN
+dst = add pos 6
+for k ulong sl bound 64
+put out_buf add dst k get arb_omg_toks add base k
+end
+ret add 6 sl
+end
+
+fn arboris_export_sleep_traces min_util ulong out_buf edit ulong * out_cnt edit ulong 1 to ulong
+cnt = get arb_omg_n 0
+cap = len out_buf
+pos = ulong 0
+n_exp = ulong 0
+for m ulong cnt bound 256
+if ge get arb_omg_util m min_util
+need = add 6 get arb_omg_slen m
+if gt add pos need cap
+break
+end
+pos = add pos arboris_export_one m pos out_buf
+n_exp = add n_exp 1
+end
+end
+put out_cnt 0 n_exp
+ret pos
+end
+
+text arb_cli_ok "ARBORIS_SELFTEST PASS\n"
+
+fn cmdarboris to void
+arboris_clear
+sq = new ulong 4 0
+put sq 0 11
+put sq 1 22
+put sq 2 33
+put sq 3 44
+ok = arboris_put sq 0 3 99 950000
+if not ok
+exit 1
+end
+res = new ulong 2 0
+if not arboris_probe sq 0 3 res
+exit 2
+end
+if or ne get res 0 99 lt get res 1 900000
+exit 3
+end
+w = write 1 arb_cli_ok 0 len arb_cli_ok
+end

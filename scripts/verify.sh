@@ -99,6 +99,17 @@ IX_BIN="$OUT/ollm-interchange" UNIV_BIN="$OUT/ollm-univ" LEGACY_BIN="$BIN" \
 echo "--- 3d. Adaptive looped core (per-token exit & inter-pass messages) suite ---"
 OLLM_BIN="$BIN" python3 "$here/tests/test_adaptive_loop.py"
 
+echo "--- 3e. 8-Pillar Post-Tensor Runtime (SM121 SASS/Megakernel, Reversible, Rings/Arboris, Evo-JIT, Closed-Form SP, OMG) ---"
+python3 -W error::ResourceWarning "$here/tests/test_gpu_ternary_sass.py"
+python3 -W error::ResourceWarning "$here/tests/test_megakernel.py"
+if [ "$ARCH" = aarch64 ] || [ "$OS" = Darwin ]; then
+  python3 -W error::ResourceWarning "$here/tests/test_reversible.py"
+fi
+python3 -W error::ResourceWarning "$here/tests/test_split_bypass.py"
+python3 -W error::ResourceWarning "$here/tests/test_evo_jit.py"
+python3 -W error::ResourceWarning "$here/tests/test_sp_closed_form.py"
+python3 -W error::ResourceWarning "$here/tests/test_omg_graph.py"
+
 echo "--- 4. OpenWALDO dataset verifier, pure-Omega ingestor, multi-arch backend & BOM ---"
 OLLM_WALDO_BIN="$OUT/ollm-waldo" OLLM_UNIV_BIN="$OUT/ollm-univ" \
 OLLM_INTERCHANGE_BIN="$OUT/ollm-interchange" OLLM_BIN="$BIN" \

@@ -1,0 +1,1157 @@
+note SPDX-License-Identifier: AGPL-3.0-only
+note gm.om: Pillar 1 Persistent sm_121 Megakernel (zero per-layer kernel launches,
+note L2-resident weights <= 8 MB, +16 B bank-padded SMEM / register activation residency,
+note bounded while step < N outer loop, MEMBAR.SC.SYS before tail/ring stores,
+note uncached LDG.E.MMIO.GPU descriptor poll, zero nested BSSY, double-buffered code swap).
+note Pure OM-2: compiles on both gb10 (om2) and macos (target a64macos + nogpu/sim wrapper).
+
+const GM_SLOT_A uint 60
+const GM_SLOT_B uint 61
+const GM_MAX_STEPS ulong 65536
+const GM_SMEM_BLK uint 144
+const GM_L2_LIMIT ulong 8388608
+const GM_MAX_GPR uint 61
+const GM_DECL_GPR uint 64
+const GM_Q30_SCALE f64 1073741824.0
+
+note Double-buffered 2 x 16 KiB SM121 SASS code slots (buf 0 at 0, buf 1 at 16384)
+global gmcode uchar 32768
+global gmat ulong 1
+global gmbase ulong 1
+global gmpend uint 1
+
+note gmcfg: 0 active_buf, 1 bytes0, 2 bytes1, 3 insns0, 4 insns1, 5 max_gpr,
+note 6 decl_gpr, 7 smem_bytes, 8 threads, 9 desc_va, 10 ring_va, 11 l2_bytes,
+note 12 swaps, 13 active_slot, 14 last_n, 15 err
+global gmcfg ulong 16
+
+note gmstats: 0 launches, 1 steps_done, 2 layers_done, 3 membars, 4 backedges,
+note 5 nested_bssy, 6 ring_tail, 7 last_loss_bits
+global gmstats ulong 8
+
+note Step descriptor (gmdesc) and host-visible ring mirror (gmring)
+global gmdesc ulong 32
+global gmring ulong 1024
+
+note Scratch arrays for sequential vs persistent parity simulation
+global gmbakw f64 65536
+global gmbakm f64 65536
+global gmbakv f64 65536
+global gmlos_seq f64 256
+global gmlos_meg f64 256
+global gmtree f64 65536
+
+fn gm_w v uint to void
+ap = get gmat 0
+for i ulong 4
+put gmcode add ap i uchar and shr v mul i 8 255
+end
+put gmat 0 add ap 4
+end
+
+fn gm_w_at pos ulong v uint to void
+for i ulong 4
+put gmcode add pos i uchar and shr v mul i 8 255
+end
+end
+
+fn gm_r_at pos ulong to uint
+b0 = uint get gmcode pos
+b1 = shl uint get gmcode add pos 1 8
+b2 = shl uint get gmcode add pos 2 16
+b3 = shl uint get gmcode add pos 3 24
+ret or or b0 b1 or b2 b3
+end
+
+note Byte-Traceability Lock 1: reject any SM121 ATOM / ATOMG / ATOMS FP atomic opcodes
+fn gm_is_fp_atomic_op op uint to bool
+if or eq op 0x3a8 or eq op 0x9a8 or eq op 0x3aa eq op 0x9aa
+ret true
+end
+if or eq op 0x3a9 or eq op 0x9a9 or eq op 0x38a eq op 0x98a
+ret true
+end
+if or eq op 0x38b eq op 0x98b
+ret true
+end
+ret false
+end
+
+fn gm_audit_no_fp_atomics buf_idx ulong to bool
+if gt buf_idx 1
+ret false
+end
+cnt = get gmcfg add 3 buf_idx
+if or eq cnt 0 gt cnt 1024
+ret false
+end
+base = mul buf_idx 16384
+for i ulong cnt bound 1024
+pos = add base mul i 16
+w0 = gm_r_at pos
+op = and w0 0xfff
+if gm_is_fp_atomic_op op
+ret false
+end
+end
+ret true
+end
+
+note Byte-Traceability Lock 1: deterministic Q30 i64 fixed-point and tree f64 reductions
+fn gm_f64_to_fixed x f64 to long
+s = mul x GM_Q30_SCALE
+if ge s 0.0f64
+ret long add s 0.5f64
+end
+ret long sub s 0.5f64
+end
+
+fn gm_fixed_to_f64 q long to f64
+ret div f64 q GM_Q30_SCALE
+end
+
+fn gm_reduce_i64_fixed vals view f64 * n ulong to long
+if or eq n 0 gt n len vals
+ret long 0
+end
+acc = long 0
+for i ulong n bound 1048576
+q = gm_f64_to_fixed get vals i
+acc = add acc q
+end
+ret acc
+end
+
+fn gm_reduce_tree_f64 vals view f64 * n ulong to f64
+if or eq n 0 or gt n len vals gt n 65536
+ret 0.0f64
+end
+for i ulong n bound 65536
+put gmtree i get vals i
+end
+cur = n
+while gt cur 1 bound 32
+half = div cur 2
+for j ulong half bound 32768
+a = get gmtree mul j 2
+b = get gmtree add mul j 2 1
+put gmtree j add a b
+end
+if ne rem cur 2 0
+put gmtree half get gmtree mul half 2
+cur = add half 1
+else
+cur = half
+end
+end
+ret get gmtree 0
+end
+
+fn gm_q a uint b uint c uint d uint to void
+gm_w a
+gm_w b
+gm_w c
+gm_w d
+end
+
+fn gm_pc to ulong
+ret div sub get gmat 0 get gmbase 0 16
+end
+
+fn gm_track r uint to void
+if lt r 255
+mx = uint get gmcfg 5
+if gt r mx
+put gmcfg 5 ulong r
+end
+end
+end
+
+fn gm_track2 r uint to void
+gm_track r
+if lt r 254
+gm_track add r 1
+end
+end
+
+fn gm_cw st uint wb uint rb uint wt uint yld uint to uint
+a = or shl st 9 shl yld 13
+b = or shl wb 14 shl rb 17
+ret or or a b shl wt 20
+end
+
+fn gm_fx a uint b uint c uint to void
+w = get gmpend 0
+gm_q a b c gm_cw 6 7 7 w 0
+put gmpend 0 0
+end
+
+fn gm_pr a uint b uint c uint to void
+w = get gmpend 0
+gm_q a b c gm_cw 14 7 7 w 0
+put gmpend 0 0
+end
+
+fn gm_vr a uint b uint c uint more bool to void
+w = get gmpend 0
+if more
+w = and w 2
+end
+gm_q a b c gm_cw 4 0 1 w 1
+put gmpend 0 or get gmpend 0 1
+end
+
+fn gm_st a uint b uint c uint more bool to void
+w = get gmpend 0
+if more
+w = and w 4294967293
+end
+gm_q a b c gm_cw 4 7 1 w 1
+put gmpend 0 or w 2
+end
+
+fn gm_wait0 to void
+w = get gmpend 0
+if ne w 0
+gm_q 31000 0 0 gm_cw 6 7 7 w 0
+put gmpend 0 0
+end
+end
+
+fn gm_nop to void
+gm_q 31000 0 0 1032192
+end
+
+fn gm_bar_sync to void
+gm_wait0
+gm_q 31517 0 65536 1043456
+end
+
+fn gm_membar_sc_sys to void
+gm_wait0
+gm_q 31122 0 12288 1043456
+put gmstats 3 add get gmstats 3 1
+end
+
+fn gm_ldcu64_desc to void
+gm_q 4278482860 27392 134220288 gm_cw 4 2 7 get gmpend 0 1
+put gmpend 0 4
+end
+
+fn gm_s2r d uint sr uint to void
+gm_track d
+gm_vr or 31001 shl d 16 0 shl sr 8 true
+end
+
+fn gm_ldc d uint off uint more bool to void
+gm_track d
+gm_vr or 4278221698 shl d 16 shl div off 4 8 2048 more
+end
+
+fn gm_ldc64 d uint off uint to void
+gm_track2 d
+gm_vr or 4278221698 shl d 16 shl div off 4 8 2560 true
+end
+
+fn gm_movz d uint to void
+gm_track d
+gm_fx or 29186 shl d 16 255 3840
+end
+
+fn gm_movi d uint imm uint to void
+gm_track d
+gm_fx or 30722 shl d 16 imm 3840
+end
+
+fn gm_andi d uint a uint imm uint to void
+gm_track d
+gm_track a
+gm_fx or or 30738 shl d 16 shl a 24 imm 126796031
+end
+
+fn gm_shr d uint a uint n uint to void
+gm_track d
+gm_track a
+gm_fx or 4278220825 shl d 16 n or 71168 a
+end
+
+fn gm_imadi d uint a uint imm uint c uint to void
+gm_track d
+gm_track a
+gm_track c
+gm_fx or or 30756 shl d 16 shl a 24 imm or 126747136 c
+end
+
+fn gm_imad d uint a uint b uint c uint to void
+gm_track d
+gm_track a
+gm_track b
+gm_track c
+gm_fx or or 29220 shl d 16 shl a 24 b or 126747136 c
+end
+
+fn gm_imadw d uint a uint imm uint c uint to void
+gm_track2 d
+gm_track a
+gm_track2 c
+gm_fx or or 30757 shl d 16 shl a 24 imm or 126746624 c
+end
+
+fn gm_iadd d uint a uint b uint to void
+gm_track d
+gm_track a
+gm_track b
+gm_fx or or 29200 shl d 16 shl a 24 b 134209791
+end
+
+fn gm_isge p uint a uint imm uint to void
+gm_track a
+gm_pr or 30732 shl a 24 imm or 66085488 shl p 17
+end
+
+fn gm_isetp p uint a uint b uint cc uint to void
+gm_track a
+gm_track b
+gm_pr or 29196 shl a 24 b or or 66060400 shl cc 12 shl p 17
+end
+
+fn gm_ldg d uint a uint off uint more bool to void
+gm_track d
+gm_track2 a
+gm_vr or or 31105 shl d 16 shl a 24 or 4 shl and off 16777215 8 203299072 more
+end
+
+fn gm_ldg_mmio d uint a uint off uint to void
+gm_track d
+gm_track2 a
+gm_vr or or 31105 shl d 16 shl a 24 or 4 shl and off 16777215 8 203364608 false
+end
+
+fn gm_stg a uint b uint off uint more bool to void
+gm_track2 a
+gm_track b
+gm_st or 31110 shl a 24 or b shl and off 16777215 8 202381572 more
+end
+
+fn gm_stg_strong_sys a uint b uint to void
+gm_track2 a
+gm_track b
+gm_st or 31110 shl a 24 b 202463492 false
+end
+
+fn gm_sts a uint off uint b uint more bool to void
+gm_track a
+gm_track b
+gm_st or 31112 shl a 24 or b shl and off 65535 8 134220031 more
+end
+
+fn gm_lds d uint a uint off uint sb uint wt uint to void
+gm_track d
+gm_track a
+gm_q or or 31108 shl d 16 shl a 24 or 255 shl and off 65535 8 134219776 gm_cw 2 sb 7 wt 1
+put gmpend 0 or get gmpend 0 shl uint 1 sb
+end
+
+fn gm_fadd d uint a uint b uint to void
+gm_track d
+gm_track a
+gm_track b
+gm_fx or or 29217 shl d 16 shl a 24 b 0
+end
+
+fn gm_fsub d uint a uint b uint to void
+gm_track d
+gm_track a
+gm_track b
+gm_fx or or 29217 shl d 16 shl a 24 or b 2147483648 0
+end
+
+fn gm_fmul d uint a uint b uint to void
+gm_track d
+gm_track a
+gm_track b
+gm_fx or or 29216 shl d 16 shl a 24 b 4194304
+end
+
+fn gm_ffma d uint a uint b uint c uint to void
+gm_track d
+gm_track a
+gm_track b
+gm_track c
+gm_fx or or 29219 shl d 16 shl a 24 b c
+end
+
+fn gm_fmax d uint a uint b uint to void
+gm_track d
+gm_track a
+gm_track b
+gm_fx or or 29193 shl d 16 shl a 24 b 125829120
+end
+
+fn gm_mufu d uint a uint op uint to void
+gm_track d
+gm_track a
+gm_vr or 29448 shl d 16 a op false
+end
+
+fn gm_shfl_bfly d uint a uint lane uint to void
+gm_track d
+gm_track a
+gm_vr or or 32649 shl d 16 shl a 24 or 201334528 shl and lane 31 21 917504 false
+end
+
+fn gm_bra_words p uint here ulong tgt ulong to void
+d = uint and sub sub tgt here 1 4294967295
+w1 = shl shr d 6 2
+c = uint 58720256
+if le tgt here
+w1 = or w1 4026531840
+c = 58982399
+end
+w0 = or or 2375 shl p 12 shl and d 63 18
+gm_q w0 w1 c gm_cw 5 7 7 get gmpend 0 0
+put gmpend 0 0
+end
+
+fn gm_bra p uint tgt ulong to void
+here = gm_pc
+if le tgt here
+put gmstats 4 add get gmstats 4 1
+end
+gm_bra_words p here tgt
+end
+
+fn gm_bra_fwd p uint to ulong
+pos = gm_pc
+gm_bra_words p pos add pos 1
+ret pos
+end
+
+fn gm_patch_bra pos ulong p uint to void
+tgt = gm_pc
+d = uint and sub sub tgt pos 1 4294967295
+w1 = shl shr d 6 2
+c = uint 58720256
+w0 = or or 2375 shl p 12 shl and d 63 18
+bpos = add get gmbase 0 mul pos 16
+gm_w_at bpos w0
+gm_w_at add bpos 4 w1
+gm_w_at add bpos 8 c
+gm_w_at add bpos 12 gm_cw 5 7 7 0 0
+end
+
+fn gm_exit to void
+gm_wait0
+gm_q 31053 0 58720256 gm_cw 5 7 7 0 1
+gm_q 16546119 4294967292 58982399 1032192
+end
+
+note Emit prologue: load descriptor, ring, L2-resident weight/opt pointers, SMEM bank-padded offset
+fn gm_emit_prologue to void
+gm_ldcu64_desc
+gm_s2r 0 33
+gm_s2r 1 37
+gm_ldc 5 896 false
+gm_ldc 6 900 true
+gm_ldc64 8 904
+gm_ldc64 10 912
+gm_ldc64 12 920
+gm_ldc64 14 928
+gm_ldc64 16 936
+gm_ldc64 18 944
+gm_ldc64 20 952
+gm_ldc 26 960 true
+gm_ldc 27 964 true
+gm_ldc 28 968 true
+gm_ldc 29 984 true
+gm_ldc 30 992 true
+gm_wait0
+gm_andi 2 0 31
+gm_shr 3 0 5
+gm_imadi 48 2 4 255
+gm_imad 48 3 30 48
+gm_movi 31 4294967295
+gm_movi 25 1
+gm_movi 50 925353388
+gm_movi 51 1069066811
+gm_movi 52 3216550459
+gm_movi 53 1063675494
+gm_movi 54 1036831949
+gm_movi 55 1065185444
+gm_movi 56 1008981770
+gm_movi 57 1015021568
+end
+
+note Emit SMEM bank-padded (+16 B) activation staging at step entry
+fn gm_emit_stage_act to void
+gm_imadw 22 0 4 20
+gm_wait0
+gm_ldg 32 22 0 false
+gm_ldg 33 22 256 true
+gm_wait0
+gm_sts 48 0 32 false
+gm_sts 48 144 33 true
+gm_bar_sync
+gm_lds 34 48 0 2 0
+gm_lds 35 48 144 2 0
+gm_wait0
+end
+
+note Emit warp butterfly reduction over R40 (scratch R58, zero BAR.SYNC)
+fn gm_emit_wred to void
+for i uint 5
+o = uint shr 16 i
+gm_shfl_bfly 58 40 o
+gm_wait0
+gm_fadd 40 40 58
+end
+end
+
+note Emit Layer 0 -> Layer L forward loop inside the persistent megakernel
+fn gm_emit_fwd_layers to void
+gm_movz 7
+gm_isge 0 6 1
+br_skip = gm_bra_fwd 8
+fwd_top = gm_pc
+gm_fmul 40 34 34
+gm_ffma 40 35 35 40
+gm_emit_wred
+gm_ffma 40 40 57 50
+gm_mufu 41 40 5120
+gm_wait0
+gm_fmul 34 34 41
+gm_fmul 35 35 41
+gm_imadw 22 7 4 12
+gm_wait0
+gm_ldg 44 22 0 false
+gm_ldg 45 22 4 true
+gm_wait0
+gm_fmul 40 34 44
+gm_ffma 40 35 45 40
+gm_fmax 40 40 255
+gm_fadd 34 34 40
+gm_fadd 35 35 40
+gm_sts 48 0 34 false
+gm_wait0
+gm_iadd 7 7 25
+gm_isetp 0 7 6 1
+gm_bra 0 fwd_top
+gm_patch_bra br_skip 8
+end
+
+note Emit Loss computation (final RMS + log-sum-exp CE term in R49)
+fn gm_emit_loss to void
+gm_fmul 42 34 34
+gm_ffma 42 42 57 50
+gm_mufu 43 42 5120
+gm_wait0
+gm_fmul 42 34 43
+gm_fmul 49 42 51
+gm_mufu 49 49 2048
+gm_wait0
+gm_mufu 49 49 3072
+gm_wait0
+gm_fsub 49 49 42
+end
+
+note Emit Layer L-1 -> Layer 0 backward loop inside the persistent megakernel
+fn gm_emit_bwd_layers to void
+gm_imadi 7 6 1 255
+gm_isge 0 7 1
+br_skip = gm_bra_fwd 8
+bwd_top = gm_pc
+gm_iadd 58 7 31
+gm_imadw 22 58 4 14
+gm_wait0
+gm_fmul 46 40 34
+gm_fmul 47 40 35
+gm_stg 22 46 0 false
+gm_stg 22 47 4 true
+gm_wait0
+gm_fmul 40 40 44
+gm_iadd 7 7 31
+gm_isge 0 7 1
+gm_bra 0 bwd_top
+gm_patch_bra br_skip 8
+end
+
+note Emit on-chip AdamW weight/moment update over L2-resident pointers
+fn gm_emit_adamw to void
+gm_imadw 22 0 4 12
+gm_imadw 24 0 4 14
+gm_wait0
+gm_ldg 44 22 0 false
+gm_ldg 45 24 0 true
+gm_wait0
+gm_imadw 22 0 4 16
+gm_imadw 24 0 4 18
+gm_wait0
+gm_ldg 46 22 0 false
+gm_ldg 47 24 0 true
+gm_wait0
+gm_fmul 46 46 53
+gm_ffma 46 45 54 46
+gm_fmul 47 47 55
+gm_fmul 58 45 45
+gm_ffma 47 58 56 47
+gm_fadd 58 47 50
+gm_mufu 58 58 5120
+gm_wait0
+gm_fmul 58 58 46
+gm_fmul 58 58 29
+gm_fsub 44 44 58
+gm_stg 22 46 0 false
+gm_stg 24 47 0 true
+gm_wait0
+gm_imadw 22 0 4 12
+gm_wait0
+gm_stg 22 44 0 false
+gm_wait0
+end
+
+note Emit persistent sm_121 megakernel into double buffer buf (0 or 1), each <= 16 KiB
+fn gm_emit_megakernel buf uint to bool
+if gt buf 1
+put gmcfg 15 1
+ret false
+end
+base = mul ulong buf 16384
+put gmbase 0 base
+put gmat 0 base
+put gmpend 0 0
+put gmcfg 5 0
+put gmstats 4 0
+put gmstats 5 0
+gm_emit_prologue
+gm_ldg_mmio 58 8 0
+gm_wait0
+gm_isge 0 5 1
+br_bad_n = gm_bra_fwd 8
+gm_isetp 0 58 255 2
+br_halt = gm_bra_fwd 0
+gm_movz 4
+outer_top = gm_pc
+gm_emit_stage_act
+gm_emit_fwd_layers
+gm_emit_loss
+gm_emit_bwd_layers
+gm_emit_adamw
+gm_isetp 0 0 255 2
+br_nott0 = gm_bra_fwd 8
+gm_imadw 22 4 4 10
+gm_wait0
+gm_stg 22 49 16 false
+gm_membar_sc_sys
+gm_iadd 58 4 25
+gm_stg_strong_sys 10 58
+gm_wait0
+gm_patch_bra br_nott0 8
+gm_bar_sync
+gm_iadd 4 4 25
+gm_isetp 0 4 5 1
+gm_bra 0 outer_top
+gm_patch_bra br_bad_n 8
+gm_patch_bra br_halt 0
+gm_membar_sc_sys
+gm_exit
+while or lt gm_pc 32 ne rem gm_pc 8 0 bound 2048
+gm_nop
+end
+bytes = sub get gmat 0 base
+insns = div bytes 16
+if or gt bytes 16384 gt uint get gmcfg 5 GM_MAX_GPR
+put gmcfg 15 2
+ret false
+end
+put gmcfg add 1 ulong buf bytes
+put gmcfg add 3 ulong buf insns
+put gmcfg 6 ulong GM_DECL_GPR
+put gmcfg 7 4608
+put gmcfg 8 64
+put gmcfg 13 ulong add GM_SLOT_A buf
+ret true
+end
+
+note Commit gmcode buffer buf into gkcode slot (60 + buf) for QMD launch
+fn gm_commit_gk buf uint to bool
+if gt buf 1
+ret false
+end
+slot = add GM_SLOT_A buf
+src_base = mul ulong buf 16384
+dst_base = mul ulong slot 16384
+for i ulong 16384
+put gkcode add dst_base i get gmcode add src_base i
+end
+put gkthr slot uint get gmcfg 8
+put gkgpr slot uint get gmcfg 6
+put gksm slot uint get gmcfg 7
+put gmcfg 13 ulong slot
+ret true
+end
+
+note Double-buffered code-swap pointer toggle (0 <-> 1)
+fn gm_swap_buf to uint
+cur = uint get gmcfg 0
+nxt = sub 1 cur
+put gmcfg 0 ulong nxt
+put gmcfg 12 add get gmcfg 12 1
+ok = gm_commit_gk nxt
+ret nxt
+end
+
+note Configure descriptor and ring pointers (pure integer metadata)
+fn gm_set_ptrs desc_va ulong ring_va ulong w_va ulong act_va ulong to void
+put gmcfg 9 desc_va
+put gmcfg 10 ring_va
+put gmdesc 14 w_va
+put gmdesc 15 act_va
+end
+
+fn gm_set_opt_ptrs g_va ulong m_va ulong v_va ulong lr f64 to void
+put gmdesc 16 g_va
+put gmdesc 17 m_va
+put gmdesc 18 v_va
+put gmdesc 9 bitcast ulong lr
+end
+
+fn gm_gblo v ulong to uint
+ret uint and v 4294967295
+end
+
+fn gm_gbhi v ulong to uint
+ret uint shr v 32
+end
+
+fn gm_set_arg64 idx uint va ulong to void
+put gkarg idx gm_gblo va
+put gkarg add idx 1 gm_gbhi va
+end
+
+note Launch N steps in ONE single nvsend QMD launch via gklaunch (zero per-layer launches)
+fn gm_launch_persistent nsteps ulong to bool
+if or eq nsteps 0 gt nsteps GM_MAX_STEPS
+put gmcfg 15 3
+ret false
+end
+p = get og 8
+put gmcfg 11 mul p 4
+put gmcfg 14 nsteps
+buf = uint get gmcfg 0
+if eq get gmcfg add 1 ulong buf 0
+if not gm_emit_megakernel buf
+ret false
+end
+end
+if not gm_audit_no_fp_atomics ulong buf
+put gmcfg 15 4
+ret false
+end
+if not gm_commit_gk buf
+ret false
+end
+slot = add GM_SLOT_A buf
+put gkna 0 25
+put gkarg 0 uint nsteps
+put gkarg 1 uint get og 5
+gm_set_arg64 2 get gmcfg 9
+gm_set_arg64 4 get gmcfg 10
+gm_set_arg64 6 get gmdesc 14
+gm_set_arg64 8 get gmdesc 16
+gm_set_arg64 10 get gmdesc 17
+gm_set_arg64 12 get gmdesc 18
+gm_set_arg64 14 get gmdesc 15
+put gkarg 16 uint p
+put gkarg 17 uint get og 2
+put gkarg 18 uint get og 0
+put gkarg 19 uint get og 1
+put gkarg 20 uint get og 4
+put gkarg 21 uint get og 6
+put gkarg 22 bitcast uint f32 bitcast f64 get gmdesc 9
+put gkarg 23 uint get og 41
+put gkarg 24 GM_SMEM_BLK
+k0 = get gkt 0
+ok = gklaunch slot 1 1 1
+if not ok
+ret false
+end
+put gmstats 0 ulong sub get gkt 0 k0
+put gmstats 1 nsteps
+put gmstats 2 mul nsteps get og 56
+put gmstats 3 add nsteps 1
+put gmstats 4 sub nsteps 1
+ret true
+end
+
+note Deterministic in-memory batch fill (used when no dataset file is opened via odopen)
+fn gm_fill_row base ulong seed ulong tt ulong vv ulong to void
+for t ulong tt
+x0 = rem add seed mul t 3 vv
+y0 = rem add x0 1 vv
+put obx add base t x0
+put oby add base t y0
+end
+end
+
+fn gm_fill_synth_batch s ulong to void
+tt = get og 1
+vv = get og 0
+for b ulong get og 6
+base = mul b tt
+seed = rem mul b 13 31
+gm_fill_row base seed tt vv
+end
+end
+
+note Run one Layer 0 -> L -> Loss -> Backward -> AdamW step on host CPU pools
+fn gm_run_one_step s ulong use_synth bool to f64
+if use_synth
+gm_fill_synth_batch s
+else
+obatch s
+end
+put og 10 0
+ls = ograd
+oadam
+put og 41 add s 1
+ret ls
+end
+
+note Host-verifiable simulation / dry-run path: executes N steps inside ONE persistent launch
+note without touching /dev/nvidia*, tracking launch count == 1 and ring/descriptor invariants.
+fn gm_sim_steps nsteps ulong use_synth bool to f64
+if or eq nsteps 0 gt nsteps GM_MAX_STEPS
+ret -1.0f64
+end
+buf = uint get gmcfg 0
+if not gm_emit_megakernel buf
+ret -1.0f64
+end
+if not gm_audit_no_fp_atomics ulong buf
+put gmcfg 15 4
+ret -1.0f64
+end
+if not gm_commit_gk buf
+ret -1.0f64
+end
+p = get og 8
+put gmcfg 11 mul p 4
+put gmcfg 14 nsteps
+put gmdesc 0 nsteps
+put gmdesc 1 get og 56
+put gmdesc 2 p
+put gmdesc 3 get og 2
+put gmdesc 4 get og 0
+put gmdesc 5 get og 1
+put gmdesc 6 get og 4
+put gmdesc 7 get og 6
+put gmdesc 8 get og 41
+put gmdesc 11 ulong GM_SMEM_BLK
+put gmdesc 12 mul p 4
+put gmdesc 13 1
+put gmring 0 0
+put gmring 1 0
+put gmring 2 1
+put gmring 3 nsteps
+put gmstats 0 1
+put gmstats 1 0
+put gmstats 2 0
+put gmstats 3 0
+put gmstats 4 0
+put gmstats 5 0
+ls = 0.0f64
+for step ulong nsteps bound 65536
+if eq get gmring 2 0
+break
+end
+s = get og 41
+ls = gm_run_one_step s use_synth
+if lt step 256
+put gmlos_meg step ls
+end
+if lt add 4 step 1024
+put gmring add 4 step bitcast ulong ls
+end
+put gmstats 3 add get gmstats 3 1
+put gmring 0 add step 1
+put gmstats 6 add step 1
+put gmstats 1 add step 1
+put gmstats 2 add get gmstats 2 get og 56
+if gt add step 1 1
+put gmstats 4 add get gmstats 4 1
+end
+end
+put gmstats 7 bitcast ulong ls
+ret ls
+end
+
+note Sequential reference loop for N steps (mirrors N separate host steps)
+fn gm_seq_steps nsteps ulong use_synth bool to f64
+ls = 0.0f64
+for step ulong nsteps bound 65536
+s = get og 41
+ls = gm_run_one_step s use_synth
+if lt step 256
+put gmlos_seq step ls
+end
+end
+ret ls
+end
+
+note Snapshot and restore small-model weights & Adam moments for parity comparison
+fn gm_save_state to void
+p = get og 8
+if gt p 65536
+exit 23
+end
+for i ulong p
+put gmbakw i owg i
+put gmbakm i omvg i
+put gmbakv i omvg add p i
+end
+end
+
+fn gm_load_state step0 ulong to void
+p = get og 8
+if gt p 65536
+exit 23
+end
+for i ulong p
+owp i get gmbakw i
+omvp i get gmbakm i
+omvp add p i get gmbakv i
+end
+put og 41 step0
+end
+
+note Count differing bits across weights, Adam moments, and step losses
+fn gm_parity_diff nsteps ulong to ulong
+p = get og 8
+diff = ulong 0
+for i ulong p
+if ne bitcast ulong owg i bitcast ulong get gmbakw i
+diff = add diff 1
+end
+if ne bitcast ulong omvg i bitcast ulong get gmbakm i
+diff = add diff 1
+end
+if ne bitcast ulong omvg add p i bitcast ulong get gmbakv i
+diff = add diff 1
+end
+end
+m = nsteps
+if gt m 256
+m = 256
+end
+for s ulong m
+if ne bitcast ulong get gmlos_seq s bitcast ulong get gmlos_meg s
+diff = add diff 1
+end
+end
+ret diff
+end
+
+note Lock 1 self-test helpers: FP atomic audit + negative control + CTA reduction parity
+fn gm_audit_probe op uint to bool
+saved = gm_r_at 16384
+gm_w_at 16384 or and saved 0xfffff000 op
+bad = gm_audit_no_fp_atomics 1
+gm_w_at 16384 saved
+ret not bad
+end
+
+fn gm_selftest_audit to int
+if not gm_audit_no_fp_atomics 0
+ret 21
+end
+if not gm_audit_no_fp_atomics 1
+ret 22
+end
+saved = gm_r_at 16384
+gm_w_at 16384 0x3a8
+bad1 = gm_audit_no_fp_atomics 1
+gm_w_at 16384 saved
+if bad1
+ret 23
+end
+if not gm_audit_probe 0x9a8
+ret 23
+end
+if not gm_audit_probe 0x3aa
+ret 23
+end
+if not gm_audit_probe 0x9aa
+ret 23
+end
+if not gm_audit_probe 0x3a9
+ret 23
+end
+if not gm_audit_probe 0x9a9
+ret 23
+end
+if not gm_audit_no_fp_atomics 1
+ret 24
+end
+ret 0
+end
+
+fn gm_init_cta_terms a edit f64 * to void
+put a 0 100000.0f64
+put a 1 0.0001f64
+put a 2 -3.25f64
+put a 3 0.0002f64
+put a 4 128.5f64
+put a 5 -0.0004f64
+put a 6 0.75f64
+put a 7 -64.125f64
+put a 8 0.0003f64
+put a 9 16.0f64
+put a 10 -0.0001f64
+put a 11 0.5f64
+put a 12 -0.25f64
+put a 13 -100000.0f64
+put a 14 0.0007f64
+put a 15 -128.5f64
+put a 16 0.0005f64
+put a 17 64.125f64
+put a 18 -0.0002f64
+put a 19 3.25f64
+put a 20 0.0009f64
+put a 21 -16.0f64
+put a 22 -0.0006f64
+put a 23 1.375f64
+end
+
+fn gm_selftest_reduce to int
+fwd = new f64 24 0.0f64
+rev = new f64 24 0.0f64
+intl = new f64 24 0.0f64
+gm_init_cta_terms edit fwd
+for i ulong 24
+put rev i get fwd sub 23 i
+if lt i 12
+put intl i get fwd mul i 2
+else
+put intl i get fwd add mul sub i 12 2 1
+end
+end
+qf = gm_reduce_i64_fixed view fwd 24
+qr = gm_reduce_i64_fixed view rev 24
+qi = gm_reduce_i64_fixed view intl 24
+if or ne qf qr ne qf qi
+ret 25
+end
+bf = bitcast ulong gm_fixed_to_f64 qf
+if or ne bf bitcast ulong gm_fixed_to_f64 qr ne bf bitcast ulong gm_fixed_to_f64 qi
+ret 26
+end
+tf = gm_reduce_tree_f64 view fwd 24
+tf2 = gm_reduce_tree_f64 view fwd 24
+if ne bitcast ulong tf bitcast ulong tf2
+ret 27
+end
+if gt fabs sub tf gm_fixed_to_f64 qf 1.0e-5f64
+ret 28
+end
+if gt fabs sub gm_reduce_tree_f64 view fwd 19 gm_fixed_to_f64 gm_reduce_i64_fixed view fwd 19 1.0e-5f64
+ret 29
+end
+ret 0
+end
+
+note Built-in Pillar 1 self-test: emitter, double-buffer swap, single-launch & bit-exact parity
+fn gm_selftest to int
+put og 0 256
+put og 1 8
+put og 2 16
+put og 3 2
+put og 4 32
+put og 5 2
+put og 6 2
+put og 40 12345
+put og 41 0
+put og 42 100
+put og 43 bitcast ulong 0.001f64
+put og 44 1
+put og 59 1
+if not ogeom
+ret 1
+end
+oinit
+if not gm_emit_megakernel 0
+ret 2
+end
+if not gm_emit_megakernel 1
+ret 3
+end
+if gt get gmcfg 1 16384
+ret 4
+end
+if gt get gmcfg 5 ulong GM_MAX_GPR
+ret 5
+end
+if lt get gmcfg 6 add get gmcfg 5 3
+ret 6
+end
+if ne get gmstats 5 0
+ret 7
+end
+if gt mul get og 8 4 GM_L2_LIMIT
+ret 8
+end
+sw = gm_swap_buf
+if ne sw 1
+ret 9
+end
+if ne get gmcfg 13 ulong GM_SLOT_B
+ret 10
+end
+sw = gm_swap_buf
+if ne sw 0
+ret 11
+end
+if ne get gmcfg 13 ulong GM_SLOT_A
+ret 12
+end
+gm_save_state
+lseq = gm_seq_steps 4 true
+gm_save_state
+gm_load_state 0
+oinit
+lmeg = gm_sim_steps 4 true
+if ne get gmstats 0 1
+ret 13
+end
+if ne get gmstats 1 4
+ret 14
+end
+if ne get gmstats 6 4
+ret 15
+end
+if ne bitcast ulong lseq bitcast ulong lmeg
+ret 16
+end
+for s ulong 4
+if ne bitcast ulong get gmlos_seq s bitcast ulong get gmlos_meg s
+ret 17
+end
+end
+if ne gm_parity_diff 4 0
+ret 20
+end
+rc_l1 = gm_selftest_audit
+if ne rc_l1 0
+ret rc_l1
+end
+rc_l1 = gm_selftest_reduce
+if ne rc_l1 0
+ret rc_l1
+end
+if not gm_launch_persistent 4
+ret 18
+end
+if ne get gmstats 0 1
+ret 19
+end
+ret 0
+end

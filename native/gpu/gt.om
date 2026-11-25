@@ -1,0 +1,1352 @@
+note SPDX-License-Identifier: AGPL-3.0-only
+note gt.om: Native SM121 (GB10) 1.58-bit Ternary & 2/4-bit LUT-GEMM SASS emitters,
+note raw SM121 instruction encoders (LOP3.LUT, PRMT, SHFL, VOTE, POPC, OMMA.SF.16864,
+note F2FP.E4M3/E2M1, MEMBAR.SC.SYS), warp-compaction prefix sum (Pillar 5),
+note +16 B bank-conflict-free SMEM LUT builders, and host reference/selftest oracles.
+note Pure OM-2 module; compose after om2 (or target a64macos + om2). Zero external deps.
+
+const GT_RZ uint 255
+const GT_PT uint 7
+const GT_URZ uint 63
+
+const GT_SHFL_IDX uint 0
+const GT_SHFL_UP uint 1
+const GT_SHFL_DOWN uint 2
+const GT_SHFL_BFLY uint 3
+
+const GT_VOTE_ALL uint 0
+const GT_VOTE_ANY uint 1
+
+const GT_SMEM_BLK uint 128
+const GT_SMEM_PAD uint 16
+const GT_SMEM_STRIDE uint 144
+
+const GT_SLOT_BYTES ulong 16384
+const GT_MAX_SLOTS ulong 4
+
+note 4 kernel slots x 16 KiB = 65536 bytes
+global gtcode uchar 65536
+global gtat ulong 1
+global gtpend uint 1
+global gtthr uint 4
+global gtgpr uint 4
+global gtsm uint 4
+
+note Control word packer: stall(9..12), yield(13), wbar(14..16), rbar(17..19), wait(20..25)
+fn gtcw_y st uint wb uint rb uint wt uint yld uint to uint
+  a = or shl and st 15 9 shl and yld 1 13
+  b = or shl and wb 7 14 shl and rb 7 17
+  ret or or a b shl and wt 63 20
+end
+
+fn gtcw st uint wb uint rb uint wt uint to uint
+  ret gtcw_y st wb rb wt 0
+end
+
+note Emit 32-bit little-endian word into gtcode at gtat
+fn gtw v uint to void
+  ap = get gtat 0
+  if ge add ap 4 65536
+    ret
+  end
+  put gtcode ap uchar and v 255
+  put gtcode add ap 1 uchar and shr v 8 255
+  put gtcode add ap 2 uchar and shr v 16 255
+  put gtcode add ap 3 uchar and shr v 24 255
+  put gtat 0 add ap 4
+end
+
+note Emit 128-bit SM121 SASS instruction quad (w0, w1, w2, w3)
+fn gtq a uint b uint c uint d uint to void
+  gtw a
+  gtw b
+  gtw c
+  gtw d
+end
+
+fn gt_slot_start slot ulong to void
+  if ge slot GT_MAX_SLOTS
+    ret
+  end
+  base = mul slot GT_SLOT_BYTES
+  for i ulong GT_SLOT_BYTES
+    put gtcode add base i uchar 0
+  end
+  put gtat 0 base
+  put gtpend 0 0
+end
+
+fn gt_slot_pc slot ulong to ulong
+  base = mul slot GT_SLOT_BYTES
+  ap = get gtat 0
+  if lt ap base
+    ret 0
+  end
+  ret div sub ap base 16
+end
+
+fn gt_w0 op uint d uint a uint to uint
+  v = or op shl and d 255 16
+  ret or v shl and a 255 24
+end
+
+fn gt_cw_take st uint to uint
+  wt = get gtpend 0
+  put gtpend 0 0
+  ret gtcw st 7 7 wt
+end
+
+fn gt_cw_sb0 st uint to uint
+  wt = get gtpend 0
+  put gtpend 0 1
+  ret gtcw_y st 0 7 wt 1
+end
+
+note -------------------------------------------------------------------------
+note Deliverable 1: Verified SM121 Raw SASS Instruction Encoders
+note Every encoding verified against CUDA 13.0 nvdisasm -b SM121 on Spark.
+note -------------------------------------------------------------------------
+
+note LOP3.LUT Rd, Ra, Rb, Rc, lut, !PT (register Rb, Rc; op 51 in bw_enc_sm121)
+note w0: 0x7212 | Rd<<16 | Ra<<24; w1: Rb; w2: 0x078e0000 | lut<<8 | Rc
+fn gtlop3 d uint a uint b uint c uint lut uint to void
+  gtw gt_w0 uint 0x7212 d a
+  gtw and b 255
+  w2 = or uint 0x078e0000 shl and lut 255 8
+  gtw or w2 and c 255
+  gtw gt_cw_take 6
+end
+
+note LOP3.LUT Rd, Ra, imm32, Rc, lut, !PT (immediate imm32, Rc)
+note w0: 0x7812 | Rd<<16 | Ra<<24; w1: imm32; w2: 0x078e0000 | lut<<8 | Rc
+fn gtlop3i d uint a uint imm uint c uint lut uint to void
+  gtw gt_w0 uint 0x7812 d a
+  gtw imm
+  w2 = or uint 0x078e0000 shl and lut 255 8
+  gtw or w2 and c 255
+  gtw gt_cw_take 6
+end
+
+note PRMT Rd, Ra, sel_imm, Rc (byte permute across Ra:Rc, 4-nibble selector)
+note w0: 0x7816 | Rd<<16 | Ra<<24; w1: sel_imm; w2: Rc
+fn gtprmt d uint a uint sel uint c uint to void
+  gtw gt_w0 uint 0x7816 d a
+  gtw sel
+  gtw and c 255
+  gtw gt_cw_take 6
+end
+
+note PRMT Rd, Ra, Rb, Rc (byte permute across Ra:Rc, register selector Rb)
+note w0: 0x7216 | Rd<<16 | Ra<<24; w1: Rb; w2: Rc
+fn gtprmtr d uint a uint b uint c uint to void
+  gtw gt_w0 uint 0x7216 d a
+  gtw and b 255
+  gtw and c 255
+  gtw gt_cw_take 6
+end
+
+note SHFL.{IDX=0, UP=1, DOWN=2, BFLY=3} PT, Rd, Ra, lane_imm, mask_imm
+note w0: 0x7f89 | Rd<<16 | Ra<<24; w1: mode<<26 | lane<<21 | mask<<8; w2: 0x000e0000
+fn gtshfl mode uint d uint a uint lane uint mask uint to void
+  gtw gt_w0 uint 0x7f89 d a
+  w1 = shl and mode 3 26
+  w1 = or w1 shl and lane 31 21
+  gtw or w1 shl and mask 31 8
+  gtw uint 0x000e0000
+  gtw gt_cw_sb0 2
+end
+
+note SHFL.{IDX=0, UP=1, DOWN=2, BFLY=3} PT, Rd, Ra, Rb, mask_imm (register lane/delta)
+note w0: 0x7589 | Rd<<16 | Ra<<24; w1: mode<<26 | mask<<8 | Rb; w2: 0x000e0000
+fn gtshflr mode uint d uint a uint breg uint mask uint to void
+  gtw gt_w0 uint 0x7589 d a
+  w1 = shl and mode 3 26
+  w1 = or w1 shl and mask 31 8
+  gtw or w1 and breg 255
+  gtw uint 0x000e0000
+  gtw gt_cw_sb0 2
+end
+
+note VOTE.{ALL=0, ANY=1} Rd, Pd, [!]Ps
+note w0: 0x7806 | Rd<<16; w1: 0; w2: negp<<26 | Ps<<23 | Pd<<17 | mode<<8
+fn gtvote d uint pd uint ps uint mode uint negp uint to void
+  gtw or uint 0x7806 shl and d 255 16
+  gtw 0
+  w2 = or shl and negp 1 26 shl and ps 7 23
+  w2 = or w2 shl and pd 7 17
+  gtw or w2 shl and mode 3 8
+  gtw gt_cw_take 6
+end
+
+note POPC Rd, Ra (population count; writes SB0 so consumers wait cleanly)
+note w0: 0x7309 | Rd<<16; w1: Ra; w2: 0
+fn gtpopc d uint a uint to void
+  gtw or uint 0x7309 shl and d 255 16
+  gtw and a 255
+  gtw 0
+  gtw gt_cw_sb0 2
+end
+
+note OMMA.SF.16864.F32.E2M1.E2M1.UE4M3.4X Rd, Ra, Rb, Rd, Rsa, Rsb, URZ
+note Silicon-verified GB10 NVFP4 Tensor Core (29-cycle same-acc RAW latency)
+fn gtommasf rd uint ra uint rb uint rsa uint rsb uint stall uint to void
+  gtw gt_w0 uint 0x747f rd ra
+  w1 = or uint 0x70000000 and rb 255
+  w1 = or w1 shl and rsa 255 8
+  gtw or w1 shl and rsb 255 20
+  gtw or uint 0x00043e00 and rd 255
+  gtw gt_cw_take stall
+end
+
+note F2FP.SATFINITE.E4M3.F32.PACK_AB_MERGE_C Rd, Ra, Rb, Rc (use GT_RZ for Rc=RZ)
+fn gtf2fp_e4m3 d uint a uint b uint c uint to void
+  gtw gt_w0 uint 0x723e d a
+  gtw and b 255
+  gtw or uint 0x04807000 and c 255
+  gtw gt_cw_take 6
+end
+
+note F2FP.SATFINITE.E2M1.F32.PACK_AB_MERGE_C Rd, Ra, Rb, Rc (use GT_RZ for Rc=RZ)
+fn gtf2fp_e2m1 d uint a uint b uint c uint to void
+  gtw gt_w0 uint 0x723e d a
+  gtw and b 255
+  gtw or uint 0x04207000 and c 255
+  gtw gt_cw_take 6
+end
+
+note MEMBAR.SC.SYS (system-scope sequential consistency fence for coherent Grace+GB10 ring)
+fn gtmembar to void
+  gtw uint 0x7992
+  gtw 0
+  gtw uint 0x00003000
+  gtw gt_cw_take 6
+end
+
+note -------------------------------------------------------------------------
+note Supporting SM121 SASS Encoders (Scoreboards, Shifts, Memory, Math, Flow)
+note -------------------------------------------------------------------------
+
+fn gtnop to void
+  gtq uint 0x7918 0 0 uint 0x000fc000
+end
+
+fn gtw0 to void
+  cw = gtcw 6 7 7 or get gtpend 0 1
+  put gtpend 0 and get gtpend 0 62
+  gtq uint 0x7918 0 0 cw
+end
+
+fn gtw1 to void
+  cw = gtcw 6 7 7 or get gtpend 0 2
+  put gtpend 0 and get gtpend 0 61
+  gtq uint 0x7918 0 0 cw
+end
+
+fn gtwall to void
+  cw = gtcw 6 7 7 get gtpend 0
+  put gtpend 0 0
+  gtq uint 0x7918 0 0 cw
+end
+
+fn gtbar to void
+  gtwall
+  gtq uint 0x7b1d 0 uint 0x00010000 uint 0x000fec00
+end
+
+fn gtexit to void
+  gtwall
+  gtq uint 0x794d 0 uint 0x03800000 uint 0x000fea00
+  gtq uint 0x00fc7947 uint 0xfffffffc uint 0x0383ffff uint 0x000fc000
+end
+
+fn gtexitp p uint to void
+  gtq or uint 0x094d shl and p 15 12 0 uint 0x03800000 gtcw 5 7 7 get gtpend 0
+  put gtpend 0 0
+end
+
+fn gtmovi d uint imm uint to void
+  cw = gtcw 6 7 7 get gtpend 0
+  put gtpend 0 0
+  gtq or uint 0x7802 shl and d 255 16 imm uint 0x0f00 cw
+end
+
+fn gtmovrz d uint to void
+  cw = gtcw 6 7 7 get gtpend 0
+  put gtpend 0 0
+  gtq or uint 0x7202 shl and d 255 16 GT_RZ uint 0x0f00 cw
+end
+
+fn gt_cw_ld more bool to uint
+  w = get gtpend 0
+  if more
+    w = and w 2
+  end
+  put gtpend 0 or get gtpend 0 1
+  ret gtcw_y 2 0 1 w 1
+end
+
+fn gt_cw_st more bool to uint
+  w = get gtpend 0
+  if more
+    w = and w 2
+  end
+  put gtpend 0 or get gtpend 0 2
+  ret gtcw_y 4 7 1 w 1
+end
+
+fn gts2r d uint sr uint more bool to void
+  gtw or uint 0x7919 shl and d 255 16
+  gtw 0
+  gtw shl and sr 255 8
+  gtw gt_cw_ld more
+end
+
+fn gtldc32 d uint off uint more bool to void
+  gtw or uint 0xff007b82 shl and d 255 16
+  gtw shl div off 4 8
+  gtw uint 0x0800
+  gtw gt_cw_ld more
+end
+
+fn gtldc64 d uint off uint to void
+  gtw or uint 0xff007b82 shl and d 255 16
+  gtw shl div off 4 8
+  gtw uint 0x0a00
+  gtw gt_cw_ld false
+end
+
+fn gtldcu64 ud uint off uint to void
+  gtw or uint 0xff0077ac shl and ud 63 16
+  gtw shl div off 8 8
+  gtw uint 0x08000a00
+  gtw gt_cw_sb0 2
+end
+
+fn gtiadd3 d uint a uint b uint c uint to void
+  gtw gt_w0 uint 0x7210 d a
+  gtw and b 255
+  gtw or uint 0x07ffe000 and c 255
+  gtw gt_cw_take 6
+end
+
+fn gtiadd3i d uint a uint imm uint c uint to void
+  gtw gt_w0 uint 0x7810 d a
+  gtw imm
+  gtw or uint 0x07ffe000 and c 255
+  gtw gt_cw_take 6
+end
+
+fn gtimadi d uint a uint imm uint c uint to void
+  gtw gt_w0 uint 0x7824 d a
+  gtw imm
+  gtw or uint 0x078e0200 and c 255
+  gtw gt_cw_take 6
+end
+
+fn gtimadw d uint a uint imm uint c uint to void
+  gtw gt_w0 uint 0x7825 d a
+  gtw imm
+  gtw or uint 0x078e0000 and c 255
+  gtw gt_cw_take 6
+end
+
+fn gtshr d uint a uint n uint to void
+  gtw or uint 0xff007819 shl and d 255 16
+  gtw n
+  gtw or uint 0x00011600 and a 255
+  gtw gt_cw_take 6
+end
+
+fn gtshfl_l d uint a uint b uint to void
+  gtw gt_w0 uint 0x7219 d a
+  gtw and b 255
+  gtw uint 0x000006ff
+  gtw gt_cw_take 6
+end
+
+fn gtshfl_li d uint a uint imm uint to void
+  gtw gt_w0 uint 0x7819 d a
+  gtw imm
+  gtw uint 0x000006ff
+  gtw gt_cw_take 6
+end
+
+fn gtisetp p uint a uint b uint cc uint to void
+  gtw or uint 0x720c shl and a 255 24
+  gtw and b 255
+  w2 = or uint 0x03f00070 shl and cc 7 12
+  gtw or w2 shl and p 7 17
+  gtw gt_cw_take 14
+end
+
+fn gtldg32 d uint a uint off uint ur uint more bool to void
+  gtw gt_w0 uint 0x7981 d a
+  gtw or and ur 63 shl and off 0xffffff 8
+  gtw uint 0x0c1e1900
+  gtw gt_cw_ld more
+end
+
+fn gtldg128 d uint a uint off uint ur uint more bool to void
+  gtw gt_w0 uint 0x7981 d a
+  gtw or and ur 63 shl and off 0xffffff 8
+  gtw uint 0x0c1e1d00
+  gtw gt_cw_ld more
+end
+
+fn gtstg32p p uint a uint b uint off uint ur uint to void
+  w0 = or uint 0x0986 shl and p 15 12
+  gtw or w0 shl and a 255 24
+  gtw or and b 255 shl and off 0xffffff 8
+  gtw or uint 0x0c101900 and ur 63
+  gtw gt_cw_st false
+end
+
+fn gtstg32 a uint b uint off uint ur uint to void
+  gtstg32p GT_PT a b off ur
+end
+
+fn gtlds32 d uint a uint off uint more bool to void
+  gtw gt_w0 uint 0x7984 d a
+  gtw shl and off 0xffffff 8
+  gtw uint 0x0800
+  gtw gt_cw_ld more
+end
+
+fn gtsts32 a uint off uint b uint more bool to void
+  gtw or uint 0x7388 shl and a 255 24
+  gtw or and b 255 shl and off 0xffffff 8
+  gtw uint 0x0800
+  gtw gt_cw_st more
+end
+
+fn gtfadd d uint a uint b uint to void
+  gtw gt_w0 uint 0x7221 d a
+  gtw and b 255
+  gtw 0
+  gtw gt_cw_take 6
+end
+
+fn gtfsub d uint a uint b uint to void
+  gtw gt_w0 uint 0x7221 d a
+  gtw or and b 255 uint 0x80000000
+  gtw 0
+  gtw gt_cw_take 6
+end
+
+fn gtfmul d uint a uint b uint to void
+  gtw gt_w0 uint 0x7220 d a
+  gtw and b 255
+  gtw uint 0x00400000
+  gtw gt_cw_take 6
+end
+
+fn gtbra slot ulong p uint tgt_pc ulong to void
+  here = gt_slot_pc slot
+  d = uint and sub sub tgt_pc here 1 0xffffffff
+  w1 = shl shr d 6 2
+  w2 = uint 0x03800000
+  if le tgt_pc here
+    w1 = or w1 uint 0xf0000000
+    w2 = uint 0x0383ffff
+  end
+  w0 = or uint 0x0947 shl and p 15 12
+  gtw or w0 shl and d 63 18
+  gtw w1
+  gtw w2
+  gtw gt_cw_take 5
+end
+
+note Warp compaction SASS sequence for Pillar 5 (ballot + POPC exclusive prefix sum):
+note Computes dense compacted lane index rdst in [0..rcnt-1] and total active count rcnt.
+fn gtwcompact ps uint rlane uint rtmp uint rdst uint rcnt uint to void
+  gtvote rtmp GT_PT ps GT_VOTE_ANY 0
+  gtpopc rcnt rtmp
+  gtmovi rdst 1
+  gtshfl_l rdst rdst rlane
+  gtiadd3i rdst rdst uint 0xffffffff GT_RZ
+  gtlop3 rdst rtmp rdst GT_RZ uint 0xc0
+  gtpopc rdst rdst
+  gtw0
+end
+
+note -------------------------------------------------------------------------
+note Deliverable 2a: 1.58-bit Ternary Weight Packer/Unpacker + UE4M3 Scales
+note -------------------------------------------------------------------------
+
+note Convert UE4M3FN byte (0..126, sign=0) to f32
+fn gt_ue4m3_to_f32 c uchar to f32
+  v = and uint c 127
+  e = and shr v 3 15
+  m = and v 7
+  if eq e 0
+    ret mul f32 m 0.001953125f32
+  end
+  if and eq e 15 eq m 7
+    ret bitcast f32 uint 0x7fc00000
+  end
+  raw = or shl add e 120 23 shl m 20
+  ret bitcast f32 raw
+end
+
+note Quantize non-negative f32 to nearest UE4M3FN byte (0..126, max 448.0)
+fn gt_f32_to_ue4m3 x f32 to uchar
+  if le x 0.0f32
+    ret uchar 0
+  end
+  v = x
+  if ge v 448.0f32
+    ret uchar 126
+  end
+  best = uchar 0
+  best_d = v
+  for i ulong 127
+    cand = gt_ue4m3_to_f32 uchar i
+    d = sub v cand
+    if lt d 0.0f32
+      d = neg d
+    end
+    if lt d best_d
+      best_d = d
+      best = uchar i
+    end
+  end
+  ret best
+end
+
+note Encode trit in {-1, 0, +1} to 2-bit code {0: 0, 1: +1, 2: -1}
+fn gt_trit_enc t int to uint
+  if gt t 0
+    ret 1
+  end
+  if lt t 0
+    ret 2
+  end
+  ret 0
+end
+
+note Decode 2-bit code {0, 1, 2, 3} to trit {0, +1, -1, 0}
+fn gt_trit_dec c uint to int
+  k = and c 3
+  if eq k 1
+    ret 1
+  end
+  if eq k 2
+    ret -1
+  end
+  ret 0
+end
+
+fn gt_pack4_byte trits view int * base ulong to uchar
+  n = len trits
+  b = uint 0
+  for j ulong 4
+    idx = add base j
+    if lt idx n
+      c = gt_trit_enc get trits idx
+      b = or b shl c uint mul j 2
+    end
+  end
+  ret uchar and b 255
+end
+
+note Pack trits into 4 trits/byte (2 bits/trit); returns packed bytes written
+fn gt_pack_tern trits view int * packed edit uchar * to ulong
+  n = len trits
+  nb = div add n 3 4
+  if gt nb len packed
+    ret 0
+  end
+  for i ulong nb bound 16777216
+    put packed i gt_pack4_byte trits mul i 4
+  end
+  ret nb
+end
+
+note Unpack 4 trits/byte (2 bits/trit) into trits; returns unpacked count
+fn gt_unpack_tern packed view uchar * trits edit int * to ulong
+  n = len trits
+  nb = div add n 3 4
+  if gt nb len packed
+    ret 0
+  end
+  for i ulong n bound 16777216
+    b = uint get packed div i 4
+    sh = uint mul rem i 4 2
+    put trits i gt_trit_dec shr b sh
+  end
+  ret n
+end
+
+fn gt_pack5_byte trits view int * base ulong to uchar
+  n = len trits
+  acc = uint 0
+  pwr = uint 1
+  for j ulong 5
+    idx = add base j
+    d = uint 1
+    if lt idx n
+      t = get trits idx
+      if gt t 0
+        d = 2
+      else
+        if lt t 0
+          d = 0
+        end
+      end
+    end
+    acc = add acc mul d pwr
+    pwr = mul pwr 3
+  end
+  ret uchar and acc 255
+end
+
+note Pack 5 trits/byte in base-3 (3^5 = 243 <= 255, 1.6 bits/trit)
+fn gt_pack_tern5 trits view int * packed edit uchar * to ulong
+  n = len trits
+  nb = div add n 4 5
+  if gt nb len packed
+    ret 0
+  end
+  for i ulong nb bound 16777216
+    put packed i gt_pack5_byte trits mul i 5
+  end
+  ret nb
+end
+
+fn gt_unpack5_byte trits edit int * base ulong byte_v uint to void
+  n = len trits
+  acc = byte_v
+  for j ulong 5
+    idx = add base j
+    d = rem acc 3
+    acc = div acc 3
+    if lt idx n
+      put trits idx sub int d 1
+    end
+  end
+end
+
+note Unpack 5 trits/byte base-3 into trits
+fn gt_unpack_tern5 packed view uchar * trits edit int * to ulong
+  n = len trits
+  nb = div add n 4 5
+  if gt nb len packed
+    ret 0
+  end
+  for i ulong nb bound 16777216
+    gt_unpack5_byte trits mul i 5 uint get packed i
+  end
+  ret n
+end
+
+fn gt_blk_mean_abs w view f32 * start ulong cnt ulong to f32
+  sum_a = 0.0f32
+  for j ulong cnt bound 4096
+    v = get w add start j
+    if lt v 0.0f32
+      v = neg v
+    end
+    sum_a = add sum_a v
+  end
+  ret div sum_a f32 cnt
+end
+
+note Compute per-block UE4M3 scale (mean(|w_blk|), clamped to UE4M3 range)
+fn gt_quant_ue4m3_scales w view f32 * scales edit uchar * blk ulong to ulong
+  n = len w
+  if eq blk 0
+    ret 0
+  end
+  ns = div add n sub blk 1 blk
+  if gt ns len scales
+    ret 0
+  end
+  for b ulong ns bound 16777216
+    start = mul b blk
+    cnt = sub n start
+    if gt cnt blk
+      cnt = blk
+    end
+    put scales b gt_f32_to_ue4m3 gt_blk_mean_abs w start cnt
+  end
+  ret ns
+end
+
+fn gt_quant_one v f32 thr f32 to int
+  if gt v thr
+    ret 1
+  end
+  if lt v neg thr
+    ret -1
+  end
+  ret 0
+end
+
+note Quantize float weights into {-1, 0, +1} using per-block UE4M3 scales
+fn gt_quant_tern w view f32 * scales view uchar * trits edit int * to ulong
+  n = len w
+  ns = len scales
+  if or eq ns 0 ne len trits n
+    ret 0
+  end
+  blk = div add n sub ns 1 ns
+  for i ulong n bound 16777216
+    sc = gt_ue4m3_to_f32 get scales div i blk
+    put trits i gt_quant_one get w i mul sc 0.5f32
+  end
+  ret n
+end
+
+fn gt_dequant_idx packed view uchar * scales view uchar * i ulong blk ulong to f32
+  b = get packed div i 4
+  sh = uint mul rem i 4 2
+  sc = get scales div i blk
+  t = gt_trit_dec shr uint b sh
+  ret mul f32 t gt_ue4m3_to_f32 sc
+end
+
+note Dequantize 2-bit packed ternary weights + UE4M3 block scales into f32
+fn gt_dequant_tern packed view uchar * scales view uchar * dst edit f32 * to ulong
+  n = len dst
+  ns = len scales
+  if or eq ns 0 lt len packed div add n 3 4
+    ret 0
+  end
+  blk = div add n sub ns 1 ns
+  for i ulong n bound 16777216
+    put dst i gt_dequant_idx packed scales i blk
+  end
+  ret n
+end
+
+note -------------------------------------------------------------------------
+note Deliverable 2b: SM121 LUT-GEMM & Ternary-GEMM Kernel Slot Emitters
+note Uses +16 B bank-conflict-free SMEM stride (144 B/blk = 2x64 B LUT + 16 B pad)
+note and gathers partial sums via LDS + FADD + SHFL.BFLY with ZERO multiplies!
+note -------------------------------------------------------------------------
+
+note Register map for LUT/Ternary GEMM kernels:
+note   R0:1=W_ptr, R2:3=x_ptr, R4:5=S_ptr, R6:7=C_ptr
+note   R8=K, R9=N, R10=tid, R11=ctaid.x, R12=lane, R13=warp
+note   R14=row, R15=smem_base, R16..23=x0..x7 (4-aligned LDG.E.128!),
+note   R24..29=LUT build scratch, R30=k_idx, R31=w_addr_lo/hi (R30:31 / R32:33),
+note   R34=w_u32, R35=nibble/addr, R36=lds_val, R37=acc_f32, R38=shfl_tmp, R39=blk_scale
+note   UR4=desc_hi_zero
+
+fn gtandi d uint a uint imm uint to void
+  gtlop3i d a imm GT_RZ uint 0xc0
+end
+
+fn gt_emit_gemm_prologue to void
+  gtldcu64 4 uint 0x358
+  gtldc64 0 uint 0x380
+  gtldc64 2 uint 0x388
+  gtldc64 4 uint 0x390
+  gtldc64 6 uint 0x398
+  gtldc32 8 uint 0x3a0 false
+  gtldc32 9 uint 0x3a4 true
+  gts2r 10 uint 0x21 true
+  gts2r 11 uint 0x25 false
+  gtw0
+  gtandi 12 10 31
+  gtshr 13 10 5
+  gtimadi 14 11 256 10
+  gtisetp 0 14 9 6
+  gtexitp 0
+  gtmovrz 37
+  gtmovrz 15
+end
+
+note Emit SMEM 16-entry binary/4-bit partial-sum LUT for 4 floats x[r_x..r_x+3] at sm_base+off
+note Zero multiplications: builds all 16 subsets via FADD only!
+fn gt_emit_lut4_table r_x uint r_sm uint off uint to void
+  x0 = r_x
+  x1 = add r_x 1
+  x2 = add r_x 2
+  x3 = add r_x 3
+  gtmovrz 24
+  gtsts32 r_sm off 24 false
+  gtsts32 r_sm add off 4 x0 true
+  gtsts32 r_sm add off 8 x1 true
+  gtfadd 24 x0 x1
+  gtsts32 r_sm add off 12 24 true
+  gtsts32 r_sm add off 16 x2 true
+  gtfadd 25 x2 x0
+  gtsts32 r_sm add off 20 25 true
+  gtfadd 26 x2 x1
+  gtsts32 r_sm add off 24 26 true
+  gtfadd 27 24 x2
+  gtsts32 r_sm add off 28 27 true
+  gtsts32 r_sm add off 32 x3 true
+  gtfadd 24 x3 x0
+  gtsts32 r_sm add off 36 24 true
+  gtfadd 25 x3 x1
+  gtsts32 r_sm add off 40 25 true
+  gtfadd 26 x3 x0
+  gtfadd 26 26 x1
+  gtsts32 r_sm add off 44 26 true
+  gtfadd 27 x3 x2
+  gtsts32 r_sm add off 48 27 true
+  gtfadd 24 27 x0
+  gtsts32 r_sm add off 52 24 true
+  gtfadd 25 27 x1
+  gtsts32 r_sm add off 56 25 true
+  gtfadd 26 27 x0
+  gtfadd 26 26 x1
+  gtsts32 r_sm add off 60 26 true
+  gtw1
+end
+
+note Emit 16-entry 2-trit partial-sum LUT at r_sm+off for (x0, x1):
+note code = t0 | (t1<<2), trit {0->0, 1->+1, 2->-1, 3->0}; zero multiplications!
+fn gt_emit_tern2_table r_x uint r_sm uint off uint to void
+  x0 = r_x
+  x1 = add r_x 1
+  gtmovrz 24
+  gtfsub 25 24 x0
+  gtfsub 26 24 x1
+  gtfadd 27 x0 x1
+  gtfsub 28 x1 x0
+  gtfsub 29 x0 x1
+  gtsts32 r_sm off 24 false
+  gtsts32 r_sm add off 4 x0 true
+  gtsts32 r_sm add off 8 25 true
+  gtsts32 r_sm add off 12 24 true
+  gtsts32 r_sm add off 16 x1 true
+  gtsts32 r_sm add off 20 27 true
+  gtsts32 r_sm add off 24 28 true
+  gtsts32 r_sm add off 28 x1 true
+  gtsts32 r_sm add off 32 26 true
+  gtsts32 r_sm add off 36 29 true
+  gtfsub 27 25 x1
+  gtsts32 r_sm add off 40 27 true
+  gtsts32 r_sm add off 44 26 true
+  gtsts32 r_sm add off 48 24 true
+  gtsts32 r_sm add off 52 x0 true
+  gtsts32 r_sm add off 56 25 true
+  gtsts32 r_sm add off 60 24 true
+  gtw1
+end
+
+fn gt_emit_warp_bfly_reduce acc uint tmp uint to void
+  d = uint 16
+  while ge d 1 bound 5
+    gtshfl GT_SHFL_BFLY tmp acc d 31
+    gtw0
+    gtfadd acc acc tmp
+    d = shr d 1
+  end
+end
+
+fn gt_emit_store_epilogue to void
+  gt_emit_warp_bfly_reduce 37 38
+  gtisetp 0 12 255 2
+  gtimadw 32 14 4 6
+  gtmembar
+  gtstg32p 0 32 37 0 4
+  gtw1
+  gtexit
+end
+
+fn gt_emit_slot_finish slot ulong thr uint gpr uint smem uint to ulong
+  while or lt gt_slot_pc slot 32 ne rem gt_slot_pc slot 8 0 bound 2048
+    gtnop
+  end
+  put gtthr slot thr
+  put gtgpr slot gpr
+  put gtsm slot smem
+  ret mul gt_slot_pc slot 16
+end
+
+note Emit 4-bit LUT-GEMM SM121 kernel into slot:
+note Precomputes 2x16-entry LUTs per 8-activation chunk in +16 B bank-conflict-free SMEM
+note (144 B stride), extracts nibbles with LOP3.LUT+SHR, gathers via LDS+FADD (0 multiplies).
+fn gt_emit_lut_gemm slot ulong k_dim uint n_dim uint to ulong
+  if or ge slot GT_MAX_SLOTS or eq k_dim 0 eq n_dim 0
+    ret 0
+  end
+  gt_slot_start slot
+  gt_emit_gemm_prologue
+  gtmovi 30 0
+  gtmovi 29 144
+  top = gt_slot_pc slot
+  gtimadw 32 30 4 2
+  gtldg128 16 32 0 4 false
+  gtldg128 20 32 16 4 true
+  gtw0
+  gtimadi 15 30 18 255
+  gt_emit_lut4_table 16 15 0
+  gt_emit_lut4_table 20 15 64
+  gtbar
+  gtimadi 32 14 k_dim 255
+  gtshr 33 30 1
+  gtiadd3 32 32 33 GT_RZ
+  gtimadw 32 32 1 0
+  gtldg32 34 32 0 4 false
+  gtw0
+  for b ulong 4
+    sh = uint mul b 8
+    gtshr 35 34 sh
+    gtlop3i 35 35 uint 0x0f GT_RZ uint 0xc0
+    gtshfl_li 35 35 2
+    gtiadd3 35 15 35 GT_RZ
+    gtlds32 36 35 0 false
+    gtw0
+    gtfadd 37 37 36
+    gtshr 35 34 add sh 4
+    gtlop3i 35 35 uint 0x0f GT_RZ uint 0xc0
+    gtshfl_li 35 35 2
+    gtiadd3 35 15 35 GT_RZ
+    gtlds32 36 35 64 false
+    gtw0
+    gtfadd 37 37 36
+  end
+  gtiadd3i 30 30 8 GT_RZ
+  gtisetp 0 30 8 1
+  gtbra slot 0 top
+  gt_emit_store_epilogue
+  ret gt_emit_slot_finish slot 256 48 mul div add k_dim 7 8 GT_SMEM_STRIDE
+end
+
+note Emit 1.58-bit Ternary LUT-GEMM SM121 kernel into slot:
+note Precomputes 2-trit partial-sum LUTs in +16 B padded SMEM (144 B/4-trit-grp),
+note extracts 4 trits/byte via LOP3.LUT+SHR, gathers via LDS+FADD, applies UE4M3 scale.
+fn gt_emit_tern_gemm slot ulong k_dim uint n_dim uint to ulong
+  if or ge slot GT_MAX_SLOTS or eq k_dim 0 eq n_dim 0
+    ret 0
+  end
+  gt_slot_start slot
+  gt_emit_gemm_prologue
+  gtmovi 30 0
+  top = gt_slot_pc slot
+  gtimadw 32 30 4 2
+  gtldg128 16 32 0 4 false
+  gtw0
+  gtimadi 15 30 36 255
+  gt_emit_tern2_table 16 15 0
+  gt_emit_tern2_table 18 15 64
+  gtbar
+  gtimadi 32 14 div k_dim 4 255
+  gtshr 33 30 2
+  gtiadd3 32 32 33 GT_RZ
+  gtimadw 32 32 1 0
+  gtldg32 34 32 0 4 false
+  gtw0
+  gtlop3i 35 34 uint 0x0f GT_RZ uint 0xc0
+  gtshfl_li 35 35 2
+  gtiadd3 35 15 35 GT_RZ
+  gtlds32 36 35 0 false
+  gtw0
+  gtfadd 37 37 36
+  gtshr 35 34 4
+  gtlop3i 35 35 uint 0x0f GT_RZ uint 0xc0
+  gtshfl_li 35 35 2
+  gtiadd3 35 15 35 GT_RZ
+  gtlds32 36 35 64 false
+  gtw0
+  gtfadd 37 37 36
+  gtiadd3i 30 30 4 GT_RZ
+  gtisetp 0 30 8 1
+  gtbra slot 0 top
+  gt_emit_store_epilogue
+  ret gt_emit_slot_finish slot 256 48 mul div add k_dim 3 4 GT_SMEM_STRIDE
+end
+
+note Emit SM121 Pillar 4/5 feature-showcase kernel slot exercising ALL encoders:
+note LOP3.LUT, PRMT, SHFL.{BFLY,UP,IDX}, VOTE+POPC warp compaction, F2FP.{E4M3,E2M1},
+note OMMA.SF.16864.F32.E2M1.E2M1.UE4M3.4X, and MEMBAR.SC.SYS.
+fn gt_emit_all_ops_slot slot ulong to ulong
+  if ge slot GT_MAX_SLOTS
+    ret 0
+  end
+  gt_slot_start slot
+  gt_emit_gemm_prologue
+  gtmovi 16 0x3f800000
+  gtmovi 17 0x40000000
+  gtmovi 18 0xbf800000
+  gtmovi 19 0x3fc00000
+  gtlop3 20 16 17 18 uint 0xea
+  gtlop3i 21 16 uint 0x0f0f0f0f 18 uint 0xc0
+  gtprmt 22 20 uint 0x3210 21
+  gtprmtr 23 20 12 21
+  gtshfl GT_SHFL_BFLY 24 22 1 31
+  gtshfl GT_SHFL_UP 25 22 1 0
+  gtshfl GT_SHFL_IDX 26 22 0 31
+  gtw0
+  gtisetp 1 12 16 1
+  gtwcompact 1 12 27 28 29
+  gtf2fp_e4m3 30 16 17 GT_RZ
+  gtf2fp_e2m1 31 18 19 GT_RZ
+  gtommasf 32 20 24 30 31 15
+  gtmembar
+  gtfadd 37 32 28
+  gtimadw 38 14 4 6
+  gtstg32 38 37 0 4
+  gtw1
+  gtexit
+  ret gt_emit_slot_finish slot 256 48 144
+end
+
+note -------------------------------------------------------------------------
+note Deliverable 3: Host Reference Functions & gt_selftest
+note -------------------------------------------------------------------------
+
+fn gt_popc_below ballot uint lane ulong to ulong
+  idx = ulong 0
+  for b ulong lane bound 32
+    if ne and shr ballot uint b 1 0
+      idx = add idx 1
+    end
+  end
+  ret idx
+end
+
+note Host reference for warp ballot + POPC prefix-sum compaction (Pillar 5)
+fn gt_wcompact_ref ballot uint active edit int * to ulong
+  cnt = ulong 0
+  lim = len active
+  for lane ulong 32
+    if ne and shr ballot uint lane 1 0
+      idx = gt_popc_below ballot lane
+      if lt idx lim
+        put active idx int lane
+      end
+      cnt = add cnt 1
+    end
+  end
+  ret cnt
+end
+
+fn gt_ref_lut4_hi lut edit f32 * loff ulong x3 f32 to void
+  for i ulong 8
+    v = get lut add loff i
+    put lut add loff add 8 i add x3 v
+  end
+end
+
+note Build 16-entry LUT in +16 B bank-conflict-free SMEM stride (zero multiplies)
+fn gt_ref_build_lut4 x view f32 * xoff ulong lut edit f32 * loff ulong to void
+  x0 = get x xoff
+  x1 = get x add xoff 1
+  x2 = get x add xoff 2
+  put lut loff 0.0f32
+  put lut add loff 1 x0
+  put lut add loff 2 x1
+  put lut add loff 3 add x0 x1
+  put lut add loff 4 x2
+  put lut add loff 5 add x2 x0
+  put lut add loff 6 add x2 x1
+  put lut add loff 7 add x2 add x0 x1
+  gt_ref_lut4_hi lut loff get x add xoff 3
+end
+
+note Build 16-entry 2-trit LUT (x0, x1) with zero multiplications
+fn gt_ref_build_tern2 x view f32 * xoff ulong lut edit f32 * loff ulong to void
+  x0 = get x xoff
+  x1 = get x add xoff 1
+  nx0 = neg x0
+  nx1 = neg x1
+  put lut loff 0.0f32
+  put lut add loff 1 x0
+  put lut add loff 2 nx0
+  put lut add loff 3 0.0f32
+  put lut add loff 4 x1
+  put lut add loff 5 add x1 x0
+  put lut add loff 6 add x1 nx0
+  put lut add loff 7 x1
+  put lut add loff 8 nx1
+  put lut add loff 9 add nx1 x0
+  put lut add loff 10 add nx1 nx0
+  put lut add loff 11 nx1
+  put lut add loff 12 0.0f32
+  put lut add loff 13 x0
+  put lut add loff 14 nx0
+  put lut add loff 15 0.0f32
+end
+
+note Shared 2-nibble (+16 B padded SMEM stride=36) partial-sum gather with zero multiplies
+fn gt_lut_pair_sum smem view f32 * sbase ulong bv uint to f32
+  v0 = get smem add sbase ulong and bv 15
+  v1 = get smem add add sbase 16 ulong and shr bv 4 15
+  ret add v0 v1
+end
+
+note Helper for gt_lut_gemm_ref: one row m against precomputed +16 B padded SMEM LUT
+fn gt_lut_row w4 view uchar * r_off ulong kbytes ulong smem view f32 * to f32
+  acc = 0.0f32
+  for b ulong kbytes bound 4194304
+    bv = uint get w4 add r_off b
+    sb = mul b 36
+    p = gt_lut_pair_sum smem sb bv
+    acc = add acc p
+  end
+  ret acc
+end
+
+fn gt_ref_build_lut4_grp x view f32 * g ulong smem edit f32 * to void
+  xo = mul g 8
+  lo = mul g 36
+  gt_ref_build_lut4 x xo smem lo
+  gt_ref_build_lut4 x add xo 4 smem add lo 16
+end
+
+fn gt_ref_build_tern2_grp x view f32 * g ulong smem edit f32 * to void
+  xo = mul g 4
+  lo = mul g 36
+  gt_ref_build_tern2 x xo smem lo
+  gt_ref_build_tern2 x add xo 2 smem add lo 16
+end
+
+note Host 4-bit LUT-GEMM reference (zero multiplies in inner loop, +16 B SMEM stride=36 floats)
+note y[m] = sum_{k} w4_bit(m, k) * x[k], where w4 packs 2 nibbles/byte (4 bits/nibble = 8 weights/byte)
+fn gt_lut_gemm_ref x view f32 * w4 view uchar * y edit f32 * to void
+  m = len y
+  k = len x
+  if or eq m 0 or eq k 0 ne rem k 8 0
+    ret
+  end
+  grps = div k 8
+  if gt mul grps 36 16384
+    ret
+  end
+  smem = new f32 16384 0.0f32
+  for g ulong grps bound 4096
+    gt_ref_build_lut4_grp x g edit smem
+  end
+  for r ulong m bound 16384
+    put y r gt_lut_row w4 mul r grps grps view smem
+  end
+end
+
+note Helper for gt_tern_gemm_ref: one row against precomputed +16 B padded SMEM LUT + optional UE4M3 scales
+fn gt_tern_row w2 view uchar * row ulong kbytes ulong smem view f32 * to f32
+  acc = 0.0f32
+  r_off = mul row kbytes
+  for b ulong kbytes bound 4194304
+    bv = uint get w2 add r_off b
+    sb = mul b 36
+    p = gt_lut_pair_sum smem sb bv
+    acc = add acc p
+  end
+  ret acc
+end
+
+fn gt_tern_blk_sum w2 view uchar * cfg view ulong 4 base_b ulong smem view f32 * to f32
+  r_off = get cfg 0
+  blk_b = get cfg 3
+  bacc = 0.0f32
+  for b ulong blk_b bound 4096
+    gb = add base_b b
+    bv = uint get w2 add r_off gb
+    sb = mul gb 36
+    p = gt_lut_pair_sum smem sb bv
+    bacc = add bacc p
+  end
+  ret bacc
+end
+
+fn gt_tern_row_sc w2 view uchar * cfg view ulong 4 smem view f32 * to f32
+  acc = 0.0f32
+  nb = div get cfg 1 get cfg 3
+  for sb ulong nb bound 65536
+    bacc = gt_tern_blk_sum w2 cfg mul sb get cfg 3 smem
+    sc = gt_ue4m3_to_f32 get w2 add get cfg 2 sb
+    acc = add acc mul bacc sc
+  end
+  ret acc
+end
+
+fn gt_tern_init_cfg w2 view uchar * m ulong grps ulong cfg edit ulong 4 to bool
+  wbytes = mul m grps
+  rem_s = sub len w2 wbytes
+  sc_per_row = div rem_s m
+  if or eq sc_per_row 0 ne rem grps sc_per_row 0
+    ret false
+  end
+  put cfg 1 grps
+  put cfg 2 wbytes
+  put cfg 3 div grps sc_per_row
+  ret true
+end
+
+note Host 1.58-bit Ternary LUT-GEMM reference (zero multiplies per trit; optional trailing UE4M3 scales)
+fn gt_tern_gemm_ref x view f32 * w2 view uchar * y edit f32 * to void
+  smem = new f32 16384 0.0f32
+  cfg = new ulong 4 0
+  if or eq len y 0 or eq len x 0 ne rem len x 4 0
+    ret
+  end
+  grps = div len x 4
+  if or lt len w2 mul len y grps gt mul grps 36 16384
+    ret
+  end
+  for g ulong grps bound 4096
+    gt_ref_build_tern2_grp x g edit smem
+  end
+  if eq len w2 mul len y grps
+    for r ulong len y bound 16384
+      put y r gt_tern_row w2 r grps view smem
+    end
+    ret
+  end
+  if not gt_tern_init_cfg w2 len y grps edit cfg
+    ret
+  end
+  for r ulong len y bound 16384
+    put cfg 0 mul r grps
+    put y r gt_tern_row_sc w2 view cfg view smem
+    put cfg 2 add get cfg 2 div grps get cfg 3
+  end
+end
+
+fn gt_abs_f32 v f32 to f32
+  if lt v 0.0f32
+    ret neg v
+  end
+  ret v
+end
+
+fn gt_selftest_fill_trits trits edit int * to void
+  put trits 0 1
+  put trits 1 -1
+  put trits 2 0
+  put trits 3 1
+  put trits 4 -1
+  put trits 5 -1
+  put trits 6 0
+  put trits 7 1
+  put trits 8 1
+  put trits 9 -1
+end
+
+fn gt_selftest_pack to int
+  trits = new int 10 0
+  p2 = new uchar 3 0
+  u2 = new int 10 0
+  p5 = new uchar 2 0
+  u5 = new int 10 0
+  gt_selftest_fill_trits edit trits
+  if ne gt_pack_tern view trits edit p2 3
+    ret 1
+  end
+  if ne gt_unpack_tern view p2 edit u2 10
+    ret 2
+  end
+  for i ulong 10
+    if ne get u2 i get trits i
+      ret 3
+    end
+  end
+  if ne gt_pack_tern5 view trits edit p5 2
+    ret 4
+  end
+  if ne gt_unpack_tern5 view p5 edit u5 10
+    ret 5
+  end
+  for i ulong 10
+    if ne get u5 i get trits i
+      ret 6
+    end
+  end
+  ret 0
+end
+
+fn gt_selftest_compact to int
+  act = new int 32 0
+  cnt = gt_wcompact_ref uint 0xa55a000f edit act
+  if ne cnt 12
+    ret 7
+  end
+  if or ne get act 0 0 ne get act 3 3
+    ret 8
+  end
+  if or ne get act 4 17 ne get act 11 31
+    ret 9
+  end
+  ret 0
+end
+
+fn gt_selftest_lut_gemm to int
+  x = new f32 8 0.0f32
+  w4 = new uchar 2 0
+  y4 = new f32 2 0.0f32
+  for i ulong 8
+    put x i f32 add i 1
+  end
+  put w4 0 uchar 0x35
+  put w4 1 uchar 0xa7
+  gt_lut_gemm_ref view x view w4 edit y4
+  if gt gt_abs_f32 sub get y4 0 15.0f32 0.0001f32
+    ret 10
+  end
+  if gt gt_abs_f32 sub get y4 1 20.0f32 0.0001f32
+    ret 11
+  end
+  ret 0
+end
+
+fn gt_selftest_tern_gemm to int
+  x = new f32 8 0.0f32
+  tr = new int 16 0
+  w2 = new uchar 4 0
+  yt = new f32 2 0.0f32
+  for i ulong 8
+    put x i f32 add i 1
+  end
+  put tr 0 1
+  put tr 1 -1
+  put tr 2 0
+  put tr 3 1
+  put tr 4 1
+  put tr 5 1
+  put tr 6 -1
+  put tr 7 0
+  put tr 8 -1
+  put tr 9 0
+  put tr 10 1
+  put tr 11 1
+  put tr 12 0
+  put tr 13 -1
+  put tr 14 1
+  put tr 15 -1
+  if ne gt_pack_tern view tr edit w2 4
+    ret 12
+  end
+  gt_tern_gemm_ref view x view w2 edit yt
+  if gt gt_abs_f32 sub get yt 0 7.0f32 0.0001f32
+    ret 13
+  end
+  if gt gt_abs_f32 sub get yt 1 -1.0f32 0.0001f32
+    ret 14
+  end
+  ret 0
+end
+
+fn gt_selftest to int
+  r = gt_selftest_pack
+  if ne r 0
+    ret r
+  end
+  r = gt_selftest_compact
+  if ne r 0
+    ret r
+  end
+  r = gt_selftest_lut_gemm
+  if ne r 0
+    ret r
+  end
+  r = gt_selftest_tern_gemm
+  if ne r 0
+    ret r
+  end
+  b0 = gt_emit_lut_gemm 0 64 256
+  b1 = gt_emit_tern_gemm 1 64 256
+  b2 = gt_emit_all_ops_slot 2
+  if or eq b0 0 or eq b1 0 eq b2 0
+    ret 15
+  end
+  if or lt get gtgpr 0 48 lt get gtgpr 1 48
+    ret 16
+  end
+  ret 0
+end

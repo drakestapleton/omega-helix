@@ -438,6 +438,121 @@ class StudioTestCase(unittest.TestCase):
         self.assertGreaterEqual(cat["count"], 1)
         self.assertEqual(cat["corpora"][0]["name"], "mathlib")
 
+    # ------------------------------------------------------------------ 8. Orca-Style SSH Remote & Pairing
+
+    def test_orca_ssh_remote_pairing_and_ui_routes(self) -> None:
+        import ssh_remote
+
+        self.assertEqual(ssh_remote.classify_client_ip("127.0.0.1"), "loopback")
+        self.assertEqual(ssh_remote.classify_client_ip("100.64.1.20"), "tailscale")
+        self.assertEqual(ssh_remote.classify_client_ip("192.168.1.10"), "lan")
+        self.assertEqual(ssh_remote.classify_client_ip("8.8.8.8"), "public")
+
+        pol = ssh_remote.StudioAccessPolicy(require_pairing=True, pairing_code="secret-pair-tok")
+        self.assertEqual(pol.ip_allowed("100.64.1.20"), (True, "tailscale"))
+        self.assertEqual(pol.ip_allowed("8.8.8.8"), (False, "public-denied"))
+        self.assertTrue(pol.verify_token("secret-pair-tok"))
+        self.assertFalse(pol.verify_token("wrong"))
+
+        cfg_dir = self.tmp_root / "cfg"
+        state_dir = self.tmp_root / "state"
+        old_cfg = os.environ.get("OMEGA_HELIX_CONFIG_DIR")
+        old_st = os.environ.get("OMEGA_HELIX_STATE_DIR")
+        os.environ["OMEGA_HELIX_CONFIG_DIR"] = str(cfg_dir)
+        os.environ["OMEGA_HELIX_STATE_DIR"] = str(state_dir)
+        try:
+            ssh_cfg = self.tmp_root / "ssh_config"
+            ssh_cfg.write_text("Host *\n  ServerAliveInterval 15\n\nHost spark\n  HostName 10.0.0.42\n  User drake\n  Port 2222\n", encoding="utf-8")
+            parsed = ssh_remote.parse_ssh_config(ssh_cfg)
+            self.assertEqual(len(parsed), 1)
+            self.assertEqual(parsed[0]["name"], "spark")
+            self.assertEqual(parsed[0]["port"], 2222)
+
+            ssh_remote.add_saved_host("gpu-box", "drake@192.168.1.99", port=22)
+            self.assertTrue(any(h["name"] == "gpu-box" for h in ssh_remote.load_saved_hosts()))
+            self.assertTrue(ssh_remote.remove_saved_host("gpu-box"))
+
+            lock = ssh_remote.InstanceLock(19999, lock_dir=state_dir)
+            lock.acquire()
+            lock.release()
+            self.assertEqual(ssh_remote.reclaim_stale_lock(19999, lock_dir=state_dir)["status"], "none")
+
+            srv = studio_server.create_server(
+                host="127.0.0.1",
+                port=0,
+                workspace_dir=self.tmp_root / "ws_ssh",
+                bin_dir=self.bin_dir,
+                access_policy=pol,
+            )
+            port = srv.server_address[1]
+            th = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
+            th.start()
+            try:
+                # Unpaired request rejected (401)
+                try:
+                    urllib.request.urlopen(f"http://127.0.0.1:{port}/api/remotes", timeout=3.0)
+                    self.fail("expected 401 without pairing token")
+                except urllib.error.HTTPError as e:
+                    try:
+                        self.assertEqual(e.code, 401)
+                    finally:
+                        e.close()
+
+                # Paired Bearer request succeeds
+                req = urllib.request.Request(f"http://127.0.0.1:{port}/api/remotes", headers={"Authorization": "Bearer secret-pair-tok"})
+                with urllib.request.urlopen(req, timeout=3.0) as resp:
+                    rem = json.loads(resp.read().decode("utf-8"))
+                self.assertTrue(rem["ok"])
+                self.assertIn("server_pairing", rem)
+
+                # Hostile SSH target rejected fail-closed
+                bad_req = urllib.request.Request(
+                    f"http://127.0.0.1:{port}/api/remotes/probe",
+                    data=json.dumps({"host": "-oProxyCommand=evil"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "Authorization": "Bearer secret-pair-tok"},
+                    method="POST",
+                )
+                try:
+                    urllib.request.urlopen(bad_req, timeout=3.0)
+                    self.fail("expected 400 for invalid ssh target")
+                except urllib.error.HTTPError as e:
+                    try:
+                        self.assertEqual(e.code, 400)
+                    finally:
+                        e.close()
+
+                # Pair save + remove + clean UI HTML with starry dark/light + dialog
+                pair_req = urllib.request.Request(
+                    f"http://127.0.0.1:{port}/api/remotes/pair",
+                    data=json.dumps({"pairing": f"http://127.0.0.1:{port}/?pair=secret-pair-tok", "id": "spark-tun"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "Authorization": "Bearer secret-pair-tok"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(pair_req, timeout=3.0) as resp:
+                    pr = json.loads(resp.read().decode("utf-8"))
+                self.assertTrue(pr["ok"])
+                self.assertEqual(pr["remote"]["id"], "spark-tun")
+
+                ui_req = urllib.request.Request(f"http://127.0.0.1:{port}/?pair=secret-pair-tok")
+                with urllib.request.urlopen(ui_req, timeout=3.0) as resp:
+                    html = resp.read().decode("utf-8")
+                self.assertIn('meta name="color-scheme" content="light dark"', html)
+                self.assertIn('id="remote-ssh-dialog"', html)
+                self.assertIn('class="uni-sky-bg"', html)
+            finally:
+                srv.shutdown()
+                srv.server_close()
+                th.join(timeout=3.0)
+        finally:
+            if old_cfg is None:
+                os.environ.pop("OMEGA_HELIX_CONFIG_DIR", None)
+            else:
+                os.environ["OMEGA_HELIX_CONFIG_DIR"] = old_cfg
+            if old_st is None:
+                os.environ.pop("OMEGA_HELIX_STATE_DIR", None)
+            else:
+                os.environ["OMEGA_HELIX_STATE_DIR"] = old_st
+
 
 if __name__ == "__main__":
     unittest.main()

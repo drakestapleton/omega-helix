@@ -1,0 +1,2824 @@
+note SPDX-License-Identifier: Apache-2.0
+note native/gpu/ejit.om: Pillar 6 -- Live Self-Evolving SM121 SASS JIT via Proof-Carrying Helix.
+note Pure seeded OM-2 (zero C, zero Python, zero CUDA).
+note Adapts seed/helix (helix_jit.om, monk_check.om, dual_checker.om, egraph_opt.om) + bw_hazard.om:
+note   1. SM121 SASS decoder/analyzer & schedule mutator (Genomes 0=Monk, 1=Predator, 2=Mitosis, 5=Trickster, 6=Ascetic).
+note   2. Proof-Carrying Gate (Monk + EGP2 + Antibodies #1-#15 + nested BSSY + GPR ceiling <= 61 / <= 125).
+note   3. Live Double-Buffer Hot-Swap Controller (ejit_step_tick, ejit_parity_check, atomic A <-> B flip).
+
+const EJ_MAX_INS ulong 2048
+const EJ_REC_STRIDE ulong 24
+
+note Antibody / Proof-Gate Return Codes (0 = PASS):
+const EJ_OK ulong 0
+const EJ_ERR_DIGEST_SPOOF ulong 1
+const EJ_ERR_NON_BIJECTION ulong 2
+const EJ_ERR_OPCODE_SMUGGLE ulong 3
+const EJ_ERR_ANCHOR_ESCAPE ulong 4
+const EJ_ERR_DEP_INVERSION ulong 5
+const EJ_ERR_SCOREBOARD_HAZARD ulong 6
+const EJ_ERR_LENGTH_MISMATCH ulong 7
+const EJ_ERR_SIG_SMUGGLE ulong 8
+const EJ_ERR_TRAILING_BYTES ulong 9
+const EJ_ERR_MISALIGNED_QMD ulong 10
+const EJ_ERR_ZERO_GEN_CAP ulong 11
+const EJ_ERR_ILLEGAL_OPCODE ulong 12
+const EJ_ERR_BB_LEADER_ESCAPE ulong 13
+const EJ_ERR_ALU_FLOOR_6 ulong 14
+const EJ_ERR_I2F_SHAVE ulong 15
+const EJ_ERR_NESTED_BSSY ulong 16
+const EJ_ERR_GPR_CEILING ulong 17
+const EJ_ERR_EGP2_PROOF ulong 18
+const EJ_ERR_PARITY_MISMATCH ulong 19
+const EJ_ERR_REPLAY_DIGEST ulong 20
+const EJ_ERR_REPLAY_ORDER ulong 21
+const EJ_MAX_RCPT ulong 256
+
+note Double-buffer & Reference/Candidate SASS Storage (up to 2048 instructions x 4 u32 words):
+global ejBufA ulong 8192
+global ejBufB ulong 8192
+global ejRef ulong 8192
+global ejCand ulong 8192
+
+note Decoded SM121 Instruction Records (2048 x 24 ulongs):
+global ejRefRec ulong 49152
+global ejCndRec ulong 49152
+global ejPerm ulong 2048
+global ejInv ulong 2048
+global ejSeen ulong 2048
+global ejTarget uchar 2048
+
+note CFG Scoreboard & BSSY Dataflow State (2048 PCs x 512 reg slots):
+global ejWbar uchar 512
+global ejRbar uchar 512
+global ejInW uchar 1048576
+global ejInR uchar 1048576
+global ejHzSeen ulong 2048
+global ejHzQu ulong 2048
+global ejHzWk ulong 2048
+global ejBssyIn ulong 2048
+
+note Double-Buffer Controller State:
+note 0:activeSlot (0=A, 1=B), 1:activeN, 2:regCap (64/128), 3:stepCount, 4:flipCount, 5:rejectCount,
+note 6:lastCode, 7:rawFloor (6), 8:genA, 9:genB, 10:swapsLast, 11:yieldsLast,
+note 12:stallsRefLast, 13:stallsCandLast, 14:parityDigestRef, 15:parityDigestCand
+global ejState ulong 16
+global ejLaunchEnv ulong 8
+
+note Receipt-Logged Live Evolutionary Promotion & Deterministic Replay State:
+global ejRcptN ulong 1
+global ejRcptStep ulong 256
+global ejRcptGen ulong 256
+global ejRcptSha uchar 8192
+
+note Self-contained SHA-256 Digest & Scratch State:
+global ejRefSha uchar 32
+global ejCndSha uchar 32
+global ejCertShaRef uchar 32
+global ejCertShaCnd uchar 32
+global ejShaW uint 64
+global ejShaH uint 8
+global ejShaV uint 8
+global ejShaK uint 64
+global ejShaDat uchar 32896
+global ejShaDig uchar 32
+global ejShaInitDone ulong 1
+
+note Functional SM121 Parity Simulator State:
+global ejSimR ulong 128
+global ejSimP ulong 8
+global ejSimMem ulong 256
+
+note Self-contained EGP2 Structural Proof State:
+global ejEgPar ulong 512
+global ejEgOp ulong 512
+global ejEgA ulong 512
+global ejEgB ulong 512
+global ejEgC ulong 512
+global ejEgVal ulong 512
+global ejEgCost ulong 512
+global ejEgBest ulong 512
+global ejEgTr ulong 2048
+global ejEgEnv ulong 8
+global ejEgNc ulong 1
+global ejEgTrN ulong 1
+
+note ==================== TWO'S-COMPLEMENT & BIT HELPERS ====================
+fn ejU2l x ulong to long
+if lt x 0x8000000000000000
+ret long x
+end
+ret sub long -1 long xor x 0xffffffffffffffff
+end
+
+fn ejL2u v long to ulong
+if ge v 0
+ret ulong v
+end
+ret xor ulong sub long -1 v 0xffffffffffffffff
+end
+
+fn ejU2i x ulong to long
+if lt x 0x80000000
+ret long x
+end
+ret sub long x 0x100000000
+end
+
+fn ejRd32 c view uchar * o ulong to ulong
+a = ulong get c o
+a = or a shl ulong get c add o 1 8
+a = or a shl ulong get c add o 2 16
+ret or a shl ulong get c add o 3 24
+end
+
+note ==================== SELF-CONTAINED SHA-256 (ANTIBODY #1) ====================
+fn ejShaInitK to void
+if ne get ejShaInitDone 0 0
+ret
+end
+put ejShaK 0 0x428a2f98
+put ejShaK 1 0x71374491
+put ejShaK 2 0xb5c0fbcf
+put ejShaK 3 0xe9b5dba5
+put ejShaK 4 0x3956c25b
+put ejShaK 5 0x59f111f1
+put ejShaK 6 0x923f82a4
+put ejShaK 7 0xab1c5ed5
+put ejShaK 8 0xd807aa98
+put ejShaK 9 0x12835b01
+put ejShaK 10 0x243185be
+put ejShaK 11 0x550c7dc3
+put ejShaK 12 0x72be5d74
+put ejShaK 13 0x80deb1fe
+put ejShaK 14 0x9bdc06a7
+put ejShaK 15 0xc19bf174
+put ejShaK 16 0xe49b69c1
+put ejShaK 17 0xefbe4786
+put ejShaK 18 0x0fc19dc6
+put ejShaK 19 0x240ca1cc
+put ejShaK 20 0x2de92c6f
+put ejShaK 21 0x4a7484aa
+put ejShaK 22 0x5cb0a9dc
+put ejShaK 23 0x76f988da
+put ejShaK 24 0x983e5152
+put ejShaK 25 0xa831c66d
+put ejShaK 26 0xb00327c8
+put ejShaK 27 0xbf597fc7
+put ejShaK 28 0xc6e00bf3
+put ejShaK 29 0xd5a79147
+put ejShaK 30 0x06ca6351
+put ejShaK 31 0x14292967
+put ejShaK 32 0x27b70a85
+put ejShaK 33 0x2e1b2138
+put ejShaK 34 0x4d2c6dfc
+put ejShaK 35 0x53380d13
+put ejShaK 36 0x650a7354
+put ejShaK 37 0x766a0abb
+put ejShaK 38 0x81c2c92e
+put ejShaK 39 0x92722c85
+put ejShaK 40 0xa2bfe8a1
+put ejShaK 41 0xa81a664b
+put ejShaK 42 0xc24b8b70
+put ejShaK 43 0xc76c51a3
+put ejShaK 44 0xd192e819
+put ejShaK 45 0xd6990624
+put ejShaK 46 0xf40e3585
+put ejShaK 47 0x106aa070
+put ejShaK 48 0x19a4c116
+put ejShaK 49 0x1e376c08
+put ejShaK 50 0x2748774c
+put ejShaK 51 0x34b0bcb5
+put ejShaK 52 0x391c0cb3
+put ejShaK 53 0x4ed8aa4a
+put ejShaK 54 0x5b9cca4f
+put ejShaK 55 0x682e6ff3
+put ejShaK 56 0x748f82ee
+put ejShaK 57 0x78a5636f
+put ejShaK 58 0x84c87814
+put ejShaK 59 0x8cc70208
+put ejShaK 60 0x90befffa
+put ejShaK 61 0xa4506ceb
+put ejShaK 62 0xbef9a3f7
+put ejShaK 63 0xc67178f2
+put ejShaInitDone 0 1
+end
+
+fn ejShaExpand off ulong to void
+for i ulong 16
+p = add off mul i 4
+w = shl uint get ejShaDat p 24
+w = or w shl uint get ejShaDat add p 1 16
+w = or w shl uint get ejShaDat add p 2 8
+w = or w uint get ejShaDat add p 3
+put ejShaW i w
+end
+for k ulong 48
+idx = add k 16
+w15 = get ejShaW sub idx 15
+w2 = get ejShaW sub idx 2
+s0 = xor xor rotr w15 7 rotr w15 18 shr w15 3
+s1 = xor xor rotr w2 17 rotr w2 19 shr w2 10
+sumw = add get ejShaW sub idx 16 s0
+sumw = add sumw get ejShaW sub idx 7
+put ejShaW idx add sumw s1
+end
+end
+
+fn ejShaT1 i ulong to uint
+e = get ejShaV 4
+s1 = xor rotr e 6 rotr e 11
+s1 = xor s1 rotr e 25
+ch = xor and e get ejShaV 5 and not e get ejShaV 6
+t1 = add get ejShaV 7 s1
+t1 = add t1 ch
+t1 = add t1 get ejShaK i
+ret add t1 get ejShaW i
+end
+
+fn ejShaT2 to uint
+a = get ejShaV 0
+b = get ejShaV 1
+c = get ejShaV 2
+s0 = xor rotr a 2 rotr a 13
+s0 = xor s0 rotr a 22
+maj = xor and a b and a c
+maj = xor maj and b c
+ret add s0 maj
+end
+
+fn ejShaRound i ulong to void
+t1 = ejShaT1 i
+t2 = ejShaT2
+put ejShaV 7 get ejShaV 6
+put ejShaV 6 get ejShaV 5
+put ejShaV 5 get ejShaV 4
+put ejShaV 4 add get ejShaV 3 t1
+put ejShaV 3 get ejShaV 2
+put ejShaV 2 get ejShaV 1
+put ejShaV 1 get ejShaV 0
+put ejShaV 0 add t1 t2
+end
+
+fn ejShaBlock off ulong to void
+ejShaExpand off
+for i ulong 8
+put ejShaV i get ejShaH i
+end
+for i ulong 64
+ejShaRound i
+end
+for i ulong 8
+put ejShaH i add get ejShaH i get ejShaV i
+end
+end
+
+fn ejShaPad n ulong to ulong
+remb = rem n 64
+tlen = ulong 64
+if ge remb 56
+tlen = ulong 128
+end
+padEnd = add sub n remb tlen
+put ejShaDat n 0x80
+k = add n 1
+while lt k padEnd bound 128
+put ejShaDat k 0
+k = add k 1
+end
+bits = mul n 8
+for j ulong 8
+off = sub sub padEnd 1 j
+sh = mul j 8
+put ejShaDat off uchar and shr bits sh 255
+end
+ret div padEnd 64
+end
+
+fn ejShaOut to void
+for i ulong 8
+hv = get ejShaH i
+o = mul i 4
+put ejShaDig o uchar and shr hv 24 255
+put ejShaDig add o 1 uchar and shr hv 16 255
+put ejShaDig add o 2 uchar and shr hv 8 255
+put ejShaDig add o 3 uchar and hv 255
+end
+end
+
+fn ejSha256 n ulong to void
+ejShaInitK
+put ejShaH 0 0x6a09e667
+put ejShaH 1 0xbb67ae85
+put ejShaH 2 0x3c6ef372
+put ejShaH 3 0xa54ff53a
+put ejShaH 4 0x510e527f
+put ejShaH 5 0x9b05688c
+put ejShaH 6 0x1f83d9ab
+put ejShaH 7 0x5be0cd19
+totBlk = ejShaPad n
+for bi ulong totBlk bound 514
+ejShaBlock mul bi 64
+end
+ejShaOut
+end
+
+fn ejHashWords isCand bool n ulong to void
+nb = mul n 16
+for i ulong n bound 2048
+b = mul i 4
+for k ulong 4
+w = ulong 0
+if isCand
+w = get ejCand add b k
+else
+w = get ejRef add b k
+end
+o = add mul i 16 mul k 4
+put ejShaDat o uchar and w 255
+put ejShaDat add o 1 uchar and shr w 8 255
+put ejShaDat add o 2 uchar and shr w 16 255
+put ejShaDat add o 3 uchar and shr w 24 255
+end
+end
+ejSha256 nb
+for i ulong 32
+if isCand
+put ejCndSha i get ejShaDig i
+else
+put ejRefSha i get ejShaDig i
+end
+end
+end
+
+note ==================== SM121 INSTRUCTION DECODER (BW_HAZARD + EXT) ====================
+fn ejSize w2 ulong to long
+s = and shr w2 9 7
+if le s 4
+ret long 1
+end
+if eq s 5
+ret long 2
+end
+if eq s 6
+ret long 4
+end
+ret long -1
+end
+
+fn ejAtn w2 ulong to long
+s = and shr w2 9 7
+if or eq s 2 eq s 3
+ret long 2
+end
+ret long 1
+end
+
+fn ejAddR d edit ulong 24 reg ulong n long u ulong to void
+if eq reg 255
+ret
+end
+if le n 0
+ret
+end
+k = get d 9
+if ge k 5
+ret
+end
+put d add 11 k or or reg shl ulong n 8 shl u 16
+put d 9 add k 1
+end
+
+fn ejAddW d edit ulong 24 reg ulong n long u ulong to void
+if eq reg 255
+ret
+end
+if le n 0
+ret
+end
+if ge get d 10 1
+ret
+end
+put d 16 or or reg shl ulong n 8 shl u 16
+put d 10 1
+end
+
+fn ejSetNm d edit ulong 24 id ulong v ulong lt8 ulong to void
+put d 19 id
+put d 7 v
+put d 8 lt8
+end
+
+fn ejDecWab c view uchar * d edit ulong 24 id ulong to void
+w0 = ejRd32 c 0
+ejAddW d and shr w0 16 255 1 0
+ejAddR d shr w0 24 1 0
+ejAddR d and ejRd32 c 4 255 1 0
+ejAddR d and ejRd32 c 8 255 1 0
+ejSetNm d id 0 0
+end
+
+fn ejDecAb c view uchar * d edit ulong 24 id ulong to void
+w0 = ejRd32 c 0
+ejAddW d and shr w0 16 255 1 0
+ejAddR d shr w0 24 1 0
+ejAddR d and ejRd32 c 4 255 1 0
+ejSetNm d id 0 0
+end
+
+fn ejDecAc c view uchar * d edit ulong 24 id ulong to void
+w0 = ejRd32 c 0
+ejAddW d and shr w0 16 255 1 0
+ejAddR d shr w0 24 1 0
+ejAddR d and ejRd32 c 8 255 1 0
+ejSetNm d id 0 0
+end
+
+fn ejDecMma c view uchar * d edit ulong 24 id ulong to void
+w0 = ejRd32 c 0
+ejAddW d and shr w0 16 255 4 0
+ejAddR d shr w0 24 4 0
+ejAddR d and ejRd32 c 4 255 2 0
+ejAddR d and ejRd32 c 8 255 4 0
+ejSetNm d id 0 0
+end
+
+fn ejDecBra d edit ulong 24 w0 ulong w1 ulong to void
+s = shr w1 2
+if ne and w1 0x80000000 0
+s = or s 0xc0000000
+end
+u = and shl s 6 0xffffffff
+u = or u and shr w0 18 63
+t = add ejU2i u 1
+if gt t 2147483647
+t = sub t 4294967296
+end
+put d 17 2
+put d 18 ejL2u t
+ejSetNm d 6 0 0
+end
+
+fn ejDecMem2 c view uchar * d edit ulong 24 op ulong to bool
+w0 = ejRd32 c 0
+w2 = ejRd32 c 8
+rd = and shr w0 16 255
+ra = shr w0 24
+rb = and ejRd32 c 4 255
+rc = and w2 255
+de = ne and w2 0x08000000 0
+if eq op 2436
+n = ejSize w2
+if lt n 0
+ret false
+end
+ejAddW d rd n 0
+ejAddR d ra 1 0
+if de
+ejAddR d rb 1 1
+end
+ejSetNm d 36 1 1
+ret true
+end
+if or eq op 904 eq op 2440
+n = ejSize w2
+if lt n 0
+ret false
+end
+ejAddR d ra 1 0
+ejAddR d rb n 0
+if de
+ejAddR d rc 1 1
+end
+ejSetNm d 37 0 1
+ret true
+end
+if eq op 2946
+n = ejSize w2
+if lt n 0
+ret false
+end
+ejAddW d rd n 0
+ejAddR d ra 1 0
+ejSetNm d 11 1 1
+ret true
+end
+if eq op 1964
+n = ejSize w2
+if lt n 0
+ret false
+end
+ejAddW d rd n 1
+ejAddR d ra 1 1
+ejSetNm d 12 1 1
+ret true
+end
+ret false
+end
+
+fn ejDecMem c view uchar * d edit ulong 24 op ulong to bool
+w0 = ejRd32 c 0
+w2 = ejRd32 c 8
+rd = and shr w0 16 255
+ra = shr w0 24
+rb = and ejRd32 c 4 255
+rc = and w2 255
+an = long 1
+if ne and w2 256 0
+an = long 2
+end
+de = ne and w2 0x08000000 0
+if eq op 2433
+n = ejSize w2
+if lt n 0
+ret false
+end
+ejAddW d rd n 0
+ejAddR d ra an 0
+if de
+ejAddR d rb 1 1
+end
+ejSetNm d 33 1 1
+ret true
+end
+if eq op 2438
+n = ejSize w2
+if lt n 0
+ret false
+end
+ejAddR d ra an 0
+ejAddR d rb n 0
+if de
+ejAddR d rc 1 1
+end
+ejSetNm d 34 0 1
+ret true
+end
+if eq op 2472
+ejAddW d rd ejAtn w2 0
+ejAddR d ra an 0
+ejAddR d rb ejAtn w2 0
+if de
+ejAddR d rc 1 1
+end
+ejSetNm d 35 1 1
+ret true
+end
+if eq op 937
+ejAddW d rd 2 0
+ejAddR d ra 2 0
+ejAddR d rb 2 0
+ejAddR d rc 2 0
+ejSetNm d 35 1 1
+ret true
+end
+ret ejDecMem2 c d op
+end
+
+fn ejDecFlt c view uchar * d edit ulong 24 op ulong to bool
+w0 = ejRd32 c 0
+w1 = ejRd32 c 4
+rd = and shr w0 16 255
+ra = shr w0 24
+rb = and w1 255
+if eq op 545
+ejDecAb c d 22
+ret true
+end
+if eq op 544
+ejDecAb c d 23
+ret true
+end
+if eq op 547
+ejDecWab c d 24
+ret true
+end
+if eq op 523
+ejAddR d ra 1 0
+ejAddR d rb 1 0
+ejSetNm d 25 0 0
+ret true
+end
+if eq op 520
+ejDecAb c d 26
+ret true
+end
+if eq op 521
+ejDecAb c d 27
+ret true
+end
+if eq op 574
+ejDecAb c d 28
+ret true
+end
+if eq op 581
+ejAddW d rd 1 0
+ejAddR d rb 1 0
+ejSetNm d 29 0 0
+ret true
+end
+if or eq op 773 eq op 776
+ejAddW d rd 1 0
+ejAddR d rb 1 0
+if eq op 773
+ejSetNm d 30 1 0
+else
+ejSetNm d 31 1 0
+end
+ret true
+end
+if eq op 3977
+ejAddW d rd 1 0
+ejAddR d ra 1 0
+ejSetNm d 32 1 0
+ret true
+end
+ret false
+end
+
+fn ejDecIsetp c view uchar * d edit ulong 24 op ulong to bool
+w0 = ejRd32 c 0
+w1 = ejRd32 c 4
+w2 = ejRd32 c 8
+ra = shr w0 24
+rb = and w1 255
+w = long 1
+if ne and w2 0x10000 0
+w = long 2
+end
+if eq op 524
+ejAddR d ra w 0
+ejAddR d rb w 0
+ejSetNm d 16 0 0
+ret true
+end
+if eq op 2060
+ejAddR d ra w 0
+ejSetNm d 16 0 0
+ret true
+end
+if eq op 3084
+ejAddR d ra w 0
+ejAddR d rb w 1
+ejSetNm d 16 0 0
+ret true
+end
+ret false
+end
+
+fn ejDecAlu2 c view uchar * d edit ulong 24 op ulong to bool
+w0 = ejRd32 c 0
+w1 = ejRd32 c 4
+w2 = ejRd32 c 8
+rd = and shr w0 16 255
+ra = shr w0 24
+rb = and w1 255
+rc = and w2 255
+if eq op 548
+ejDecWab c d 13
+ret true
+end
+if eq op 528
+ejDecWab c d 17
+ret true
+end
+if eq op 2084
+ejDecAc c d 13
+ret true
+end
+if eq op 2064
+ejDecAc c d 17
+ret true
+end
+if eq op 3108
+ejAddW d rd 1 0
+ejAddR d ra 1 0
+ejAddR d rb 1 1
+ejAddR d rc 1 0
+ejSetNm d 13 0 0
+ret true
+end
+if eq op 2085
+ejAddW d rd 2 0
+ejAddR d ra 1 0
+ejAddR d rc 2 0
+ejSetNm d 14 0 0
+ret true
+end
+if eq op 549
+ejAddW d rd 2 0
+ejAddR d ra 1 0
+ejAddR d rb 1 0
+ejAddR d rc 2 0
+ejSetNm d 14 0 0
+ret true
+end
+if eq op 565
+ejAddW d rd 2 0
+ejAddR d ra 2 0
+ejAddR d rb 2 0
+ejSetNm d 17 0 0
+ret true
+end
+if eq op 2101
+ejAddW d rd 2 0
+ejAddR d ra 2 0
+ejSetNm d 17 0 0
+ret true
+end
+if eq op 551
+ejDecWab c d 15
+ret true
+end
+if ejDecIsetp c d op
+ret true
+end
+if eq op 572
+ejDecMma c d 18
+ret true
+end
+if eq op 634
+ejDecMma c d 19
+ret true
+end
+if eq op 2073
+ejDecAc c d 20
+ret true
+end
+if eq op 537
+ejDecWab c d 20
+ret true
+end
+if eq op 2066
+ejDecAc c d 21
+ret true
+end
+if eq op 530
+ejDecWab c d 21
+ret true
+end
+ret ejDecFlt c d op
+end
+
+fn ejDecAlu c view uchar * d edit ulong 24 op ulong to bool
+w0 = ejRd32 c 0
+w1 = ejRd32 c 4
+rd = and shr w0 16 255
+ra = shr w0 24
+rb = and w1 255
+if eq op 2328
+ejSetNm d 1 0 0
+ret true
+end
+if eq op 2845
+ejSetNm d 2 0 0
+ret true
+end
+if eq op 2450
+ejSetNm d 3 0 0
+ret true
+end
+if eq op 2447
+ejAddR d ra 1 0
+ejSetNm d 4 0 1
+ret true
+end
+if eq op 2381
+put d 17 1
+ejSetNm d 5 0 0
+ret true
+end
+if eq op 2375
+ejDecBra d w0 w1
+ret true
+end
+if eq op 2373
+ejSetNm d 7 0 0
+ret true
+end
+if eq op 2369
+ejSetNm d 8 0 0
+ret true
+end
+if eq op 514
+ejAddW d rd 1 0
+ejAddR d rb 1 0
+ejSetNm d 9 0 0
+ret true
+end
+if eq op 2050
+ejAddW d rd 1 0
+ejSetNm d 9 0 0
+ret true
+end
+if eq op 2329
+ejAddW d rd 1 0
+ejSetNm d 10 1 0
+ret true
+end
+ret ejDecAlu2 c d op
+end
+
+fn ejDec1 c view uchar * d edit ulong 24 to long
+for i ulong 24
+put d i 0
+end
+w0 = ejRd32 c 0
+w3 = ejRd32 c 12
+op = and w0 0xfff
+put d 0 op
+put d 1 and shr w0 12 15
+put d 2 and shr w3 9 15
+put d 3 and shr w3 13 1
+wb = and shr w3 14 7
+rb = and shr w3 17 7
+put d 4 wb
+put d 5 rb
+if or eq wb 6 eq rb 6
+ret long -1
+end
+put d 6 and shr w3 20 63
+if ejDecAlu c d op
+ret long 0
+end
+if ejDecMem c d op
+ret long 0
+end
+ret long -1
+end
+
+fn ejDecodeBuf isCand bool cnt ulong to bool
+ins = new uchar 16 0
+rec = new ulong 24 0
+for pc ulong cnt bound 2048
+base = mul pc 4
+for k ulong 4
+w = ulong 0
+if isCand
+w = get ejCand add base k
+else
+w = get ejRef add base k
+end
+put ins mul k 4 uchar and w 255
+put ins add mul k 4 1 uchar and shr w 8 255
+put ins add mul k 4 2 uchar and shr w 16 255
+put ins add mul k 4 3 uchar and shr w 24 255
+end
+if ne ejDec1 ins rec 0
+ret false
+end
+db = mul pc 24
+for j ulong 24
+if isCand
+put ejCndRec add db j get rec j
+else
+put ejRefRec add db j get rec j
+end
+end
+end
+ret true
+end
+
+note ==================== ANCHORS, BB LEADERS & DEPENDENCIES ====================
+fn ejMarkTargets cnt ulong to void
+for i ulong cnt bound 2048
+put ejTarget i 0
+end
+if gt cnt 0
+put ejTarget 0 1
+end
+for pc ulong cnt bound 2048
+db = mul pc 24
+if eq get ejRefRec add db 17 2
+tg = ejU2l get ejRefRec add db 18
+dst = add long pc tg
+if and ge dst 0 lt dst long cnt
+put ejTarget ulong dst 1
+end
+if lt add pc 1 cnt
+put ejTarget add pc 1 1
+end
+end
+end
+end
+
+fn ejIsNonLeaderAnchor pc ulong to bool
+db = mul pc 24
+if ne get ejRefRec add db 17 0
+ret true
+end
+if ne get ejRefRec add db 1 7
+ret true
+end
+nm = get ejRefRec add db 19
+if or le nm 8 ge nm 33
+ret true
+end
+if or eq nm 16 eq nm 25
+ret true
+end
+ret false
+end
+
+fn ejIsMonkAnchor pc ulong to bool
+if ne get ejTarget pc 0
+ret true
+end
+ret ejIsNonLeaderAnchor pc
+end
+
+fn ejIsSwapAnchor pc ulong to bool
+if ejIsMonkAnchor pc
+ret true
+end
+db = mul pc 24
+if ne get ejRefRec add db 6 0
+ret true
+end
+if ne get ejRefRec add db 4 7
+ret true
+end
+ret ne get ejRefRec add db 5 7
+end
+
+fn ejRegOverlap a ulong b ulong to bool
+if or eq a 0 eq b 0
+ret false
+end
+ra = and a 255
+na = and shr a 8 255
+ejua = and shr a 16 1
+rb = and b 255
+nb = and shr b 8 255
+ub = and shr b 16 1
+if ne ejua ub
+ret false
+end
+if or eq ra 255 eq rb 255
+ret false
+end
+if or le add ra na rb le add rb nb ra
+ret false
+end
+ret true
+end
+
+fn ejHasRaw u ulong v ulong to bool
+du = mul u 24
+dv = mul v 24
+if eq get ejRefRec add du 10 0
+ret false
+end
+wu = get ejRefRec add du 16
+for j ulong get ejRefRec add dv 9 bound 5
+if ejRegOverlap wu get ejRefRec add add dv 11 j
+ret true
+end
+end
+ret false
+end
+
+fn ejHasWaw u ulong v ulong to bool
+du = mul u 24
+dv = mul v 24
+if or eq get ejRefRec add du 10 0 eq get ejRefRec add dv 10 0
+ret false
+end
+ret ejRegOverlap get ejRefRec add du 16 get ejRefRec add dv 16
+end
+
+fn ejHasDep u ulong v ulong to bool
+if ejHasWaw u v
+ret true
+end
+if ejHasRaw u v
+ret true
+end
+du = mul u 24
+dv = mul v 24
+if ne get ejRefRec add dv 10 0
+wv = get ejRefRec add dv 16
+for j ulong get ejRefRec add du 9 bound 5
+if ejRegOverlap get ejRefRec add add du 11 j wv
+ret true
+end
+end
+end
+ret false
+end
+
+fn ejCndStall pc ulong to ulong
+ret and shr get ejCand add mul pc 4 3 9 15
+end
+
+fn ejSetCndStall pc ulong nst ulong to void
+idx = add mul pc 4 3
+w3 = get ejCand idx
+nw3 = or and w3 not shl ulong 15 9 shl and nst 15 9
+put ejCand idx nw3
+end
+
+fn ejSumRefStall lo ulong hi ulong to ulong
+tot = ulong 0
+k = lo
+while lt k hi bound 2048
+tot = add tot get ejRefRec add mul k 24 2
+k = add k 1
+end
+ret tot
+end
+
+fn ejSumCndStall lo ulong hi ulong to ulong
+tot = ulong 0
+k = lo
+while lt k hi bound 2048
+tot = add tot ejCndStall k
+k = add k 1
+end
+ret tot
+end
+
+note ==================== CFG SCOREBOARD & NESTED BSSY VERIFIER ====================
+fn ejChkOpnd opnd ulong chkR bool to bool
+reg = and opnd 255
+cnt = and shr opnd 8 255
+uni = and shr opnd 16 1
+base = add mul uni 256 reg
+for k ulong cnt bound 4
+idx = add base k
+if lt idx 512
+if ne get ejWbar idx 0
+ret false
+end
+if chkR
+if ne get ejRbar idx 0
+ret false
+end
+end
+end
+end
+ret true
+end
+
+fn ejMarkOpnd opnd ulong bit ulong isR bool to void
+reg = and opnd 255
+cnt = and shr opnd 8 255
+uni = and shr opnd 16 1
+base = add mul uni 256 reg
+b8 = uchar bit
+for k ulong cnt bound 4
+idx = add base k
+if lt idx 512
+if isR
+put ejRbar idx or get ejRbar idx b8
+else
+put ejWbar idx or get ejWbar idx b8
+end
+end
+end
+end
+
+fn ejStepHazard pc ulong check bool to bool
+db = mul pc 24
+wt = get ejCndRec add db 6
+if ne wt 0
+clr = uchar and not wt 255
+w8 = uchar and wt 255
+for i ulong 512
+put ejWbar i and get ejWbar i clr
+if ne and get ejRbar i w8 0
+put ejRbar i 0
+end
+end
+end
+nr = get ejCndRec add db 9
+nw = get ejCndRec add db 10
+if check
+for j ulong nr bound 5
+if not ejChkOpnd get ejCndRec add add db 11 j false
+ret false
+end
+end
+if ne nw 0
+if not ejChkOpnd get ejCndRec add db 16 true
+ret false
+end
+end
+end
+if and ne get ejCndRec add db 7 0 ne nw 0
+wb = get ejCndRec add db 4
+if lt wb 6
+ejMarkOpnd get ejCndRec add db 16 shl ulong 1 wb false
+end
+end
+if ne get ejCndRec add db 8 0
+rb2 = get ejCndRec add db 5
+wb2 = get ejCndRec add db 4
+lm = ulong 0
+if lt rb2 6
+lm = or lm shl ulong 1 rb2
+end
+if lt wb2 6
+lm = or lm shl ulong 1 wb2
+end
+if ne lm 0
+for j ulong nr bound 5
+ejMarkOpnd get ejCndRec add add db 11 j lm true
+end
+end
+end
+ret true
+end
+
+fn ejLoadIn pc ulong to void
+off = mul pc 512
+for i ulong 512
+put ejWbar i get ejInW add off i
+put ejRbar i get ejInR add off i
+end
+end
+
+fn ejJoinTo tgt ulong to bool
+off = mul tgt 512
+ch = false
+for i ulong 512
+ejow = get ejInW add off i
+nw = or ejow get ejWbar i
+if ne nw ejow
+put ejInW add off i nw
+ch = true
+end
+orv = get ejInR add off i
+nrv = or orv get ejRbar i
+if ne nrv orv
+put ejInR add off i nrv
+ch = true
+end
+end
+ret ch
+end
+
+fn ejReachPush n ulong tgt long top ulong to ulong
+if or lt tgt 0 ge tgt long n
+ret top
+end
+u = ulong tgt
+if eq get ejHzSeen u 0
+put ejHzSeen u 1
+put ejHzWk top u
+ret add top 1
+end
+ret top
+end
+
+fn ejEdge n ulong tgt long top ulong to ulong
+if or lt tgt 0 ge tgt long n
+ret top
+end
+u = ulong tgt
+ch = ejJoinTo u
+sv = get ejHzSeen u
+qv = get ejHzQu u
+if and or ch eq sv 1 eq qv 0
+put ejHzQu u 1
+put ejHzWk top u
+ret add top 1
+end
+ret top
+end
+
+fn ejZeroHz n ulong to void
+for i ulong n bound 2048
+put ejHzSeen i 0
+put ejHzQu i 0
+put ejBssyIn i 0
+off = mul i 512
+for r ulong 512
+put ejInW add off r 0
+put ejInR add off r 0
+end
+end
+end
+
+fn ejDoReach n ulong to void
+put ejHzSeen 0 1
+put ejHzWk 0 0
+top = ulong 1
+while gt top 0 bound 4096
+top = sub top 1
+pc = get ejHzWk top
+db = mul pc 24
+fl = get ejCndRec add db 17
+gd = get ejCndRec add db 1
+if or eq fl 0 ne gd 7
+top = ejReachPush n add long pc 1 top
+end
+if eq fl 2
+tg = ejU2l get ejCndRec add db 18
+top = ejReachPush n add long pc tg top
+end
+end
+end
+
+fn ejCheckBssyEdge n ulong tgt long dnext ulong top ulong to long
+if or lt tgt 0 ge tgt long n
+ret long top
+end
+u = ulong tgt
+cur = get ejBssyIn u
+if eq cur 0
+put ejBssyIn u dnext
+put ejHzWk top u
+ret long add top 1
+end
+if ne cur dnext
+if gt dnext cur
+put ejBssyIn u dnext
+put ejHzWk top u
+ret long add top 1
+end
+end
+ret long top
+end
+
+fn ejCheckNoNestedBssy n ulong to bool
+for i ulong n bound 2048
+put ejBssyIn i 0
+end
+put ejBssyIn 0 1
+put ejHzWk 0 0
+top = ulong 1
+while gt top 0 bound 8192
+top = sub top 1
+pc = get ejHzWk top
+d = get ejBssyIn pc
+db = mul pc 24
+nm = get ejCndRec add db 19
+dout = d
+if eq nm 7
+if gt d 1
+ret false
+end
+dout = ulong 2
+end
+if eq nm 4
+dout = ulong 1
+end
+fl = get ejCndRec add db 17
+gd = get ejCndRec add db 1
+if or eq fl 0 ne gd 7
+t = ejCheckBssyEdge n add long pc 1 dout top
+top = ulong t
+end
+if eq fl 2
+tg = ejU2l get ejCndRec add db 18
+t2 = ejCheckBssyEdge n add long pc tg dout top
+top = ulong t2
+end
+end
+ret true
+end
+
+fn ejCheckCfgHazards n ulong to bool
+ejZeroHz n
+ejDoReach n
+put ejHzWk 0 0
+put ejHzQu 0 1
+top = ulong 1
+while gt top 0 bound 65536
+top = sub top 1
+pc = get ejHzWk top
+put ejHzQu pc 0
+put ejHzSeen pc 2
+ejLoadIn pc
+z = ejStepHazard pc false
+db = mul pc 24
+fl = get ejCndRec add db 17
+gd = get ejCndRec add db 1
+if or eq fl 0 ne gd 7
+top = ejEdge n add long pc 1 top
+end
+if eq fl 2
+tg = ejU2l get ejCndRec add db 18
+top = ejEdge n add long pc tg top
+end
+end
+for pc ulong n bound 2048
+if ne get ejHzSeen pc 0
+ejLoadIn pc
+if not ejStepHazard pc true
+ret false
+end
+end
+end
+ret true
+end
+
+note ==================== GPR CEILING & ANTIBODIES #1-#15 ====================
+fn ejOpndMaxGpr opnd ulong to ulong
+if eq opnd 0
+ret 0
+end
+reg = and opnd 255
+cnt = and shr opnd 8 255
+uni = and shr opnd 16 1
+if or ne uni 0 eq reg 255
+ret 0
+end
+if eq cnt 0
+ret 0
+end
+ret sub add reg cnt 1
+end
+
+fn ejCheckGprCeiling n ulong regCap ulong to bool
+lim = ulong 61
+if gt regCap 64
+lim = ulong 125
+end
+if and gt regCap 0 le regCap 64
+lim = sub regCap 3
+if gt lim 61
+lim = ulong 61
+end
+end
+for pc ulong n bound 2048
+db = mul pc 24
+if ne get ejCndRec add db 10 0
+mg = ejOpndMaxGpr get ejCndRec add db 16
+if gt mg lim
+ret false
+end
+end
+nr = get ejCndRec add db 9
+for j ulong nr bound 5
+mg2 = ejOpndMaxGpr get ejCndRec add add db 11 j
+if gt mg2 lim
+ret false
+end
+end
+end
+ret true
+end
+
+fn ejRawSpanOk u ulong v ulong inclV bool flr ulong to bool
+hiRef = v
+hiCnd = get ejInv v
+if inclV
+hiRef = add v 1
+hiCnd = add hiCnd 1
+end
+rcyc = ejSumRefStall u hiRef
+eff = flr
+if lt eff 6
+eff = ulong 6
+end
+nm = get ejRefRec add mul u 24 19
+if or eq nm 14 eq nm 29
+if lt eff 6
+eff = ulong 6
+end
+end
+req = rcyc
+if gt req eff
+req = eff
+end
+ret ge ejSumCndStall get ejInv u hiCnd req
+end
+
+fn ejCheckI2fOne u ulong flr ulong to bool
+du = mul u 24
+if ne get ejRefRec add du 19 29
+ret true
+end
+eff = flr
+if lt eff 6
+eff = ulong 6
+end
+rst = get ejRefRec add du 2
+if gt rst eff
+rst = eff
+end
+ret ge ejCndStall get ejInv u rst
+end
+
+fn ejCheckRawOne u ulong n ulong flr ulong to bool
+du = mul u 24
+if or eq get ejRefRec add du 10 0 ne get ejRefRec add du 7 0
+ret true
+end
+lim = add u 16
+if gt lim n
+lim = n
+end
+v = add u 1
+while lt v lim bound 16
+if ejHasRaw u v
+ret ejRawSpanOk u v false flr
+end
+if ejHasWaw u v
+ret true
+end
+dbv = mul v 24
+if ne get ejRefRec add dbv 17 0
+ret ejRawSpanOk u v true flr
+end
+if ejIsMonkAnchor v
+ret ejRawSpanOk u v true flr
+end
+v = add v 1
+end
+ret true
+end
+
+fn ejCheckPermBounds n ulong to bool
+if or eq n 0 gt n 2048
+ret false
+end
+for i ulong n bound 2048
+if ge get ejPerm i n
+ret false
+end
+end
+ret true
+end
+
+fn ejCheckBijection n ulong to bool
+for i ulong n bound 2048
+put ejSeen i 0
+end
+for i ulong n bound 2048
+r = get ejPerm i
+if ne get ejSeen r 0
+ret false
+end
+put ejSeen r 1
+put ejInv r i
+end
+ret true
+end
+
+fn ejCheckBBLeaders n ulong to bool
+for i ulong n bound 2048
+if ne get ejTarget i 0
+if ne get ejPerm i i
+ret false
+end
+end
+end
+ret true
+end
+
+fn ejCheckOtherAnchors n ulong to bool
+for i ulong n bound 2048
+if ejIsNonLeaderAnchor i
+if ne get ejPerm i i
+ret false
+end
+end
+end
+ret true
+end
+
+fn ejCheckFunc n ulong to bool
+for i ulong n bound 2048
+ri = get ejPerm i
+cb = mul i 4
+rb3 = mul ri 4
+if ne get ejCand cb get ejRef rb3
+ret false
+end
+if ne get ejCand add cb 1 get ejRef add rb3 1
+ret false
+end
+if ne get ejCand add cb 2 get ejRef add rb3 2
+ret false
+end
+cw = and get ejCand add cb 3 0xfc0001ff
+rw = and get ejRef add rb3 3 0xfc0001ff
+if ne cw rw
+ret false
+end
+end
+ret true
+end
+
+fn ejCheckDeps n ulong to bool
+for u ulong n bound 2048
+pu = get ejInv u
+v = add u 1
+while lt v n bound 2048
+if ejHasDep u v
+if ge pu get ejInv v
+ret false
+end
+end
+v = add v 1
+end
+end
+ret true
+end
+
+fn ejCheckI2fAll n ulong flr ulong to bool
+for u ulong n bound 2048
+if not ejCheckI2fOne u flr
+ret false
+end
+end
+ret true
+end
+
+fn ejCheckRawAll n ulong flr ulong to bool
+for u ulong n bound 2048
+if not ejCheckRawOne u n flr
+ret false
+end
+end
+ret true
+end
+
+note Complete Proof-Carrying Monk + Antibodies #2-#7, #12-#15 + Nested BSSY + GPR Ceiling Gate:
+fn ejMonkVerify n ulong flr ulong regCap ulong to ulong
+effFlr = flr
+if lt effFlr 6
+effFlr = ulong 6
+end
+if not ejCheckPermBounds n
+ret EJ_ERR_LENGTH_MISMATCH
+end
+if not ejCheckBijection n
+ret EJ_ERR_NON_BIJECTION
+end
+if not ejCheckBBLeaders n
+ret EJ_ERR_BB_LEADER_ESCAPE
+end
+if not ejCheckOtherAnchors n
+ret EJ_ERR_ANCHOR_ESCAPE
+end
+if not ejCheckFunc n
+ret EJ_ERR_OPCODE_SMUGGLE
+end
+if not ejDecodeBuf true n
+ret EJ_ERR_ILLEGAL_OPCODE
+end
+if not ejCheckGprCeiling n regCap
+ret EJ_ERR_GPR_CEILING
+end
+if not ejCheckDeps n
+ret EJ_ERR_DEP_INVERSION
+end
+if not ejCheckNoNestedBssy n
+ret EJ_ERR_NESTED_BSSY
+end
+if not ejCheckCfgHazards n
+ret EJ_ERR_SCOREBOARD_HAZARD
+end
+if not ejCheckI2fAll n effFlr
+ret EJ_ERR_I2F_SHAVE
+end
+if not ejCheckRawAll n effFlr
+ret EJ_ERR_ALU_FLOOR_6
+end
+ret EJ_OK
+end
+
+note Verify SHA-256 Digest Binding (Antibody #1) + Byte Length (Antibody #7) + Monk:
+fn ejVerifySigned n ulong refBytes ulong cndBytes ulong regCap ulong to ulong
+if or eq n 0 gt n 2048
+ret EJ_ERR_LENGTH_MISMATCH
+end
+if or ne refBytes mul n 16 ne cndBytes mul n 16
+ret EJ_ERR_LENGTH_MISMATCH
+end
+ejHashWords false n
+ejHashWords true n
+for i ulong 32
+if ne get ejRefSha i get ejCertShaRef i
+ret EJ_ERR_DIGEST_SPOOF
+end
+if ne get ejCndSha i get ejCertShaCnd i
+ret EJ_ERR_DIGEST_SPOOF
+end
+end
+ret ejMonkVerify n 6 regCap
+end
+
+note Launch-Gate Authority Antibodies #8-#11:
+fn ejCheckLaunchGate sigOk ulong declLen ulong actLen ulong qmdAddr ulong qmdBytes ulong capGen ulong to ulong
+if eq sigOk 0
+ret EJ_ERR_SIG_SMUGGLE
+end
+if ne actLen declLen
+ret EJ_ERR_TRAILING_BYTES
+end
+if or ne rem qmdAddr 256 0 ne qmdBytes 384
+ret EJ_ERR_MISALIGNED_QMD
+end
+if eq capGen 0
+ret EJ_ERR_ZERO_GEN_CAP
+end
+ret EJ_OK
+end
+
+note ==================== EGP2 STRUCTURAL EQUIVALENCE VERIFIER ====================
+fn ejEgReset to void
+put ejEgNc 0 0
+put ejEgTrN 0 0
+end
+
+fn ejEgFind x ulong to ulong
+c = x
+for i ulong 64
+p = get ejEgPar c
+if eq p c
+ret c
+end
+c = p
+end
+ret c
+end
+
+fn ejEgAdd op ulong a ulong b ulong c ulong val ulong to ulong
+id = get ejEgNc 0
+put ejEgNc 0 add id 1
+put ejEgPar id id
+put ejEgOp id op
+put ejEgA id a
+put ejEgB id b
+put ejEgC id c
+put ejEgVal id val
+ret id
+end
+
+fn ejEgUnion u ulong v ulong rule ulong to void
+ru = ejEgFind u
+rv = ejEgFind v
+if eq ru rv
+ret
+end
+put ejEgPar rv ru
+t = get ejEgTrN 0
+if lt t 500
+b = mul t 4
+put ejEgTr b rule
+put ejEgTr add b 1 u
+put ejEgTr add b 2 v
+put ejEgTr add b 3 ru
+put ejEgTrN 0 add t 1
+end
+end
+
+fn ejEgHasConst id ulong want ulong to bool
+c = ejEgFind id
+n = get ejEgNc 0
+for i ulong n bound 512
+if and eq ejEgFind i c and eq get ejEgOp i 1 eq get ejEgVal i want
+ret true
+end
+end
+ret false
+end
+
+fn ejEgCheckFma u ulong v ulong comm bool to bool
+if or ne get ejEgOp u 3 ne get ejEgOp v 6
+ret false
+end
+mSide = get ejEgA u
+cSide = get ejEgB u
+if comm
+mSide = get ejEgB u
+cSide = get ejEgA u
+end
+if ne ejEgFind cSide ejEgFind get ejEgC v
+ret false
+end
+cm = ejEgFind mSide
+va = ejEgFind get ejEgA v
+vb = ejEgFind get ejEgB v
+n = get ejEgNc 0
+for j ulong n bound 512
+if eq ejEgFind j cm
+if eq get ejEgOp j 5
+if eq ejEgFind get ejEgA j va
+if eq ejEgFind get ejEgB j vb
+ret true
+end
+end
+end
+end
+end
+ret false
+end
+
+fn ejEgVerifyStep rule ulong u ulong v ulong to bool
+n = get ejEgNc 0
+if or ge u n ge v n
+ret false
+end
+opU = get ejEgOp u
+if eq rule 1
+ret ejEgCheckFma u v false
+end
+if eq rule 2
+ret ejEgCheckFma u v true
+end
+if eq rule 3
+if ne opU 3
+ret false
+end
+ret and ejEgHasConst get ejEgB u 0 eq ejEgFind v ejEgFind get ejEgA u
+end
+if eq rule 4
+if ne opU 3
+ret false
+end
+ret and ejEgHasConst get ejEgA u 0 eq ejEgFind v ejEgFind get ejEgB u
+end
+if eq rule 5
+if ne opU 5
+ret false
+end
+ret and ejEgHasConst get ejEgB u 1 eq ejEgFind v ejEgFind get ejEgA u
+end
+if eq rule 6
+if ne opU 5
+ret false
+end
+ret and ejEgHasConst get ejEgB u 0 ejEgHasConst v 0
+end
+if eq rule 11
+if ne opU 9
+ret false
+end
+ret and eq ejEgFind get ejEgA u ejEgFind get ejEgB u eq ejEgFind v ejEgFind get ejEgA u
+end
+ret false
+end
+
+fn ejEgOpCost op ulong to ulong
+if or eq op 1 eq op 2
+ret 0
+end
+if or eq op 3 eq op 4
+ret 2
+end
+if eq op 5
+ret 3
+end
+if eq op 6
+ret 2
+end
+ret 1
+end
+
+fn ejEgComputeCosts to void
+n = get ejEgNc 0
+for i ulong n bound 512
+put ejEgCost i 999999
+put ejEgBest i i
+end
+for iter ulong 12
+for i ulong n bound 512
+op = get ejEgOp i
+base = ejEgOpCost op
+c = base
+if and ne op 1 ne op 2
+ca = get ejEgCost ejEgFind get ejEgA i
+cb = get ejEgCost ejEgFind get ejEgB i
+c = add add base ca cb
+if eq op 6
+c = add c get ejEgCost ejEgFind get ejEgC i
+end
+end
+r = ejEgFind i
+if lt c get ejEgCost r
+put ejEgCost r c
+put ejEgBest r i
+end
+end
+end
+end
+
+fn ejEgEval id ulong useBest bool depth ulong to ulong
+if gt depth 32
+ret 0
+end
+cur = id
+if useBest
+cur = get ejEgBest ejEgFind id
+end
+op = get ejEgOp cur
+if eq op 1
+ret and get ejEgVal cur 0xffffffff
+end
+if eq op 2
+rv = get ejEgVal cur
+if lt rv 8
+ret get ejEgEnv rv
+end
+ret 0
+end
+va = ejEgEval get ejEgA cur useBest add depth 1
+vb = ejEgEval get ejEgB cur useBest add depth 1
+if eq op 3
+ret and add va vb 0xffffffff
+end
+if eq op 4
+ret and sub va vb 0xffffffff
+end
+if eq op 5
+ret and mul va vb 0xffffffff
+end
+if eq op 6
+vc = ejEgEval get ejEgC cur useBest add depth 1
+ret and add mul va vb vc 0xffffffff
+end
+if eq op 9
+ret and va vb
+end
+if eq op 10
+ret and or va vb 0xffffffff
+end
+ret 0
+end
+
+fn ejEgCheckEquiv rootB ulong rootA ulong to bool
+for t ulong 4
+put ejEgEnv 0 add mul t 17 3
+put ejEgEnv 1 add mul t 31 5
+put ejEgEnv 2 add mul t 101 11
+v0 = ejEgEval rootB false 0
+v1 = ejEgEval rootA true 0
+if ne v0 v1
+ret false
+end
+end
+ret true
+end
+
+fn ejEgApplyRules to bool
+changed = false
+n = get ejEgNc 0
+for i ulong n bound 512
+op = get ejEgOp i
+if eq op 3
+a = get ejEgA i
+b = get ejEgB i
+if ejEgHasConst b 0
+if ne ejEgFind i ejEgFind a
+ejEgUnion i a 3
+changed = true
+end
+end
+if ejEgHasConst a 0
+if ne ejEgFind i ejEgFind b
+ejEgUnion i b 4
+changed = true
+end
+end
+ca = ejEgFind a
+for j ulong n bound 512
+if and eq ejEgFind j ca eq get ejEgOp j 5
+nf = ejEgAdd 6 get ejEgA j get ejEgB j b 0
+ejEgUnion i nf 1
+changed = true
+break
+end
+end
+end
+if eq op 5
+a = get ejEgA i
+b = get ejEgB i
+if ejEgHasConst b 1
+if ne ejEgFind i ejEgFind a
+ejEgUnion i a 5
+changed = true
+end
+end
+end
+if eq op 9
+if eq ejEgFind get ejEgA i ejEgFind get ejEgB i
+if ne ejEgFind i ejEgFind get ejEgA i
+ejEgUnion i get ejEgA i 11
+changed = true
+end
+end
+end
+end
+ret changed
+end
+
+fn ejEgReplayProof root ulong bestR ulong nt ulong to ulong
+for i ulong get ejEgNc 0 bound 512
+put ejEgPar i i
+end
+for s ulong nt bound 512
+b = mul s 4
+opR = get ejEgTr b
+lu0 = get ejEgTr add b 1
+rv0 = get ejEgTr add b 2
+if not ejEgVerifyStep opR lu0 rv0
+ret EJ_ERR_EGP2_PROOF
+end
+lu = ejEgFind lu0
+rv = ejEgFind rv0
+if ne lu rv
+put ejEgPar rv lu
+end
+end
+if ne ejEgFind root ejEgFind bestR
+ret EJ_ERR_EGP2_PROOF
+end
+if not ejEgCheckEquiv root bestR
+ret EJ_ERR_EGP2_PROOF
+end
+ret EJ_OK
+end
+
+fn ejEgVerifyKernel kind ulong to ulong
+ejEgReset
+r0 = ejEgAdd 2 0 0 0 0
+r1 = ejEgAdd 2 0 0 0 1
+r2 = ejEgAdd 2 0 0 0 2
+c0 = ejEgAdd 1 0 0 0 0
+c1 = ejEgAdd 1 0 0 0 1
+root = ulong 0
+if eq kind 0
+m = ejEgAdd 5 r0 r1 0 0
+az = ejEgAdd 3 r2 c0 0 0
+root = ejEgAdd 3 m az 0 0
+else
+bx = ejEgAdd 9 r0 r0 0 0
+m1 = ejEgAdd 5 r1 c1 0 0
+m2 = ejEgAdd 5 bx m1 0 0
+root = ejEgAdd 3 r2 m2 0 0
+end
+ejEgComputeCosts
+cbef = get ejEgCost root
+for step ulong 6
+if not ejEgApplyRules
+break
+end
+end
+ejEgComputeCosts
+nt = get ejEgTrN 0
+if eq nt 0
+ret EJ_ERR_EGP2_PROOF
+end
+bestR = get ejEgBest ejEgFind root
+caft = get ejEgCost ejEgFind bestR
+if ge caft cbef
+ret EJ_ERR_EGP2_PROOF
+end
+if ne ejEgFind root ejEgFind bestR
+ret EJ_ERR_EGP2_PROOF
+end
+ret ejEgReplayProof root bestR nt
+end
+
+note ==================== SCHEDULE MUTATORS (GENOMES 0, 1, 2, 3, 5, 6) ====================
+fn ejSwapCand i ulong j ulong to void
+bi = mul i 4
+bj = mul j 4
+for k ulong 4
+t = get ejCand add bi k
+put ejCand add bi k get ejCand add bj k
+put ejCand add bj k t
+end
+tp = get ejPerm i
+put ejPerm i get ejPerm j
+put ejPerm j tp
+put ejInv get ejPerm i i
+put ejInv get ejPerm j j
+end
+
+fn ejWindowRawOk lo ulong hi ulong n ulong flr ulong to bool
+k = lo
+while lt k hi bound 24
+u = get ejPerm k
+if not ejCheckRawOne u n flr
+ret false
+end
+k = add k 1
+end
+ret true
+end
+
+fn ejDoSwapsPass n ulong flr ulong to ulong
+sw = ulong 0
+i = ulong 0
+while lt add i 1 n bound 2048
+j = add i 1
+if and not ejIsSwapAnchor i not ejIsSwapAnchor j
+if not ejHasDep get ejPerm i get ejPerm j
+ejSwapCand i j
+lo = ulong 0
+if gt i 16
+lo = sub i 16
+end
+hi = add i 2
+if gt hi n
+hi = n
+end
+if ejWindowRawOk lo hi n flr
+sw = add sw 1
+i = add i 2
+continue
+end
+ejSwapCand i j
+end
+end
+i = add i 1
+end
+ret sw
+end
+
+fn ejDoSwapsRevPass n ulong flr ulong to ulong
+sw = ulong 0
+if lt n 2
+ret 0
+end
+i = sub n 2
+while true bound 2048
+j = add i 1
+if and not ejIsSwapAnchor i not ejIsSwapAnchor j
+if not ejHasDep get ejPerm i get ejPerm j
+ejSwapCand i j
+lo = ulong 0
+if gt i 16
+lo = sub i 16
+end
+hi = add i 2
+if gt hi n
+hi = n
+end
+if ejWindowRawOk lo hi n flr
+sw = add sw 1
+if lt i 2
+break
+end
+i = sub i 2
+continue
+end
+ejSwapCand i j
+end
+end
+if eq i 0
+break
+end
+i = sub i 1
+end
+ret sw
+end
+
+fn ejTricksterChaos n ulong to ulong
+cnt = ulong 0
+for pc ulong n bound 2048
+orig = get ejPerm pc
+if not ejIsSwapAnchor orig
+idx = add mul pc 4 3
+w3 = get ejCand idx
+if eq rem pc 2 0
+put ejCand idx or w3 8192
+cnt = add cnt 1
+end
+st = ejCndStall pc
+if and eq rem pc 3 1 lt st 8
+ejSetCndStall pc add st 1
+end
+end
+end
+ret cnt
+end
+
+fn ejAsceticPace n ulong to ulong
+cnt = ulong 0
+for pc ulong n bound 2048
+orig = get ejPerm pc
+db = mul orig 24
+nm = get ejRefRec add db 19
+if or eq nm 24 or eq nm 29 or eq nm 30 eq nm 31
+idx = add mul pc 4 3
+w3 = get ejCand idx
+if eq and w3 8192 0
+put ejCand idx or w3 8192
+cnt = add cnt 1
+end
+end
+end
+ret cnt
+end
+
+fn ejCanCompactPc pc ulong gen ulong to bool
+orig = get ejPerm pc
+db = mul orig 24
+nm = get ejRefRec add db 19
+if eq nm 1
+wt = get ejRefRec add db 6
+if ne wt 0
+ret ge gen 1
+end
+ret false
+end
+note Antibody #15: NEVER compact I2F/I2FP (nm==29) or variable-latency/MUFU/F2I!
+if or eq nm 29 or eq nm 30 eq nm 31
+ret false
+end
+if ejIsSwapAnchor orig
+ret false
+end
+if ne get ejRefRec add db 7 0
+ret false
+end
+ret eq get ejRefRec add db 8 0
+end
+
+fn ejShaveSafe pc ulong n ulong flr ulong to bool
+lo = ulong 0
+if gt pc 17
+lo = sub pc 17
+end
+hi = add pc 1
+ret ejWindowRawOk lo hi n flr
+end
+
+fn ejCompactStalls n ulong gen ulong flr ulong to void
+for pc ulong n bound 2048
+if ejCanCompactPc pc gen
+for s ulong 15
+st = ejCndStall pc
+if le st 1
+break
+end
+ejSetCndStall pc sub st 1
+if not ejShaveSafe pc n flr
+ejSetCndStall pc st
+break
+end
+end
+end
+end
+end
+
+fn ejCountDualPairs n ulong to ulong
+cnt = ulong 0
+i = ulong 0
+while lt add i 1 n bound 2048
+ui = get ejPerm i
+uj = get ejPerm add i 1
+if and not ejIsSwapAnchor ui not ejIsSwapAnchor uj
+if not ejHasDep ui uj
+cnt = add cnt 1
+i = add i 2
+continue
+end
+end
+i = add i 1
+end
+ret cnt
+end
+
+note ==================== BIT-EXACT PARITY ORACLE SIMULATOR ====================
+fn ejSimRd r ulong to ulong
+if ge r 128
+ret 0
+end
+ret get ejSimR r
+end
+
+fn ejSimWr r ulong v ulong to void
+if lt r 128
+put ejSimR r and v 0xffffffff
+end
+end
+
+fn ejSimIsetp op ulong w0 ulong w1 ulong w2 ulong to void
+va = ejSimRd and shr w0 24 255
+vb = ejSimRd and w1 255
+if eq op 2060
+vb = and w1 0xfffff
+end
+cc = and shr w2 12 7
+pd = and shr w2 17 7
+res = ulong 0
+if and eq cc 1 lt va vb
+res = ulong 1
+end
+if and eq cc 2 eq va vb
+res = ulong 1
+end
+if and eq cc 3 le va vb
+res = ulong 1
+end
+if and eq cc 4 gt va vb
+res = ulong 1
+end
+if and eq cc 5 ne va vb
+res = ulong 1
+end
+if and eq cc 6 ge va vb
+res = ulong 1
+end
+if lt pd 7
+put ejSimP pd res
+end
+end
+
+fn ejSimStepCmp op ulong w0 ulong w1 ulong w2 ulong to void
+if or eq op 524 eq op 2060
+ejSimIsetp op w0 w1 w2
+ret
+end
+rd = and shr w0 16 255
+va = ejSimRd and shr w0 24 255
+vb = ejSimRd and w1 255
+if eq op 520
+ps = and shr w2 23 7
+if ne get ejSimP ps 0
+ejSimWr rd va
+else
+ejSimWr rd vb
+end
+ret
+end
+if eq op 521
+if ge va vb
+ejSimWr rd va
+else
+ejSimWr rd vb
+end
+ret
+end
+if or eq op 2085 eq op 549
+if eq op 2085
+vb = and w1 0xfffff
+end
+vc = ejSimRd and w2 255
+vh = ejSimRd add and w2 255 1
+sum64 = add mul va vb or vc shl vh 32
+ejSimWr rd sum64
+ejSimWr add rd 1 shr sum64 32
+ret
+end
+if eq op 574
+ejSimWr rd or and shr va 16 65535 shl and shr vb 16 65535 16
+ret
+end
+if eq op 773
+ejSimWr rd and vb 0xffffffff
+ret
+end
+end
+
+fn ejSimStepAlu op ulong w0 ulong w1 ulong w2 ulong to void
+rd = and shr w0 16 255
+va = ejSimRd and shr w0 24 255
+vb = ejSimRd and w1 255
+vc = ejSimRd and w2 255
+imm = and w1 0xfffff
+if eq op 2050
+ejSimWr rd imm
+ret
+end
+if eq op 514
+ejSimWr rd vb
+ret
+end
+if eq op 528
+ejSimWr rd add add va vb vc
+ret
+end
+if eq op 2064
+ejSimWr rd add add va imm vc
+ret
+end
+if eq op 548
+ejSimWr rd add mul va vb vc
+ret
+end
+if eq op 2084
+ejSimWr rd add mul va imm vc
+ret
+end
+if eq op 2073
+ejSimWr rd shr va and w1 31
+ret
+end
+if eq op 2066
+ejSimWr rd and va imm
+ret
+end
+if eq op 545
+ejSimWr rd add va vb
+ret
+end
+if eq op 544
+ejSimWr rd mul va vb
+ret
+end
+if eq op 547
+ejSimWr rd add mul va vb vc
+ret
+end
+if eq op 581
+ejSimWr rd xor va 0x4b000000
+ret
+end
+if eq op 776
+ejSimWr rd xor va mul va 2654435761
+ret
+end
+if or eq op 2436 eq op 2433
+addr = and add va shr w1 8 255
+ejSimWr rd get ejSimMem addr
+ret
+end
+if or eq op 2440 eq op 2438
+addr = and add va shr w1 8 255
+put ejSimMem addr and vb 0xffffffff
+ret
+end
+ejSimStepCmp op w0 w1 w2
+end
+
+fn ejSimInit seed ulong to void
+for i ulong 128
+put ejSimR i and add mul seed 131 add mul i 17 5 0xffffffff
+end
+for i ulong 8
+put ejSimP i 0
+end
+put ejSimP 7 1
+for i ulong 256
+put ejSimMem i and add mul seed 7 mul i 31 0xffffffff
+end
+end
+
+fn ejSimBra pc ulong w0 ulong w1 ulong to long
+s = shr w1 2
+if ne and w1 0x80000000 0
+s = or s 0xc0000000
+end
+u = and shl s 6 0xffffffff
+u = or u and shr w0 18 63
+t = add ejU2i u 1
+if gt t 2147483647
+t = sub t 4294967296
+end
+ret add long pc t
+end
+
+fn ejSimHash to ulong
+h = ulong 0xcbf29ce484222325
+for i ulong 128
+h = mul xor h get ejSimR i 0x100000001b3
+end
+for i ulong 64
+h = mul xor h get ejSimMem i 0x100000001b3
+end
+ret h
+end
+
+fn ejSimWord bufId ulong idx ulong to ulong
+if eq bufId 0
+ret get ejRef idx
+end
+if eq bufId 1
+ret get ejBufA idx
+end
+ret get ejBufB idx
+end
+
+fn ejSimExecPc bufId ulong pc ulong n ulong to long
+b = mul pc 4
+w0 = ejSimWord bufId b
+w1 = ejSimWord bufId add b 1
+w2 = ejSimWord bufId add b 2
+gd = and shr w0 12 15
+if lt gd 7
+if eq get ejSimP gd 0
+ret add long pc 1
+end
+end
+op = and w0 0xfff
+if eq op 2381
+ret long -1
+end
+if eq op 2375
+np = ejSimBra pc w0 w1
+if or lt np 0 ge np long n
+ret long -1
+end
+ret np
+end
+ejSimStepAlu op w0 w1 w2
+ret add long pc 1
+end
+
+fn ejSimRun bufId ulong n ulong seed ulong to ulong
+ejSimInit seed
+pc = ulong 0
+while lt pc n bound 8192
+nx = ejSimExecPc bufId pc n
+if lt nx 0
+break
+end
+pc = ulong nx
+end
+ret ejSimHash
+end
+
+fn ejit_parity_check bufId ulong n ulong to bool
+for s ulong 4
+hr = ejSimRun 0 n s
+hc = ejSimRun bufId n s
+if ne hr hc
+ret false
+end
+if eq s 0
+put ejState 14 hr
+put ejState 15 hc
+end
+end
+ret true
+end
+
+note ==================== LIVE DOUBLE-BUFFER HOT-SWAP CONTROLLER ====================
+fn ejLoadKernelRef n ulong regCap ulong to bool
+if or eq n 0 gt n 2048
+ret false
+end
+for i ulong mul n 4 bound 8192
+v = get ejRef i
+put ejBufA i v
+put ejBufB i v
+put ejCand i v
+end
+for i ulong n bound 2048
+put ejPerm i i
+put ejInv i i
+end
+if not ejDecodeBuf false n
+ret false
+end
+ejMarkTargets n
+ejHashWords false n
+for i ulong 32
+put ejCertShaRef i get ejRefSha i
+end
+put ejState 0 0
+put ejState 1 n
+put ejState 2 regCap
+put ejState 3 0
+put ejState 4 0
+put ejState 5 0
+put ejState 6 0
+put ejState 7 6
+put ejState 8 0
+put ejState 9 0
+put ejRcptN 0 0
+ret true
+end
+
+fn ejResetForReplay to void
+n = get ejState 1
+if or eq n 0 gt n 2048
+ret
+end
+for i ulong mul n 4 bound 8192
+v = get ejRef i
+put ejBufA i v
+put ejBufB i v
+put ejCand i v
+end
+for i ulong n bound 2048
+put ejPerm i i
+put ejInv i i
+end
+put ejState 0 0
+put ejState 3 0
+put ejState 4 0
+put ejState 5 0
+put ejState 6 0
+put ejState 8 0
+put ejState 9 0
+put ejState 10 0
+put ejState 11 0
+put ejState 12 0
+put ejState 13 0
+put ejState 14 0
+put ejState 15 0
+end
+
+fn ejRcptAppend step_idx ulong gen ulong to void
+cnt = get ejRcptN 0
+if ge cnt EJ_MAX_RCPT
+ret
+end
+put ejRcptStep cnt step_idx
+put ejRcptGen cnt gen
+base = mul cnt 32
+for i ulong 32
+put ejRcptSha add base i get ejCndSha i
+end
+put ejRcptN 0 add cnt 1
+end
+
+fn ejit_rcpt_count to ulong
+ret get ejRcptN 0
+end
+
+fn ejit_rcpt_step idx ulong to ulong
+if or ge idx get ejRcptN 0 ge idx EJ_MAX_RCPT
+ret 0
+end
+ret get ejRcptStep idx
+end
+
+fn ejit_rcpt_gen idx ulong to ulong
+if or ge idx get ejRcptN 0 ge idx EJ_MAX_RCPT
+ret 0
+end
+ret get ejRcptGen idx
+end
+
+fn ejit_rcpt_sha_byte idx ulong b ulong to uchar
+if or ge idx get ejRcptN 0 or ge idx EJ_MAX_RCPT ge b 32
+ret uchar 0
+end
+ret get ejRcptSha add mul idx 32 b
+end
+
+fn ejit_tamper_rcpt_sha idx ulong b ulong xor_mask uchar to void
+if or ge idx get ejRcptN 0 or ge idx EJ_MAX_RCPT ge b 32
+ret
+end
+off = add mul idx 32 b
+put ejRcptSha off xor get ejRcptSha off xor_mask
+end
+
+fn ejCopyRefToCand n ulong to void
+for i ulong mul n 4 bound 8192
+put ejCand i get ejRef i
+end
+for i ulong n bound 2048
+put ejPerm i i
+put ejInv i i
+end
+end
+
+fn ejWriteCandToBuf dstBuf ulong n ulong to void
+for i ulong mul n 4 bound 8192
+if eq dstBuf 0
+put ejBufA i get ejCand i
+else
+put ejBufB i get ejCand i
+end
+end
+end
+
+fn ejEvolveCandidate gen ulong n ulong flr ulong to void
+ejCopyRefToCand n
+sRef = ejSumRefStall 0 n
+put ejState 12 sRef
+sw = ulong 0
+yt = ulong 0
+if eq gen 0
+sw = ulong 0
+else
+if eq gen 5
+sw = ejDoSwapsRevPass n flr
+yt = ejTricksterChaos n
+else
+if eq gen 6
+ejCompactStalls n 1 flr
+yt = ejAsceticPace n
+else
+sw = ejDoSwapsPass n flr
+if eq gen 3
+sw = add sw ejDoSwapsPass n flr
+end
+ejCompactStalls n gen flr
+if or eq gen 2 eq gen 3
+yt = ejAsceticPace n
+end
+end
+end
+end
+put ejState 10 sw
+put ejState 11 yt
+put ejState 13 ejSumCndStall 0 n
+end
+
+fn ejVerifyAndPromote standby ulong n ulong regCap ulong gen ulong to ulong
+for i ulong 32
+put ejCertShaCnd i get ejCndSha i
+end
+rc = ejVerifySigned n mul n 16 mul n 16 regCap
+if ne rc EJ_OK
+put ejState 5 add get ejState 5 1
+put ejState 6 rc
+ret rc
+end
+erc = ejEgVerifyKernel 0
+if ne erc EJ_OK
+put ejState 5 add get ejState 5 1
+put ejState 6 erc
+ret erc
+end
+ejWriteCandToBuf standby n
+if not ejit_parity_check add standby 1 n
+put ejState 5 add get ejState 5 1
+put ejState 6 EJ_ERR_PARITY_MISMATCH
+ret EJ_ERR_PARITY_MISMATCH
+end
+put ejState 0 standby
+if eq standby 0
+put ejState 8 gen
+else
+put ejState 9 gen
+end
+put ejState 4 add get ejState 4 1
+put ejState 6 EJ_OK
+ret EJ_OK
+end
+
+note ejit_step_tick: executes step t on active buffer (A or B), mutates & proves candidate into standby buffer,
+note checks bit-exact parity via ejit_parity_check, atomically flips ejState[0] (A <-> B), and logs receipt!
+fn ejit_step_tick gen ulong to ulong
+n = get ejState 1
+regCap = get ejState 2
+flr = get ejState 7
+active = get ejState 0
+standby = xor active 1
+step_idx = get ejState 3
+put ejState 3 add step_idx 1
+note Step t executes on active buffer (compute execution parity digest for active buffer):
+dAct = ejSimRun add active 1 n 0
+put ejState 14 dAct
+note Mutate candidate from reference using genome:
+ejEvolveCandidate gen n flr
+note Bind candidate SHA-256 certificate digest and verify Monk + Antibodies #1-#15 + BSSY + GPR + EGP2 + parity:
+ejHashWords true n
+rc = ejVerifyAndPromote standby n regCap gen
+if ne rc EJ_OK
+ret rc
+end
+ejRcptAppend step_idx gen
+ret EJ_OK
+end
+
+fn ejVerifyRcptSha rcpt_cursor ulong to bool
+base = mul rcpt_cursor 32
+for i ulong 32
+if ne get ejCndSha i get ejRcptSha add base i
+ret false
+end
+end
+ret true
+end
+
+note ejit_replay_step: deterministic receipt-checked replay driver for step_idx at rcpt_cursor:
+fn ejit_replay_step step_idx ulong rcpt_cursor ulong to ulong
+n = get ejState 1
+active = get ejState 0
+rcptN = get ejRcptN 0
+if lt rcpt_cursor rcptN
+if gt step_idx get ejRcptStep rcpt_cursor
+put ejState 5 add get ejState 5 1
+put ejState 6 EJ_ERR_REPLAY_ORDER
+ret EJ_ERR_REPLAY_ORDER
+end
+if lt step_idx get ejState 3
+put ejState 5 add get ejState 5 1
+put ejState 6 EJ_ERR_REPLAY_ORDER
+ret EJ_ERR_REPLAY_ORDER
+end
+if ne rcpt_cursor get ejState 4
+put ejState 5 add get ejState 5 1
+put ejState 6 EJ_ERR_REPLAY_ORDER
+ret EJ_ERR_REPLAY_ORDER
+end
+if eq step_idx get ejRcptStep rcpt_cursor
+dAct = ejSimRun add active 1 n 0
+put ejState 14 dAct
+gen = get ejRcptGen rcpt_cursor
+ejEvolveCandidate gen n get ejState 7
+ejHashWords true n
+if not ejVerifyRcptSha rcpt_cursor
+put ejState 5 add get ejState 5 1
+put ejState 6 EJ_ERR_REPLAY_DIGEST
+ret EJ_ERR_REPLAY_DIGEST
+end
+rc = ejVerifyAndPromote xor active 1 n get ejState 2 gen
+if ne rc EJ_OK
+ret rc
+end
+put ejState 3 add step_idx 1
+ret EJ_OK
+end
+end
+put ejState 14 ejSimRun add active 1 n 0
+put ejState 3 add step_idx 1
+ret EJ_OK
+end
+
+note Verify an already-populated ejCand + ejPerm against ejRef (used for negative-control / antibody tests):
+fn ejTestVerifyCand n ulong regCap ulong to ulong
+ejHashWords true n
+for i ulong 32
+put ejCertShaCnd i get ejCndSha i
+end
+ret ejVerifySigned n mul n 16 mul n 16 regCap
+end
+
+note ==================== LOCK 3 PURE-OMEGA SELF-TEST ====================
+fn ejPutRefInsn pc ulong w0 ulong w1 ulong w2 ulong w3 ulong to void
+b = mul pc 4
+put ejRef b w0
+put ejRef add b 1 w1
+put ejRef add b 2 w2
+put ejRef add b 3 w3
+end
+
+fn ejSelftestLoadRef to void
+note Minimal valid 6-insn SM121 kernel: MOVI R8, IADD3 R10, IADD3 R20, IADD3 R23, FFMA R14, EXIT
+ejPutRefInsn 0 0x00087802 0x0000000a 0x00000f00 0x000fcc00
+ejPutRefInsn 1 0x080a7210 0x00000009 0x07ffe0ff 0x000fcc00
+ejPutRefInsn 2 0x15147210 0x00000016 0x07ffe0ff 0x000fce00
+ejPutRefInsn 3 0x18177210 0x00000019 0x07ffe0ff 0x000fce00
+ejPutRefInsn 4 0x0a0e7223 0x00000014 0x00000017 0x000fcc00
+ejPutRefInsn 5 0x0000094d 0x00000000 0x03800000 0x000fea00
+end
+
+fn ejit_selftest to int
+wantBuf = new ulong 24 0
+ejSelftestLoadRef
+if not ejLoadKernelRef 6 64
+ret 1
+end
+if ne ejit_step_tick 6 EJ_OK
+ret 2
+end
+if ne ejit_step_tick 1 EJ_OK
+ret 3
+end
+if ne ejit_step_tick 2 EJ_OK
+ret 4
+end
+if ne ejit_step_tick 5 EJ_OK
+ret 5
+end
+if ne ejit_rcpt_count 4
+ret 6
+end
+wantAct = get ejState 0
+wantPar = get ejState 14
+for i ulong 24
+put wantBuf i ejSimWord add wantAct 1 i
+end
+ejResetForReplay
+if ne ejit_rcpt_count 4
+ret 7
+end
+if ne get ejState 0 0
+ret 7
+end
+if ne get ejState 3 0
+ret 7
+end
+if ne get ejState 4 0
+ret 7
+end
+for s ulong 4
+if ne ejit_replay_step s s EJ_OK
+ret 8
+end
+end
+if ne get ejState 0 wantAct
+ret 9
+end
+if ne get ejState 14 wantPar
+ret 10
+end
+if ne get ejState 4 4
+ret 11
+end
+for i ulong 24
+if ne ejSimWord add wantAct 1 i get wantBuf i
+ret 12
+end
+end
+ejResetForReplay
+ejit_tamper_rcpt_sha 0 0 uchar 1
+rc = ejit_replay_step 0 0
+ejit_tamper_rcpt_sha 0 0 uchar 1
+if ne rc EJ_ERR_REPLAY_DIGEST
+ret 13
+end
+ejResetForReplay
+if ne ejit_replay_step 1 0 EJ_ERR_REPLAY_ORDER
+ret 14
+end
+ret 0
+end

@@ -24,6 +24,7 @@ if str(STUDIO_DIR) not in sys.path:
 import catalog as studio_catalog  # noqa: E402
 import chain_runner as runner  # noqa: E402
 import server as studio_server  # noqa: E402
+import ssh_remote  # noqa: E402
 
 
 # --------------------------------------------------------------------------- ANSI styling
@@ -123,31 +124,222 @@ def cmd_catalog(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_studio(args: argparse.Namespace) -> int:
-    srv = studio_server.create_server(
-        host=args.host,
-        port=args.port,
-        workspace_dir=args.workspace_dir,
-        bin_dir=args.bin_dir,
-    )
-    host, port = srv.server_address[:2]
-    url = f"http://{host}:{port}/"
-    print_banner("Local Browser Studio — Zero Telemetry, 100% Pure-Omega")
-    print(f"  {emerald('●')} Studio UI   : {cyan(url)}")
-    print(f"  {violet('●')} Runs Dir    : {dim(str(srv.manager.runs_dir))}")
-    print(f"  {amber('●')} Stop Server : {dim('Ctrl-C')}")
-    print()
+def _run_studio_once(args: argparse.Namespace) -> int:
+    bind_host = getattr(args, "bind", None) or args.host
+    port = int(args.port)
+    if getattr(args, "reclaim_stale_lock", False):
+        rec = ssh_remote.reclaim_stale_lock(port, yes=bool(getattr(args, "yes", False)))
+        if getattr(args, "json", False):
+            print(json.dumps(rec, indent=2))
+        else:
+            print(f"Studio lock ({rec['path']}): {rec['status']}")
+        if rec["status"] == "refused":
+            return 1
+        if rec["status"] == "eligible" and not getattr(args, "yes", False):
+            return 2
+        return 0
 
-    if not args.no_open and sys.stdout.isatty():
+    lock = ssh_remote.InstanceLock(port)
+    try:
+        lock.acquire()
+    except RuntimeError as exc:
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": False, "error": str(exc)}))
+        else:
+            print(red(f"ERROR: {exc}"), file=sys.stderr)
+        return 3
+
+    pol = ssh_remote.StudioAccessPolicy(
+        allow_public=bool(getattr(args, "allow_public", False)),
+        refuse_public=bool(getattr(args, "refuse_public", False)),
+        require_pairing=bool(getattr(args, "require_pairing", False)),
+        no_pairing=bool(getattr(args, "no_pairing", False)),
+        pairing_address=getattr(args, "pairing_address", None),
+    )
+    try:
+        srv = studio_server.create_server(
+            host=bind_host,
+            port=port,
+            workspace_dir=args.workspace_dir,
+            bin_dir=args.bin_dir,
+            access_policy=pol,
+            instance_lock=lock,
+        )
+    except Exception:
+        lock.release()
+        raise
+
+    host, bound_port = srv.server_address[:2]
+    adv = getattr(args, "pairing_address", None) or f"{host}:{bound_port}"
+    tok = pol.pairing_code
+    url = f"http://{host}:{bound_port}/"
+    pair_url = f"http://{adv}/?pair={tok}" if tok else f"http://{adv}/"
+    headless = bool(getattr(args, "headless", False))
+
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "ok": True,
+            "bind": f"{host}:{bound_port}",
+            "port": bound_port,
+            "pairing_address": adv,
+            "pairing_code": tok,
+            "url": url,
+            "pairing_url": pair_url,
+            "ssh_forward_cmd": f"ssh -N -L 18421:127.0.0.1:{bound_port} {os.environ.get('USER', 'user')}@{os.uname().nodename}",
+        }), flush=True)
+    else:
+        print_banner("Sovereign Studio Server — Zero Telemetry, 100% Pure-Omega")
+        print(f"  {emerald('●')} Studio UI   : {cyan(url)}")
+        if adv != f"{host}:{bound_port}" or tok:
+            print(f"  {cyan('●')} Pairing URL : {cyan(pair_url)}")
+        print(f"  {violet('●')} Runs Dir    : {dim(str(srv.manager.runs_dir))}")
+        print(f"  {amber('●')} SSH Forward : {dim(f'ssh -N -L 18421:127.0.0.1:{bound_port} <host>')}")
+        print(f"  {amber('●')} Stop Server : {dim('Ctrl-C')}")
+        print()
+
+    if not headless and not args.no_open and sys.stdout.isatty():
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
 
     try:
         srv.serve_forever(poll_interval=0.25)
     except KeyboardInterrupt:
-        print(f"\n  {dim('Omega Helix Studio stopped.')}")
+        if not getattr(args, "json", False):
+            print(f"\n  {dim('Omega Helix Studio stopped.')}")
     finally:
         srv.server_close()
     return 0
+
+
+def cmd_studio(args: argparse.Namespace) -> int:
+    if not getattr(args, "supervise", False):
+        return _run_studio_once(args)
+
+    # Orca-style foreground supervisor: bounded restart backoff (max 6 failures in 15m)
+    fail_times: list[float] = []
+    backoff = 1.0
+    while True:
+        try:
+            rc = _run_studio_once(args)
+            if rc in (0, 3):
+                return rc
+        except KeyboardInterrupt:
+            return 0
+        except Exception as exc:
+            print(red(f"Studio error: {exc}"), file=sys.stderr)
+        now = time.monotonic()
+        fail_times = [t for t in fail_times if now - t < 900.0]
+        fail_times.append(now)
+        if len(fail_times) >= 6:
+            print(red("Studio supervisor: 6 failures in 15m, exiting."), file=sys.stderr)
+            return 0
+        time.sleep(backoff)
+        backoff = min(backoff * 2.0, 30.0)
+
+
+def cmd_host(args: argparse.Namespace) -> int:
+    act = args.host_action
+    if act == "list":
+        hosts = ssh_remote.discover_ssh_hosts()
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": True, "hosts": hosts}, indent=2))
+            return 0
+        print_banner("Known SSH Hosts (~/.ssh/config + saved)")
+        if not hosts:
+            print(dim("  No SSH hosts found. Add one with: omega-helix host add <name> <target>"))
+            return 0
+        for h in hosts:
+            print(f"  {emerald('●')} {bold(h['name']):<18} {cyan(h.get('hostname', h['target']))} ({h['source']})")
+        return 0
+    if act == "add":
+        entry = ssh_remote.add_saved_host(args.name, args.target, port=args.ssh_port, label=args.label or "")
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": True, "host": entry}, indent=2))
+        else:
+            print(f"{emerald('✓')} Saved host {bold(entry['name'])} -> {entry['target']}")
+        return 0
+    if act == "rm":
+        ok = ssh_remote.remove_saved_host(args.name)
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": ok, "name": args.name}))
+        else:
+            print(f"{emerald('✓') if ok else amber('○')} host {args.name}: {'removed' if ok else 'not found'}")
+        return 0 if ok else 1
+    if act == "probe":
+        res = ssh_remote.probe_ssh_host(args.target, ssh_port=args.ssh_port, remote_port=args.remote_port)
+        if getattr(args, "json", False):
+            print(json.dumps(res, indent=2))
+        elif res.get("ok"):
+            gpu = emerald("GB10") if res.get("has_gb10") else dim("CPU")
+            st = emerald("running") if res.get("studio_running") else dim("stopped")
+            print(f"{emerald('✓')} {bold(res['target'])} ({res.get('os')} {res.get('arch')}) GPU={gpu} Studio={st}")
+        else:
+            print(red(f"✗ {args.target}: {res.get('error')}"), file=sys.stderr)
+        return 0 if res.get("ok") else 1
+    return 2
+
+
+def cmd_remote(args: argparse.Namespace) -> int:
+    act = args.remote_action
+    if act == "list":
+        rows = ssh_remote.load_remotes()
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": True, "remotes": rows}, indent=2))
+            return 0
+        print_banner("Saved Remote Studio Environments")
+        if not rows:
+            print(dim("  None saved. Connect with: omega-helix remote connect <ssh-host>"))
+            return 0
+        for r in rows:
+            gpu = emerald("GB10") if r.get("has_gb10") else dim("CPU")
+            print(f"  {cyan('●')} {bold(r['id']):<24} {r.get('open_url', '')}  {gpu}")
+        return 0
+    if act == "add":
+        p = ssh_remote.parse_pairing_input(args.pairing)
+        entry = ssh_remote.save_remote({
+            "id": args.name or p["host"],
+            "host": p["host"],
+            "open_url": p["open_url"],
+            "url": p["url"],
+            "source": "paired",
+        })
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": True, "remote": entry}, indent=2))
+        else:
+            print(f"{emerald('✓')} Added remote {bold(entry['id'])} -> {entry['open_url']}")
+        return 0
+    if act == "rm":
+        ok = ssh_remote.remove_remote(args.id)
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": ok, "id": args.id}))
+        else:
+            print(f"{emerald('✓') if ok else amber('○')} remote {args.id}: {'removed' if ok else 'not found'}")
+        return 0 if ok else 1
+    if act == "connect":
+        mgr = ssh_remote.TunnelManager()
+        tun = mgr.connect(
+            args.target,
+            remote_port=args.remote_port,
+            local_port=args.local_port,
+            ssh_port=args.ssh_port,
+            bootstrap=not args.no_bootstrap,
+        )
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": True, "tunnel": tun}, indent=2), flush=True)
+        else:
+            print_banner(f"SSH Tunnel Active -> {tun['host']}")
+            print(f"  {emerald('●')} Local URL  : {cyan(tun['open_url'])}")
+            print(f"  {violet('●')} Remote     : {tun['host']}:{tun['remote_port']}")
+            print(f"  {amber('●')} Stop       : {dim('Ctrl-C')}")
+            print()
+        if not args.no_open and sys.stdout.isatty():
+            threading.Timer(0.3, lambda: webbrowser.open(tun["open_url"])).start()
+        try:
+            while True:
+                time.sleep(0.5)
+        except KeyboardInterrupt:
+            mgr.close_all()
+        return 0
+    return 2
 
 
 def _prompt_choice(label: str, default: str) -> str:
@@ -718,11 +910,69 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--bin-dir", default=None, help="Directory containing pure-Omega binaries")
     sub = p.add_subparsers(dest="cmd")
 
-    p_studio = sub.add_parser("studio", parents=[common], help="Launch local Omega Helix Studio web UI (default)")
+    p_studio = sub.add_parser("studio", parents=[common], help="Launch local or headless Omega Helix Studio server")
     p_studio.add_argument("--host", default="127.0.0.1")
+    p_studio.add_argument("--bind", default=None, help="Bind IP (e.g. 127.0.0.1, 0.0.0.0, Tailscale IP)")
     p_studio.add_argument("--port", type=int, default=18420)
+    p_studio.add_argument("--pairing-address", dest="pairing_address", default=None, help="Advertised host:port for pairing links")
+    p_studio.add_argument("--allow-public", dest="allow_public", action="store_true")
+    p_studio.add_argument("--refuse-public", dest="refuse_public", action="store_true")
+    p_studio.add_argument("--no-pairing", dest="no_pairing", action="store_true")
+    p_studio.add_argument("--require-pairing", dest="require_pairing", action="store_true")
+    p_studio.add_argument("--headless", action="store_true", help="Headless server mode (do not open browser)")
+    p_studio.add_argument("--supervise", action="store_true", help="Restart on failure with bounded backoff")
+    p_studio.add_argument("--reclaim-stale-lock", dest="reclaim_stale_lock", action="store_true")
+    p_studio.add_argument("--yes", action="store_true")
+    p_studio.add_argument("--json", action="store_true")
     p_studio.add_argument("--no-open", action="store_true", help="Do not open browser automatically")
     p_studio.set_defaults(func=cmd_studio)
+
+    p_host = sub.add_parser("host", parents=[common], help="Manage & probe SSH target hosts (Orca-style)")
+    host_sub = p_host.add_subparsers(dest="host_action", required=True)
+    p_hl = host_sub.add_parser("list", parents=[common], help="List discovered & saved SSH hosts")
+    p_hl.add_argument("--json", action="store_true")
+    p_hl.set_defaults(func=cmd_host)
+    p_ha = host_sub.add_parser("add", parents=[common], help="Save an SSH host target")
+    p_ha.add_argument("name")
+    p_ha.add_argument("target", nargs="?", default=None)
+    p_ha.add_argument("--ssh-port", dest="ssh_port", type=int, default=22)
+    p_ha.add_argument("--label", default="")
+    p_ha.add_argument("--json", action="store_true")
+    p_ha.set_defaults(func=cmd_host)
+    p_hr = host_sub.add_parser("rm", parents=[common], help="Remove a saved SSH host target")
+    p_hr.add_argument("name")
+    p_hr.add_argument("--json", action="store_true")
+    p_hr.set_defaults(func=cmd_host)
+    p_hp = host_sub.add_parser("probe", parents=[common], help="Probe an SSH host for GB10 GPU & Studio")
+    p_hp.add_argument("target")
+    p_hp.add_argument("--ssh-port", dest="ssh_port", type=int, default=22)
+    p_hp.add_argument("--remote-port", dest="remote_port", type=int, default=18420)
+    p_hp.add_argument("--json", action="store_true")
+    p_hp.set_defaults(func=cmd_host)
+
+    p_rem = sub.add_parser("remote", parents=[common], help="Connect & manage remote Studio servers over SSH")
+    rem_sub = p_rem.add_subparsers(dest="remote_action", required=True)
+    p_rl = rem_sub.add_parser("list", parents=[common], help="List saved remote Studio environments")
+    p_rl.add_argument("--json", action="store_true")
+    p_rl.set_defaults(func=cmd_remote)
+    p_ra = rem_sub.add_parser("add", parents=[common], help="Save a remote Studio from a pairing URL or host:port#token")
+    p_ra.add_argument("pairing")
+    p_ra.add_argument("--name", default=None)
+    p_ra.add_argument("--json", action="store_true")
+    p_ra.set_defaults(func=cmd_remote)
+    p_rr = rem_sub.add_parser("rm", parents=[common], help="Remove a saved remote Studio")
+    p_rr.add_argument("id")
+    p_rr.add_argument("--json", action="store_true")
+    p_rr.set_defaults(func=cmd_remote)
+    p_rc = rem_sub.add_parser("connect", parents=[common], help="Bootstrap & tunnel to a remote Studio over SSH")
+    p_rc.add_argument("target")
+    p_rc.add_argument("--remote-port", dest="remote_port", type=int, default=18420)
+    p_rc.add_argument("--local-port", dest="local_port", type=int, default=0)
+    p_rc.add_argument("--ssh-port", dest="ssh_port", type=int, default=22)
+    p_rc.add_argument("--no-bootstrap", dest="no_bootstrap", action="store_true")
+    p_rc.add_argument("--no-open", dest="no_open", action="store_true")
+    p_rc.add_argument("--json", action="store_true")
+    p_rc.set_defaults(func=cmd_remote)
 
     p_doc = sub.add_parser("doctor", parents=[common], help="Inspect toolchain, binaries, GPU, and OpenWALDO catalog")
     p_doc.add_argument("--json", action="store_true")

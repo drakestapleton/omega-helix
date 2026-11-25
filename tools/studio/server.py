@@ -31,6 +31,7 @@ from distill import teachers as distill_teachers  # noqa: E402
 from distill import verifiers as distill_verifiers  # noqa: E402
 import runtime as sovereign_runtime  # noqa: E402
 import commons as sovereign_commons  # noqa: E402
+import ssh_remote  # noqa: E402
 
 
 class StudioServer(ThreadingHTTPServer):
@@ -43,6 +44,9 @@ class StudioServer(ThreadingHTTPServer):
         manager: runner.ChainManager,
         ui_dir: Path = UI_DIR,
         distill_manager: distill_pipeline.DistillManager | None = None,
+        access_policy: ssh_remote.StudioAccessPolicy | None = None,
+        tunnel_manager: ssh_remote.TunnelManager | None = None,
+        instance_lock: ssh_remote.InstanceLock | None = None,
     ) -> None:
         self.manager = manager
         self.distill_manager = distill_manager or distill_pipeline.DistillManager(
@@ -51,7 +55,18 @@ class StudioServer(ThreadingHTTPServer):
             root=manager.root,
         )
         self.ui_dir = ui_dir.resolve()
+        self.access_policy = access_policy or ssh_remote.StudioAccessPolicy()
+        self.tunnel_manager = tunnel_manager or ssh_remote.TunnelManager()
+        self.instance_lock = instance_lock
         super().__init__(server_address, StudioHandler)
+
+    def server_close(self) -> None:
+        try:
+            self.tunnel_manager.close_all()
+        finally:
+            if self.instance_lock is not None:
+                self.instance_lock.release()
+            super().server_close()
 
 
 class StudioHandler(BaseHTTPRequestHandler):
@@ -64,14 +79,49 @@ class StudioHandler(BaseHTTPRequestHandler):
         if os.environ.get("OMEGA_STUDIO_VERBOSE") == "1":
             super().log_message(format, *args)
 
-    def _send_json(self, status: int, payload: Any) -> None:
+    def _send_json(self, status: int, payload: Any, extra_headers: dict[str, str] | None = None) -> None:
         body = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if extra_headers:
+            for k, v in extra_headers.items():
+                self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
+
+    def _extract_pairing_token(self, qs: dict[str, list[str]]) -> tuple[str, bool]:
+        auth = self.headers.get("Authorization") or ""
+        if auth.lower().startswith("bearer "):
+            return auth[7:].strip(), False
+        qtok = (qs.get("pair") or [""])[0].strip()
+        if qtok:
+            return qtok, True
+        raw_cookie = self.headers.get("Cookie") or ""
+        for part in raw_cookie.split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == "omega_pair" and v:
+                return v.strip(), False
+        return "", False
+
+    def _check_access(self, qs: dict[str, list[str]]) -> tuple[bool, str | None]:
+        client_ip = str(self.client_address[0] if self.client_address else "")
+        pol = self.server.access_policy
+        allowed, reason = pol.ip_allowed(client_ip)
+        if not allowed:
+            self._send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": f"origin rejected ({reason})"})
+            return False, None
+        tok, from_query = self._extract_pairing_token(qs)
+        if pol.needs_token(client_ip):
+            if not pol.verify_token(tok):
+                self._send_json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "pairing token required"})
+                return False, None
+            if from_query:
+                return True, tok
+        elif from_query and pol.verify_token(tok):
+            return True, tok
+        return True, None
 
     def _read_json_body(self) -> dict[str, Any]:
         raw_len = self.headers.get("Content-Length")
@@ -127,10 +177,34 @@ class StudioHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlsplit(self.path)
         path = parsed.path
         qs = urllib.parse.parse_qs(parsed.query)
+        ok_acc, set_pair_tok = self._check_access(qs)
+        if not ok_acc:
+            return
+        pair_hdrs = {"Set-Cookie": f"omega_pair={set_pair_tok}; HttpOnly; SameSite=Lax; Path=/"} if set_pair_tok else None
 
         if path == "/api/system":
             sys_info = runner.detect_system(bin_dir=self.server.manager.bin_dir, runs_dir=self.server.manager.runs_dir)
-            self._send_json(HTTPStatus.OK, sys_info)
+            sys_info["bind_port"] = self.server.server_address[1]
+            sys_info["pairing_required"] = self.server.access_policy.require_pairing
+            sys_info["no_pairing"] = self.server.access_policy.no_pairing
+            self._send_json(HTTPStatus.OK, sys_info, extra_headers=pair_hdrs)
+            return
+
+        if path == "/api/remotes":
+            addr = self.server.access_policy.pairing_address or f"127.0.0.1:{self.server.server_address[1]}"
+            code = self.server.access_policy.pairing_code
+            self._send_json(HTTPStatus.OK, {
+                "ok": True,
+                "ssh_hosts": ssh_remote.discover_ssh_hosts(),
+                "remotes": ssh_remote.load_remotes(),
+                "active_tunnels": self.server.tunnel_manager.list_tunnels(),
+                "server_pairing": {
+                    "pairing_address": addr,
+                    "pairing_url": f"http://{addr}/?pair={code}" if code else f"http://{addr}/",
+                    "ssh_forward_hint": f"ssh -N -L 18421:127.0.0.1:{self.server.server_address[1]} <ssh-host>",
+                    "headless_cmd": f"omega-helix studio --headless --bind 127.0.0.1 --port {self.server.server_address[1]} --json",
+                },
+            }, extra_headers=pair_hdrs)
             return
 
         if path == "/api/catalog":
@@ -234,6 +308,10 @@ class StudioHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urllib.parse.urlsplit(self.path)
         path = parsed.path
+        qs = urllib.parse.parse_qs(parsed.query)
+        ok_acc, _ = self._check_access(qs)
+        if not ok_acc:
+            return
 
         try:
             body = self._read_json_body()
@@ -468,6 +546,67 @@ class StudioHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
             return
 
+        if path == "/api/remotes/probe":
+            try:
+                res = ssh_remote.probe_ssh_host(
+                    str(body.get("host") or body.get("target") or ""),
+                    ssh_port=body.get("ssh_port"),
+                    remote_port=int(body.get("remote_port", 18420)),
+                )
+                status = HTTPStatus.OK if res.get("ok") else HTTPStatus.BAD_REQUEST
+                self._send_json(status, res)
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/api/remotes/connect":
+            try:
+                tun = self.server.tunnel_manager.connect(
+                    str(body.get("host") or body.get("target") or ""),
+                    remote_port=int(body.get("remote_port", 18420)),
+                    local_port=int(body.get("local_port", 0)),
+                    ssh_port=body.get("ssh_port"),
+                    bootstrap=bool(body.get("bootstrap", True)),
+                    repo_dir=body.get("repo_dir"),
+                )
+                self._send_json(HTTPStatus.OK, {"ok": True, "tunnel": tun})
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/api/remotes/disconnect":
+            try:
+                tid = str(body.get("id") or body.get("host") or "")
+                disc = self.server.tunnel_manager.disconnect(tid)
+                self._send_json(HTTPStatus.OK, {"ok": True, "disconnected": disc})
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/api/remotes/pair":
+            try:
+                parsed_p = ssh_remote.parse_pairing_input(str(body.get("pairing") or body.get("url") or ""))
+                rid = str(body.get("id") or parsed_p["host"])
+                entry = ssh_remote.save_remote({
+                    "id": rid,
+                    "host": parsed_p["host"],
+                    "open_url": parsed_p["open_url"],
+                    "url": parsed_p["url"],
+                    "source": "paired",
+                })
+                self._send_json(HTTPStatus.OK, {"ok": True, "remote": entry})
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/api/remotes/remove":
+            try:
+                rid = str(body.get("id") or body.get("host") or "")
+                self._send_json(HTTPStatus.OK, {"ok": True, "removed": ssh_remote.remove_remote(rid)})
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": f"unknown endpoint: {path}"})
 
 
@@ -477,22 +616,58 @@ def create_server(
     workspace_dir: str | Path | None = None,
     bin_dir: str | Path | None = None,
     ui_dir: Path | None = None,
+    access_policy: ssh_remote.StudioAccessPolicy | None = None,
+    tunnel_manager: ssh_remote.TunnelManager | None = None,
+    instance_lock: ssh_remote.InstanceLock | None = None,
 ) -> StudioServer:
     mgr = runner.ChainManager(runs_dir=workspace_dir, bin_dir=bin_dir)
-    return StudioServer((host, port), manager=mgr, ui_dir=ui_dir or UI_DIR)
+    return StudioServer(
+        (host, port),
+        manager=mgr,
+        ui_dir=ui_dir or UI_DIR,
+        access_policy=access_policy,
+        tunnel_manager=tunnel_manager,
+        instance_lock=instance_lock,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Omega Helix Studio local server (127.0.0.1, stdlib-only)")
-    parser.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
+    parser = argparse.ArgumentParser(description="Omega Helix Studio server (stdlib-only)")
+    parser.add_argument("--host", "--bind", dest="host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=18420, help="Port (default: 18420)")
+    parser.add_argument("--pairing-address", default=None, help="Advertised host:port for pairing links / SSH forwards")
+    parser.add_argument("--allow-public", action="store_true", help="Allow public remote client IPs")
+    parser.add_argument("--refuse-public", action="store_true", help="Refuse public remote client IPs")
+    parser.add_argument("--no-pairing", action="store_true", help="Disable pairing token requirement")
+    parser.add_argument("--require-pairing", action="store_true", help="Require pairing token even on loopback")
+    parser.add_argument("--json", action="store_true", help="Print startup metadata as JSON")
     parser.add_argument("--workspace-dir", default=None, help="Directory to store runs & artifacts")
     parser.add_argument("--bin-dir", default=None, help="Override directory for pure-Omega binaries")
     args = parser.parse_args(argv)
 
-    srv = create_server(host=args.host, port=args.port, workspace_dir=args.workspace_dir, bin_dir=args.bin_dir)
+    pol = ssh_remote.StudioAccessPolicy(
+        allow_public=args.allow_public,
+        refuse_public=args.refuse_public,
+        require_pairing=args.require_pairing,
+        no_pairing=args.no_pairing,
+        pairing_address=args.pairing_address,
+    )
+    srv = create_server(host=args.host, port=args.port, workspace_dir=args.workspace_dir, bin_dir=args.bin_dir, access_policy=pol)
     host, port = srv.server_address[:2]
-    print(f"Omega Helix Studio listening on http://{host}:{port}/ (Ctrl-C to stop)", flush=True)
+    adv = args.pairing_address or f"{host}:{port}"
+    tok = pol.pairing_code
+    url = f"http://{adv}/?pair={tok}" if tok else f"http://{adv}/"
+    if args.json:
+        print(json.dumps({
+            "ok": True,
+            "bind": f"{host}:{port}",
+            "port": port,
+            "pairing_address": adv,
+            "pairing_code": tok,
+            "url": url,
+        }), flush=True)
+    else:
+        print(f"Omega Helix Studio listening on http://{host}:{port}/ (Ctrl-C to stop)", flush=True)
     try:
         srv.serve_forever(poll_interval=0.25)
     except KeyboardInterrupt:

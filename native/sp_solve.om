@@ -1,0 +1,1130 @@
+note SPDX-License-Identifier: AGPL-3.0-only
+note omegallm sp_solve.om (Pillar 7): Closed-form f64 specialist solver replacing iterative backprop.
+note Reads OLLMFH01 (fcache / fcachem) cached frozen-trunk hidden states H and target tokens y,
+note solves Ridge regression (Primal Cholesky LL^T for D <= N, Dual Woodbury for N < D),
+note runs 1-step Gauss-Newton softmax cross-entropy refinement (sp_gauss_newton_step),
+note and exports valid Merkle-hashed OLLMSP01 .sp specialist packs (cmdspforge).
+note Compatible with both plain target a64macos and om2 (gb10).
+
+const OSP_MAXN ulong 65536
+const OSP_EPS f64 0.000000000000001
+
+global osp_tgt ulong 65536
+global osp_st ulong 32
+global osp_fl f64 16
+
+note Zero ocs[off .. off + n) safely for any n (chunked via ocn/oce to stay under loop bound)
+fn sp_zero_ocs off ulong n ulong to void
+for q ulong ocn n
+i = mul q OCH
+ie = oce q n
+while lt i ie bound 999999
+ocsp add off i 0.0f64
+i = add i 1
+end
+end
+end
+
+note Dot product sum_{i=0..n-1} ocs[a + i*ast] * ocs[b + i*bst]
+fn sp_dot a ulong ast ulong b ulong bst ulong n ulong to f64
+acc = 0.0f64
+ia = a
+ib = b
+for i ulong n
+acc = add acc mul ocsg ia ocsg ib
+ia = add ia ast
+ib = add ib bst
+end
+ret acc
+end
+
+note Compute L[j, j] = sqrt(A[j, j] - sum_{s<j} L[j, s]^2); returns 0.0 on non-SPD pivot
+fn sp_chol_diag j ulong m ulong ao ulong to f64
+row = add ao mul j m
+acc = ocsg add row j
+for s ulong j
+v = ocsg add row s
+acc = sub acc mul v v
+end
+if le acc OSP_EPS
+ret 0.0f64
+end
+ret fsqrt acc
+end
+
+note Compute L[i, j] = (A[i, j] - sum_{s<j} L[i, s]*L[j, s]) * invd
+fn sp_chol_off i ulong j ulong m ulong ao ulong invd f64 to void
+ri = add ao mul i m
+rj = add ao mul j m
+acc = ocsg add ri j
+for s ulong j
+acc = sub acc mul ocsg add ri s ocsg add rj s
+end
+ocsp add ri j mul acc invd
+end
+
+note In-place Cholesky factorization A = L L^T on m x m matrix at ocs[ao .. ao + m*m).
+note Returns 0 on success, 1 if matrix is not positive definite.
+fn sp_chol m ulong ao ulong to ulong
+for j ulong m
+diag = sp_chol_diag j m ao
+if le diag 0.0f64
+ret 1
+end
+ocsp add ao add mul j m j diag
+invd = div 1.0f64 diag
+i = add j 1
+while lt i m bound 999999
+sp_chol_off i j m ao invd
+i = add i 1
+end
+end
+ret 0
+end
+
+note Forward substitution L z = B[:, col] for m x k matrix B at ocs[bo..]
+fn sp_fwd_sub m ulong k ulong lo ulong bo ulong col ulong to void
+for i ulong m
+acc = ocsg add bo add mul i k col
+rl = add lo mul i m
+for j ulong i
+acc = sub acc mul ocsg add rl j ocsg add bo add mul j k col
+end
+ocsp add bo add mul i k col div acc ocsg add rl i
+end
+end
+
+note Backward substitution L^T x = z[:, col] for m x k matrix at ocs[bo..]
+fn sp_bwd_sub m ulong k ulong lo ulong bo ulong col ulong to void
+idx = m
+while gt idx 0 bound 999999
+i = sub idx 1
+acc = ocsg add bo add mul i k col
+j = add i 1
+while lt j m bound 999999
+acc = sub acc mul ocsg add lo add mul j m i ocsg add bo add mul j k col
+j = add j 1
+end
+ocsp add bo add mul i k col div acc ocsg add lo add mul i m i
+idx = i
+end
+end
+
+note Solve (L L^T) X = B in place in ocs[bo .. bo + m*k)
+fn sp_chol_solve m ulong k ulong lo ulong bo ulong to void
+for col ulong k
+sp_fwd_sub m k lo bo col
+sp_bwd_sub m k lo bo col
+end
+end
+
+note Form primal normal matrix G = H^T H + lam I (d x d) at ocs[ao..]
+note H is n x d at ocs[ho..]
+fn sp_gram_primal n ulong d ulong ho ulong ao ulong lam f64 to void
+for a ulong d
+for b ulong add a 1
+v = sp_dot add ho a d add ho b d n
+if eq a b
+v = add v lam
+end
+ocsp add ao add mul a d b v
+ocsp add ao add mul b d a v
+end
+end
+end
+
+note Form dual Gram matrix K = H H^T + lam I (n x n) at ocs[ao..]
+fn sp_gram_dual n ulong d ulong ho ulong ao ulong lam f64 to void
+for i ulong n
+ri = add ho mul i d
+for j ulong add i 1
+rj = add ho mul j d
+v = sp_dot ri 1 rj 1 d
+if eq i j
+v = add v lam
+end
+ocsp add ao add mul i n j v
+ocsp add ao add mul j n i v
+end
+end
+end
+
+note Compute R = H^T Y (d x c) at ocs[ro..], H (n x d) at ho, Y (n x c) at yo
+fn sp_ht_y n ulong d ulong c ulong ho ulong yo ulong to void
+ro = get osp_st 5
+for a ulong d
+for col ulong c
+v = sp_dot add ho a d add yo col c n
+ocsp add ro add mul a c col v
+end
+end
+end
+
+note Compute W = H^T A (d x c) at ocs[wo..], H (n x d) at ho, A (n x c) at ao
+fn sp_ht_a n ulong d ulong c ulong ho ulong ao ulong to void
+wo = get osp_st 5
+for a ulong d
+for col ulong c
+v = sp_dot add ho a d add ao col c n
+ocsp add wo add mul a c col v
+end
+end
+end
+
+note Primal Ridge solver (d <= n): (H^T H + lam I) W = H^T Y
+note Reads ho=osp_st[3], yo=osp_st[4], writes W to osp_st[5], uses A at osp_st[6].
+fn sp_ridge_primal n ulong d ulong c ulong lam f64 to ulong
+ho = get osp_st 3
+yo = get osp_st 4
+wo = get osp_st 5
+ao = get osp_st 6
+sp_gram_primal n d ho ao lam
+sp_ht_y n d c ho yo
+rc = sp_chol d ao
+if ne rc 0
+ret rc
+end
+sp_chol_solve d c ao wo
+ret 0
+end
+
+note Dual Woodbury Ridge solver (n < d): W = H^T (H H^T + lam I)^(-1) Y
+note Reads ho=osp_st[3], yo=osp_st[4], writes W to osp_st[5], uses A at osp_st[6], B at osp_st[7].
+fn sp_ridge_woodbury n ulong d ulong c ulong lam f64 to ulong
+ho = get osp_st 3
+yo = get osp_st 4
+ao = get osp_st 6
+bo = get osp_st 7
+sp_gram_dual n d ho ao lam
+for i ulong n
+for col ulong c
+idx = add mul i c col
+ocsp add bo idx ocsg add yo idx
+end
+end
+rc = sp_chol n ao
+if ne rc 0
+ret rc
+end
+sp_chol_solve n c ao bo
+sp_ht_a n d c ho bo
+ret 0
+end
+
+note Automatic regime-switching Ridge solver: Primal Cholesky if d <= n, Dual Woodbury if n < d.
+note Sets osp_st[9] = 0 (primal) or 1 (Woodbury). Returns 0 on success.
+fn sp_ridge_solve n ulong d ulong c ulong lam f64 to ulong
+if or eq n 0 or eq d 0 or eq c 0 le lam 0.0f64
+ret 1
+end
+if le d n
+put osp_st 9 0
+ret sp_ridge_primal n d c lam
+end
+put osp_st 9 1
+ret sp_ridge_woodbury n d c lam
+end
+
+note ---- Softmax Cross-Entropy & 1-Step Gauss-Newton Refinement ----
+
+note Compute row i logits L[i] = H[i] . W into ocs[rp .. rp + c); returns max logit.
+fn sp_row_logits rh ulong wo ulong rp ulong d ulong c ulong to f64
+mx = bitcast f64 ulong 18442240474082181120
+for col ulong c
+v = sp_dot rh 1 add wo col c d
+ocsp add rp col v
+if gt v mx
+mx = v
+end
+end
+ret mx
+end
+
+note Softmax in place at ocs[rp .. rp + c) given max mx; returns log-sum-exp sum sm.
+fn sp_row_soft rp ulong c ulong mx f64 to f64
+sm = 0.0f64
+for col ulong c
+ev = fexp sub ocsg add rp col mx
+ocsp add rp col ev
+sm = add sm ev
+end
+for col2 ulong c
+ocsp add rp col2 div ocsg add rp col2 sm
+end
+ret sm
+end
+
+note Compute row i logits L[i] = H[i] . W into ocs[po + i*c .. +c), apply softmax in place,
+note and return row cross-entropy loss -log P[i, target_i].
+fn sp_softmax_row i ulong d ulong c ulong po ulong to f64
+rp = add po mul i c
+mx = sp_row_logits add get osp_st 3 mul i d get osp_st 5 rp d c
+yi = get osp_tgt i
+ly = ocsg add rp yi
+sm = sp_row_soft rp c mx
+ret sub add mx flog sm ly
+end
+
+note Compute P = softmax(H W) at ocs[po .. po + n*c) and mean cross-entropy loss over n samples.
+fn sp_eval_ce_mat n ulong d ulong c ulong po ulong to f64
+ls = 0.0f64
+for i ulong n
+ls = add ls sp_softmax_row i d c po
+end
+ret div ls f64 n
+end
+
+note Weighted dot product sum_{i=0..n-1} w[i] * H[i, a] * H[i, b]
+fn sp_wdot a ulong b ulong d ulong woff ulong n ulong to f64
+ho = get osp_st 3
+ia = add ho a
+ib = add ho b
+acc = 0.0f64
+for i ulong n
+v = mul ocsg ia ocsg ib
+acc = add acc mul ocsg add woff i v
+ia = add ia d
+ib = add ib d
+end
+ret acc
+end
+
+note Form weighted primal normal matrix G = H^T diag(w) H + lam I (d x d) at ocs[osp_st[6]..],
+note where w[0..n) is at ocs[woff..] and lam is osp_fl[0].
+fn sp_wgram_primal n ulong d ulong woff ulong to void
+ao = get osp_st 6
+lam = get osp_fl 0
+for a ulong d
+for b ulong add a 1
+acc = sp_wdot a b d woff n
+if eq a b
+acc = add acc lam
+end
+ocsp add ao add mul a d b acc
+ocsp add ao add mul b d a acc
+end
+end
+end
+
+note Form weighted primal RHS rhs = H^T r (d x 1) at ocs[bo..], r[0..n) at ocs[roff..].
+fn sp_w_rhs n ulong d ulong roff ulong bo ulong to void
+ho = get osp_st 3
+for a ulong d
+ha = add ho a
+v = sp_dot ha d roff 1 n
+ocsp add bo a v
+end
+end
+
+note Copy 1 solved column from ocs[bo..bo+d) into column col of ocs[dwo..] (d x c)
+fn sp_copy_col dwo ulong d ulong c ulong col ulong to void
+bo = get osp_st 7
+for a ulong d
+idx = add dwo add mul a c col
+val = ocsg add bo a
+ocsp idx val
+end
+end
+
+note Solve 1 class column col via Primal weighted Cholesky: (H^T diag(w) H + lam I) dW[:, col] = H^T r
+fn sp_gn_col_primal n ulong d ulong c ulong col ulong to ulong
+scr = get osp_st 8
+woff = add scr add mul n c mul d c
+roff = add woff n
+sp_wgram_primal n d woff
+sp_w_rhs n d roff get osp_st 7
+rc = sp_chol d get osp_st 6
+if ne rc 0
+ret rc
+end
+sp_chol_solve d 1 get osp_st 6 get osp_st 7
+sp_copy_col add scr mul n c d c col
+ret 0
+end
+
+note Precompute unregularized K0 = H H^T (n x n) at ocs[koff..] for Dual weighted Woodbury
+fn sp_precomp_k0 n ulong d ulong ho ulong koff ulong to void
+for i ulong n
+ri = add ho mul i d
+for j ulong add i 1
+rj = add ho mul j d
+v = sp_dot ri 1 rj 1 d
+ij = add mul i n j
+ji = add mul j n i
+ocsp add koff ij v
+ocsp add koff ji v
+end
+end
+end
+
+note Compute row i (columns 0..i) of M = S K0 S + lam I into ocs[osp_st[6]..]
+fn sp_gn_wood_row i ulong n ulong soff ulong koff ulong to void
+ao = get osp_st 6
+si = ocsg add soff i
+for j ulong add i 1
+pij = ocsg add koff add mul i n j
+v = mul si mul pij ocsg add soff j
+if eq i j
+v = add v get osp_fl 0
+end
+ocsp add ao add mul i n j v
+ocsp add ao add mul j n i v
+end
+end
+
+note Build M = S K0 S + lam I (n x n) at ocs[osp_st[6]..], s at ocs[soff..], K0 at ocs[koff..], lam=osp_fl[0].
+fn sp_gn_wood_mat n ulong soff ulong koff ulong to void
+for i ulong n
+sp_gn_wood_row i n soff koff
+end
+end
+
+fn sp_gn_wood_rhs n ulong soff ulong roff ulong koff ulong to void
+bo = get osp_st 7
+for i ulong n
+kr = add koff mul i n
+u = sp_dot kr 1 roff 1 n
+ocsp add bo i mul ocsg add soff i u
+end
+end
+
+note Compute alpha[i] = (r[i] - s[i] * q[i]) / lam from q at ocs[osp_st[7]..] into ocs[aloff..]
+fn sp_gn_wood_alpha n ulong roff ulong soff ulong aloff ulong to void
+bo = get osp_st 7
+lam = get osp_fl 0
+for i ulong n
+rv = ocsg add roff i
+sq = mul ocsg add soff i ocsg add bo i
+ocsp add aloff i div sub rv sq lam
+end
+end
+
+note Compute column col of dW = H^T alpha into ocs[dwo..] (d x c)
+fn sp_gn_wood_ht n ulong d ulong c ulong col ulong to void
+scr = get osp_st 8
+aloff = add scr add add mul n c mul d c add mul n 3 mul n n
+ho = get osp_st 3
+dwo = add scr mul n c
+for a ulong d
+idx = add dwo add mul a c col
+ha = add ho a
+val = sp_dot ha d aloff 1 n
+ocsp idx val
+end
+end
+
+note Finish Dual Weighted Woodbury column col after Cholesky solve in bo
+fn sp_gn_wood_fin n ulong d ulong c ulong col ulong to void
+scr = get osp_st 8
+roff = add scr add add mul n c mul d c n
+soff = add roff add n mul n n
+sp_gn_wood_alpha n roff soff add soff n
+sp_gn_wood_ht n d c col
+end
+
+note Solve 1 class column col via Dual Weighted Woodbury (n < d):
+note M = S K0 S + lam I, q = M^(-1) S K0 r, alpha = (r - S q) / lam, dW[:, col] = H^T alpha.
+fn sp_gn_col_wood n ulong d ulong c ulong col ulong to ulong
+scr = get osp_st 8
+woff = add scr add mul n c mul d c
+roff = add woff n
+koff = add roff n
+soff = add koff mul n n
+for i ulong n
+ocsp add soff i fsqrt ocsg add woff i
+end
+sp_gn_wood_mat n soff koff
+sp_gn_wood_rhs n soff roff koff
+rc = sp_chol n get osp_st 6
+if ne rc 0
+ret rc
+end
+sp_chol_solve n 1 get osp_st 6 get osp_st 7
+sp_gn_wood_fin n d c col
+ret 0
+end
+
+note Fill Fisher weights w[i] = p[i, col]*(1 - p[i, col]) and residual r[i] = y_onehot[i, col] - p[i, col]
+fn sp_gn_fill_wr n ulong c ulong col ulong po ulong to void
+woff = add po add mul n c mul get osp_st 1 c
+roff = add woff n
+for i ulong n
+pv = ocsg add po add mul i c col
+ocsp add woff i mul pv sub 1.0f64 pv
+rv = sub 0.0f64 pv
+if eq get osp_tgt i col
+rv = sub 1.0f64 pv
+end
+ocsp add roff i rv
+end
+end
+
+note Apply W[a, col] += eta * dW[a, col] across d x c
+fn sp_gn_apply d ulong c ulong dwo ulong eta f64 to void
+wo = get osp_st 5
+for a ulong d
+for col ulong c
+idx = add mul a c col
+v = add ocsg add wo idx mul eta ocsg add dwo idx
+ocsp add wo idx v
+end
+end
+end
+
+note 1-Step Gauss-Newton / damped Newton refinement for softmax cross-entropy on cached features H:
+note Solves (H^T diag(p*(1-p)) H + lam I) dW = H^T (y_onehot - p) per class with auto Primal/Woodbury switch,
+note updates W <- W + eta * dW, and records loss_before in osp_fl[2] and loss_after in osp_fl[3].
+note Layout in ocs: H at osp_st[3], W at osp_st[5], A at osp_st[6], B at osp_st[7], SCR at osp_st[8].
+note SCR requires n*c + d*c + 2*n (plus n*n + 2*n when n < d).
+fn sp_gauss_newton_step n ulong d ulong c ulong lam f64 eta f64 to ulong
+if or eq n 0 or eq d 0 or eq c 0 le lam 0.0f64
+ret 1
+end
+put osp_st 0 n
+put osp_st 1 d
+put osp_st 2 c
+put osp_fl 0 lam
+scr = get osp_st 8
+put osp_fl 2 sp_eval_ce_mat n d c scr
+roff = add scr add add mul n c mul d c n
+if gt d n
+put osp_st 9 1
+sp_precomp_k0 n d get osp_st 3 add roff n
+else
+put osp_st 9 0
+end
+for col ulong c
+sp_gn_fill_wr n c col scr
+rc = ulong 0
+if le d n
+rc = sp_gn_col_primal n d c col
+else
+rc = sp_gn_col_wood n d c col
+end
+if ne rc 0
+ret rc
+end
+end
+sp_gn_apply d c add scr mul n c eta
+put osp_fl 3 sp_eval_ce_mat n d c scr
+ret 0
+end
+
+note ---- End-to-End Closed-Form Specialist Forging: OLLMFH01 -> OLLMSP01 ----
+
+note Copy dd f64s from opw[src..] into ocs[dst..]
+fn sp_load_fc_row dst ulong src ulong dd ulong to void
+for d ulong dd
+v = bitcast f64 opw8 add src mul d 8
+ocsp add dst d v
+end
+end
+
+note Load one OLLMFH01 window from opw into hraw (ocs) and osp_tgt; returns updated active count n.
+fn sp_load_fc_win n ulong hraw ulong tt ulong dd ulong to ulong
+vv = get og 0
+off = mul tt 8
+for t ulong tt
+yt = opw8 mul t 8
+if lt yt 65536
+if ge yt vv
+exit 60
+end
+if ge n OSP_MAXN
+exit 23
+end
+put osp_tgt n yt
+sp_load_fc_row add hraw mul n dd add off mul mul t dd 8 dd
+n = add n 1
+end
+end
+ret n
+end
+
+note Stream OLLMFH01 cache at argv[ai] into hraw (ocs[hraw..]), osp_tgt[0..n), counting active tokens.
+fn sp_load_fcache ai ulong hraw ulong to ulong
+tt = get og 1
+dd = get og 2
+ww = get osp_st 15
+rec = get osp_st 16
+n = ulong 0
+for w ulong ww
+pos = add 48 mul w rec
+if ne oprd ai pos 0 rec rec
+exit 60
+end
+n = sp_load_fc_win n hraw tt dd
+end
+if eq n 0
+exit 23
+end
+ret n
+end
+
+note Copy w1 columns [c0 .. ff) from layer bl-1 to layer bl
+fn sp_init_w1_clone bl ulong c0 ulong dd ulong ff ulong to void
+src1 = opw1 sub bl 1
+dst1 = opw1 bl
+for r ulong dd
+col = c0
+while lt col ff bound 999999
+idx = add mul r ff col
+owp add dst1 idx owg add src1 idx
+col = add col 1
+end
+end
+end
+
+note Initialize specialist w1 (dd x ff): [I_D, -I_D, cloned features] when ff >= 2*dd, else clone bl-1.
+fn sp_init_w1 bl ulong dd ulong ff ulong to void
+oiset opw1 bl mul dd ff 0.0f64
+if ge ff mul 2 dd
+dst1 = opw1 bl
+for d ulong dd
+oc1 = add mul d ff d
+oc2 = add mul d ff add dd d
+owp add dst1 oc1 1.0f64
+owp add dst1 oc2 -1.0f64
+end
+sp_init_w1_clone bl mul 2 dd dd ff
+ret
+end
+sp_init_w1_clone bl 0 dd ff
+end
+
+note Initialize specialist layer bl: attention zeroed (hm = h), g2 = 1.0,
+note w1 = [I_D, -I_D, cloned features], w2 = 0.0, gf = gf_base.
+fn sp_init_spec_layer bl ulong gf_snap ulong to void
+dd = get og 2
+ff = get og 4
+oiset opg1 bl dd 1.0f64
+oiset opwq bl mul dd dd 0.0f64
+oiset opwk bl mul dd dd 0.0f64
+oiset opwv bl mul dd dd 0.0f64
+oiset opwo bl mul dd dd 0.0f64
+oiset opg2 bl dd 1.0f64
+sp_init_w1 bl dd ff
+oiset opw2 bl mul ff dd 0.0f64
+gf = get og 33
+for g ulong dd
+owp add gf g ocsg add gf_snap g
+end
+end
+
+note Compute one ReLU feature f of row hr
+fn sp_build_feat_one hr ulong s0 f64 w1o ulong f ulong to f64
+dd = get og 2
+ff = get og 4
+acc = 0.0f64
+for d ulong dd
+x3 = div ocsg add hr d s0
+w3 = get ow add w1o add mul d ff f
+acc = add acc mul x3 w3
+end
+if lt acc 0.0f64
+ret 0.0f64
+end
+ret acc
+end
+
+note Compute Phi[i, 0..ff) = relu((H_raw[i] / s0) . w1) into ocs[pr..pr+ff)
+fn sp_build_feat_f hr ulong s0 f64 pr ulong to void
+ff = get og 4
+w1o = opx opw1 get osp_st 10
+for f ulong ff
+ocsp add pr f sp_build_feat_one hr s0 w1o f
+end
+end
+
+note Compute z0[i] = rms(H_raw[i], gf_base) into ocs[zr..zr+dd)
+fn sp_build_z0 hr ulong s0 f64 zr ulong dd ulong to void
+gfo = opx get og 33
+for d ulong dd
+x2 = div ocsg add hr d s0
+w2 = get ow add gfo d
+ocsp add zr d mul x2 w2
+end
+end
+
+note Compute row i of Phi[i] = relu(rms(H_raw[i], 1.0) . w1) and z0[i], s0[i].
+fn sp_build_feat_row i ulong hraw ulong phio ulong zo ulong s0o ulong to void
+dd = get og 2
+ff = get og 4
+hr = add hraw mul i dd
+ss = 0.0f64
+for d ulong dd
+v = ocsg add hr d
+ss = add ss mul v v
+end
+s0 = fsqrt add div ss f64 dd 0.00001f64
+ocsp add s0o i s0
+sp_build_z0 hr s0 add zo mul i dd dd
+sp_build_feat_f hr s0 add phio mul i ff
+end
+
+note Compute Phi[i, 0..ff) = relu(rms(H_raw[i], g2=1.0) . w1) into ocs[phio..],
+note and z0[i, 0..dd) = rms(H_raw[i], gf_base) into ocs[zo..], s0[i] into ocs[s0o..].
+fn sp_build_features n ulong hraw ulong phio ulong zo ulong s0o ulong to void
+for i ulong n
+sp_build_feat_row i hraw phio zo s0o
+end
+end
+
+note Dot product of columns a, b of wte (vv x dd)
+fn sp_wte_dot a ulong b ulong dd ulong vv ulong to f64
+acc = 0.0f64
+for v ulong vv
+row = mul v dd
+acc = add acc mul owg add row a owg add row b
+end
+ret acc
+end
+
+note Form G_wte = (1/vv) * wte^T wte + mu_z I (dd x dd) at ocs[gwte..] and factor with Cholesky
+fn sp_factor_wte gwte ulong mu f64 to ulong
+dd = get og 2
+vv = get og 0
+invv = div 1.0f64 f64 vv
+muz = mul mu 0.001f64
+if lt muz 0.000001f64
+muz = 0.000001f64
+end
+for a ulong dd
+for b ulong add a 1
+acc = mul sp_wte_dot a b dd vv invv
+if eq a b
+acc = add acc muz
+end
+ocsp add gwte add mul a dd b acc
+ocsp add gwte add mul b dd a acc
+end
+end
+ret sp_chol dd gwte
+end
+
+note Scale ocs[wteo..wteo+dd) by gf_base / si
+fn sp_forge_apply_gf wteo ulong si f64 dd ulong to void
+gfo = opx get og 33
+for d ulong dd
+vx = div ocsg add wteo d si
+wx = get ow add gfo d
+ocsp add wteo d mul vx wx
+end
+end
+
+note Compute row i hidden state hd = H_raw[i] + Phi[i] . W2, RMSNorm into wteo, return RMS scale si.
+fn sp_forge_row_norm i ulong wo ulong wteo ulong to f64
+dd = get og 2
+ff = get og 4
+hr = add get osp_st 17 mul i dd
+pr = add get osp_st 3 mul i ff
+ss = 0.0f64
+for d ulong dd
+hd = add ocsg add hr d sp_dot pr 1 add wo d dd ff
+ocsp add wteo d hd
+ss = add ss mul hd hd
+end
+si = fsqrt add div ss f64 dd 0.00001f64
+sp_forge_apply_gf wteo si dd
+ret si
+end
+
+note Compute row i logits from wteo[0..dd) into lo_off[0..vv); returns max logit.
+fn sp_forge_row_logits wteo ulong lo_off ulong vv ulong dd ulong to f64
+mx = bitcast f64 ulong 18442240474082181120
+for v ulong vv
+lv = 0.0f64
+vr = mul v dd
+for d ulong dd
+lv = add lv mul ocsg add wteo d owg add vr d
+end
+ocsp add lo_off v lv
+if gt lv mx
+mx = lv
+end
+end
+ret mx
+end
+
+note Accumulate rv * wte[v2, 0..dd) into ocs[dz_off..dz_off+dd)
+fn sp_forge_gz_acc rv f64 vr ulong dz_off ulong dd ulong to void
+for d ulong dd
+dp = add dz_off d
+dw = mul rv owg add vr d
+ocsp dp add ocsg dp dw
+end
+end
+
+note Accumulate g_z = (y_onehot - p) . wte into ocs[dz_off .. dz_off + dd) and return Fisher trace weight.
+fn sp_forge_row_gz yi ulong lo_off ulong vv ulong dd ulong dz_off ulong to f64
+p2 = 0.0f64
+for v ulong vv
+pv = ocsg add lo_off v
+p2 = add p2 mul pv pv
+end
+for d ulong dd
+ocsp add dz_off d 0.0f64
+end
+for v2 ulong vv
+rv = sub 0.0f64 ocsg add lo_off v2
+if eq v2 yi
+rv = add rv 1.0f64
+end
+sp_forge_gz_acc rv mul v2 dd dz_off dd
+end
+fw = sub 1.0f64 p2
+if lt fw 1.0e-6f64
+fw = 1.0e-6f64
+end
+ret fw
+end
+
+note Scale dz[0..dd) by si / gf_base into ocs[yr..yr+dd)
+fn sp_forge_scale_dz yr ulong dz_off ulong si f64 dd ulong to void
+gfo = opx get og 33
+for d ulong dd
+gfd = get ow add gfo d
+sc = si
+if gt fabs gfd 1.0e-8f64
+sc = div si gfd
+end
+ocsp add yr d mul sc ocsg add dz_off d
+end
+end
+
+note Compute Fisher weight and z-space target dY_h[i] from softmax probs at lo_off[0..vv).
+fn sp_forge_row_grad i ulong si f64 gwte ulong lo_off ulong to void
+dd = get og 2
+vv = get og 0
+dz_off = add lo_off vv
+fw = sp_forge_row_gz get osp_tgt i lo_off vv dd dz_off
+ocsp add get osp_st 18 i fw
+sp_chol_solve dd 1 gwte dz_off
+sp_forge_scale_dz add get osp_st 4 mul i dd dz_off si dd
+end
+
+note Evaluate one sample row i for sp_forge_eval_step; returns cross-entropy loss.
+fn sp_forge_eval_row i ulong gwte ulong wo ulong comp_tgt ulong to f64
+wteo = get osp_st 19
+dd = get og 2
+vv = get og 0
+lo_off = add wteo dd
+si = sp_forge_row_norm i wo wteo
+mx = sp_forge_row_logits wteo lo_off vv dd
+ly = ocsg add lo_off get osp_tgt i
+sm = sp_row_soft lo_off vv mx
+if ne comp_tgt 0
+sp_forge_row_grad i si gwte lo_off
+end
+ret sub add mx flog sm ly
+end
+
+note Evaluate CE loss on current w2 (at ocs[wo..]) over n cached samples.
+note If comp_tgt != 0, writes z-space target residual dz into ocs[yo .. +n*dd) and
+note scalar Fisher trace weight w[i] = 1 - sum_v p[i,v]^2 into ocs[s0o + i].
+fn sp_forge_eval_step n ulong gwte ulong wo ulong comp_tgt ulong to f64
+ls = 0.0f64
+for i ulong n
+ls = add ls sp_forge_eval_row i gwte wo comp_tgt
+end
+ret div ls f64 n
+end
+
+note Compute H^T alpha into column col of ocs[osp_st[5]..] (ff x dd) from alpha at ocs[osp_st[7]..]
+fn sp_forge_wridge_ht n ulong ff ulong dd ulong col ulong to void
+ho = get osp_st 3
+wo = get osp_st 5
+bo = get osp_st 7
+for a ulong ff
+ha = add ho a
+idx = add wo add mul a dd col
+val = sp_dot ha ff bo 1 n
+ocsp idx val
+end
+end
+
+note Solve one column of weighted Woodbury in sp_forge_wridge
+fn sp_forge_wridge_col col ulong n ulong ff ulong dd ulong to void
+yo = get osp_st 4
+koff = get osp_st 20
+soff = add koff mul n n
+aloff = add soff n
+for i ulong n
+ocsp add aloff i ocsg add yo add mul i dd col
+end
+sp_gn_wood_rhs n soff aloff koff
+sp_chol_solve n 1 get osp_st 6 get osp_st 7
+sp_forge_wridge_alpha n aloff soff
+sp_forge_wridge_ht n ff dd col
+end
+
+fn sp_forge_wridge_alpha n ulong aloff ulong soff ulong to void
+bo = get osp_st 7
+lam = get osp_fl 0
+for i ulong n
+rv = ocsg add aloff i
+sq = mul ocsg add soff i ocsg add bo i
+ocsp add bo i div sub rv sq lam
+end
+end
+
+note Solve weighted Ridge (Phi^T diag(w) Phi + lam I) dW = Phi^T dY with auto Primal/Woodbury switch.
+note Phi at osp_st[3] (n x ff), dY at osp_st[4] (n x dd), w at osp_st[18] (n), result dW at osp_st[5].
+fn sp_forge_wridge n ulong ff ulong dd ulong lam f64 to ulong
+put osp_fl 0 lam
+if le ff n
+put osp_st 9 0
+sp_wgram_primal n ff get osp_st 18
+sp_ht_y n ff dd get osp_st 3 get osp_st 4
+rc = sp_chol ff get osp_st 6
+if ne rc 0
+ret rc
+end
+sp_chol_solve ff dd get osp_st 6 get osp_st 5
+ret 0
+end
+put osp_st 9 1
+koff = get osp_st 20
+soff = add koff mul n n
+sp_precomp_k0 n ff get osp_st 3 koff
+for i ulong n
+ocsp add soff i fsqrt ocsg add get osp_st 18 i
+end
+sp_gn_wood_mat n soff koff
+rc2 = sp_chol n get osp_st 6
+if ne rc2 0
+ret rc2
+end
+for col ulong dd
+sp_forge_wridge_col col n ff dd
+end
+ret 0
+end
+
+note Try trial weights tmo = wcur + eta * dw
+fn sp_forge_fill_trial wcur ulong dw ulong tmo ulong ndw ulong eta f64 to void
+for j ulong ndw
+v = add ocsg add wcur j mul eta ocsg add dw j
+ocsp add tmo j v
+end
+end
+
+note Run Armijo backtracking over eta in {1, 0.5, ..., 1/32} on w2_cur + eta*dw -> updates w2_cur in place.
+fn sp_forge_damped_accept n ulong gwte ulong wcur ulong dw ulong lcur f64 to f64
+ndw = mul get og 4 get og 2
+tmo = get osp_st 21
+eta = 1.0f64
+best_l = lcur
+best_eta = 0.0f64
+for k ulong 6
+sp_forge_fill_trial wcur dw tmo ndw eta
+ltry = sp_forge_eval_step n gwte tmo 0
+if lt ltry best_l
+best_l = ltry
+best_eta = eta
+break
+end
+eta = mul eta 0.5f64
+end
+if gt best_eta 0.0f64
+sp_forge_fill_trial wcur dw wcur ndw best_eta
+end
+ret best_l
+end
+
+note Copy solved w2 from ocs[wo..] into virtual parameters ow[opw2(bl)..]
+fn sp_commit_w2 bl ulong wo ulong to void
+dd = get og 2
+ff = get og 4
+base = opw2 bl
+n = mul ff dd
+for i ulong n
+owp add base i ocsg add wo i
+end
+end
+
+note Snapshot ow[0..n) into ocs[dst .. dst + n) without touching ocs[0..dst)
+fn sp_snap_base dst ulong n ulong to void
+for q ulong ocn n
+i = mul q OCH
+ie = oce q n
+while lt i ie bound 999999
+ocsp add dst i owg i
+i = add i 1
+end
+end
+end
+
+note Restore ow[0..n) from ocs[src .. src + n)
+fn sp_rest_base src ulong n ulong to void
+for q ulong ocn n
+i = mul q OCH
+ie = oce q n
+while lt i ie bound 999999
+owp i ocsg add src i
+i = add i 1
+end
+end
+end
+
+note Compute ocs scratch layout for spforge_consolidate_traces; stores offsets in osp_st.
+note Returns gwte offset.
+fn sp_forge_layout n ulong ff ulong dd ulong to ulong
+put osp_st 0 n
+put osp_st 1 ff
+put osp_st 2 dd
+put osp_st 17 0
+off = mul n dd
+put osp_st 3 off
+off = add off mul n ff
+put osp_st 4 off
+off = add off mul n dd
+put osp_st 5 off
+zo = add off mul ff dd
+s0o = add zo mul n dd
+put osp_st 18 s0o
+gwte = add s0o n
+off = add gwte mul dd dd
+put osp_st 6 off
+msz = ff
+if gt n ff
+msz = n
+end
+off = add off mul msz msz
+put osp_st 7 off
+off = add off mul msz dd
+put osp_st 19 off
+off = add off add dd add get og 0 dd
+put osp_st 22 off
+off = add off mul ff dd
+put osp_st 21 off
+put osp_st 20 add off mul ff dd
+sp_build_features n 0 get osp_st 3 zo s0o
+ret gwte
+end
+
+note Run Ridge + gns-step Gauss-Newton solve inside spforge_consolidate_traces
+fn sp_forge_solve_loop n ulong gwte ulong lam f64 gns ulong to void
+ff = get og 4
+dd = get og 2
+wcur = get osp_st 22
+sp_zero_ocs wcur mul ff dd
+l0 = sp_forge_eval_step n gwte wcur 1
+put osp_fl 2 l0
+if ne sp_ridge_solve n ff dd lam 0
+exit 42
+end
+l1 = sp_forge_damped_accept n gwte wcur get osp_st 5 l0
+for gs ulong gns
+l1 = sp_forge_eval_step n gwte wcur 1
+if eq sp_forge_wridge n ff dd lam 0
+l1 = sp_forge_damped_accept n gwte wcur get osp_st 5 l1
+end
+end
+put osp_fl 3 l1
+end
+
+note Sleep-consolidation entrypoint (for Arboris sleep export / fcachem replay):
+note Assumes BASE.ck is loaded in (og, ow), n cached hidden states H_raw (n x dd) are in
+note ocs[0 .. n*dd) and target token IDs are in osp_tgt[0 .. n).
+note Solves Ridge (Primal/Woodbury) + gns-step Gauss-Newton refinement and writes OLLMSP01
+note pack to argv[outai]. Returns 0 on success (loss_before in osp_fl[2], loss_after in osp_fl[3]).
+fn spforge_consolidate_traces outai ulong n ulong lam f64 gns ulong to ulong
+if or eq n 0 gt n OSP_MAXN
+ret 23
+end
+if le lam 0.0f64
+ret 2
+end
+bl = get og 5
+if ge bl 16
+ret 12
+end
+fz = get og 33
+bh = osp_basehash bl fz
+put osp_st 10 bl
+put osp_st 11 add bl 1
+put osp_st 12 fz
+put osp_st 14 bh
+snap = mul n get og 2
+sp_snap_base snap add fz get og 2
+put og 5 add bl 1
+if not ogeom
+ret 12
+end
+sp_rest_base snap fz
+put osp_st 13 sub get og 8 fz
+sp_init_spec_layer bl add snap fz
+gwte = sp_forge_layout n get og 4 get og 2
+if ne sp_factor_wte gwte lam 0
+ret 42
+end
+sp_forge_solve_loop n gwte lam gns
+sp_commit_w2 bl get osp_st 22
+osp_wrpack outai bl add bl 1 bh fz get osp_st 13
+ret 0
+end
+
+note spforge BASE.ck CACHE.hc OUT.sp [LAMBDA_MICRO [GN_STEPS]]
+note Forges a closed-form 1-layer OLLMSP01 specialist pack from cached OLLMFH01 features
+note using Ridge regression (Primal Cholesky / Dual Woodbury) + 1-step Gauss-Newton refinement.
+fn cmdspforge to void
+na = oargc
+if or lt na 5 gt na 7
+exit 2
+end
+c_ocs = ocsinit
+lam = 0.1f64
+if ge na 6
+lm = oargu 5
+if eq lm 0
+exit 2
+end
+lam = div f64 lm 1000000.0f64
+end
+gns = ulong 1
+if ge na 7
+gns = oargu 6
+if gt gns 16
+exit 2
+end
+end
+ockloop 2
+bl = get og 5
+if ge bl 16
+exit 12
+end
+fz = get og 33
+bh = osp_basehash bl fz
+ofh_rdhdr 3 bl bh
+put osp_st 15 get ottt_st 2
+put osp_st 16 get ottt_st 3
+n = sp_load_fcache 3 0
+rc = spforge_consolidate_traces 4 n lam gns
+if ne rc 0
+exit int rc
+end
+oputc 83
+oputc 80
+oputc 70
+oputc 79
+oputc 82
+oputc 71
+oputc 69
+oputc 32
+oputu bl
+oputc 32
+oputu add bl 1
+oputc 32
+oputu n
+oputc 32
+oputu get osp_st 9
+oputc 32
+oputl rmic get osp_fl 2
+oputc 32
+oputl rmic get osp_fl 3
+oputc 32
+oputu get osp_st 13
+oputc 10
+oflush
+end

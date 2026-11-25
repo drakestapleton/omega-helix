@@ -1,0 +1,3168 @@
+note SPDX-License-Identifier: Apache-2.0
+note native/rev.om: Pillar 2 - Reversible Residual Transformer Engine (pure OM-2 / OM-1 compatible)
+note Implements RevNet-style transformer layers:
+note   y1 = x1 + F(x2)   where F = Pre-RMSNorm + Causal GQA/MHA (optional RoPE/QKNorm) + Wo
+note   y2 = x2 + G(y1)   where G = Pre-RMSNorm + FFN (ReLU / GELU / SwiGLU / GeGLU)
+note Forward pass retains ONLY the single working pair buffer (y1, y2) of size 2 * T * D;
+note zero per-layer activation memory is stored across L layers or NP looped-core passes.
+note Backward pass algebraically reconstructs x2 = y2 - G(y1) and x1 = y1 - F(x2) on the fly,
+note recomputing local F/G partials in one shared single-layer scratch buffer.
+note Compatible with model.om pools (OLLMCK01/02/03) and OLLMCK04 (arch_flags + GQA + looped core).
+
+const REV_FL_ROPE ulong 1
+const REV_FL_SWIGLU ulong 2
+const REV_FL_UNTIED ulong 4
+const REV_FL_QKNORM ulong 8
+const REV_FL_ADAMW ulong 16
+const REV_FL_GELU ulong 32
+const REV_FL_GEGLU ulong 64
+const REV_FL_REV ulong 128
+const REV_FL_Q32 ulong 256
+const REV_Q32_SCALE f64 1073741824.0
+
+const REV_CKHDR ulong 208
+const REV_CKC ulong 65536
+const REV_CH ulong 500000
+const REV_MAGIC_CK4 ulong 3760588441286102095
+
+const REV_SCR_A ulong 0
+const REV_SCR_S1 ulong 1
+const REV_SCR_Q ulong 2
+const REV_SCR_K ulong 3
+const REV_SCR_U ulong 4
+const REV_SCR_O ulong 5
+const REV_SCR_FOUT ulong 6
+const REV_SCR_QPRE ulong 7
+const REV_SCR_KPRE ulong 8
+const REV_SCR_QNS ulong 9
+const REV_SCR_KNS ulong 10
+const REV_SCR_DA ulong 11
+const REV_SCR_DQ ulong 12
+const REV_SCR_DK ulong 13
+const REV_SCR_DU ulong 14
+const REV_SCR_DO ulong 15
+const REV_SCR_FP ulong 16
+const REV_SCR_UP ulong 17
+const REV_SCR_RL ulong 18
+const REV_SCR_DF1 ulong 19
+const REV_SCR_DF2 ulong 20
+const REV_SCR_HF ulong 21
+const REV_SCR_SF ulong 22
+const REV_SCR_Z ulong 23
+const REV_SCR_PR ulong 24
+const REV_SCR_DZ ulong 25
+const REV_SCR_DHF ulong 26
+const REV_SCR_END ulong 27
+
+global rev_cfg ulong 64
+global rev_so ulong 32
+global rev_st ulong 16
+global rev_sf f64 16
+
+global rev_pair f64 *
+global rev_dpair f64 *
+global rev_scr f64 *
+global rev_pa f64 *
+global rev_tmp f64 *
+global rev_p f64 *
+global rev_g f64 *
+global rev_m f64 *
+global rev_v f64 *
+global rev_bx ulong *
+global rev_by ulong *
+global rev_los f64 *
+global rev_rcos f64 *
+global rev_rsin f64 *
+
+global rev_arg uchar 4100
+global rev_path uchar 4100
+global rev_pk uchar 8220
+global rev_ck uchar 524288
+global rev_opw uchar 1048576
+global rev_cfd int 1
+global rev_rms_c f64 2
+global rev_at_s f64 2
+global rev_at_p ulong 2
+global rev_ad_f f64 8
+global rev_ck_st ulong 2
+global rev_q32_x1 long 256
+global rev_q32_x2 long 256
+global rev_q32_hist long 2048
+global rev_det_g ulong *
+global rev_det_sz ulong 1
+
+note ---------------- memory accounting ----------------
+
+note Per-layer intermediate activation DRAM bytes stored across L layers / NP passes: always 0.
+fn rev_act_bytes_used to ulong
+ret get rev_cfg 53
+end
+
+note Single working pair buffer (y1, y2) bytes = 2 * CT * D * 8.
+fn rev_pair_bytes to ulong
+ret mul 16 mul get rev_cfg 24 get rev_cfg 2
+end
+
+note ---------------- math primitives (OM-1 & OM-2 safe) ----------------
+
+fn rev_cn n ulong to ulong
+if eq n 0
+ret 0
+end
+ret div add n sub REV_CH 1 REV_CH
+end
+
+fn rev_ce q ulong n ulong to ulong
+e = mul add q 1 REV_CH
+if gt e n
+ret n
+end
+ret e
+end
+
+fn rev_sin_p r f64 to f64
+z = mul r r
+p = add mul z -7.647163731819816e-13 1.6059043836821614e-10
+p = add mul p z -2.505210838544172e-8
+p = add mul p z 2.755731922398589e-6
+p = add mul p z -0.0001984126984126984
+p = add mul p z 0.008333333333333333
+p = add mul p z -0.16666666666666666
+ret add r mul mul r z p
+end
+
+fn rev_cos_p r f64 to f64
+z = mul r r
+p = add mul z -1.1470745597729724e-11 2.0876756987868098e-9
+p = add mul p z -2.7557319223985893e-7
+p = add mul p z 0.0000248015873015873
+p = add mul p z -0.0013888888888888889
+p = add mul p z 0.041666666666666664
+p = add mul p z -0.5
+ret add 1.0 mul z p
+end
+
+fn rev_trig x f64 mode ulong to f64
+kf = mul x 0.63661977236758134
+if ge kf 0.0
+kf = add kf 0.5
+else
+kf = sub kf 0.5
+end
+k = long kf
+fk = f64 k
+r = sub sub x mul fk 1.5707963267341256 mul fk 6.0771005065061926e-11
+q = and ulong add k long mode 3
+if eq q 0
+ret rev_sin_p r
+end
+if eq q 1
+ret rev_cos_p r
+end
+if eq q 2
+ret neg rev_sin_p r
+end
+ret neg rev_cos_p r
+end
+
+fn rev_sin x f64 to f64
+ret rev_trig x 0
+end
+
+fn rev_cos x f64 to f64
+ret rev_trig x 1
+end
+
+fn rev_sig x f64 to f64
+if ge x 0.0
+ret div 1.0 add 1.0 fexp neg x
+end
+e = fexp x
+ret div e add 1.0 e
+end
+
+fn rev_tanh x f64 to f64
+if gt x 20.0
+ret 1.0
+end
+if lt x -20.0
+ret -1.0
+end
+e = fexp mul 2.0 x
+ret div sub e 1.0 add e 1.0
+end
+
+fn rev_gelu x f64 to f64
+c = mul 0.79788456080286536 add x mul 0.044715 mul mul x x x
+ret mul 0.5 mul x add 1.0 rev_tanh c
+end
+
+fn rev_gelu_d x f64 to f64
+x2 = mul x x
+c = mul 0.79788456080286536 add x mul 0.044715 mul x2 x
+th = rev_tanh c
+sech2 = sub 1.0 mul th th
+dc = mul 0.79788456080286536 add 1.0 mul 0.134145 x2
+ret add mul 0.5 add 1.0 th mul mul 0.5 x mul sech2 dc
+end
+
+note ---------------- unified pool accessors (mode 0 = model.om ow/ogr, mode 1 = CK04 rev_p/rev_g) ----------------
+
+fn rev_wg i ulong to f64
+if eq get rev_cfg 25 0
+ret owg i
+end
+ret get rev_p i
+end
+
+fn rev_wp i ulong v f64 to void
+if eq get rev_cfg 25 0
+owp i v
+ret
+end
+put rev_p i v
+end
+
+fn rev_gg i ulong to f64
+if eq get rev_cfg 25 0
+ret ogrg add get og 10 i
+end
+ret get rev_g i
+end
+
+fn rev_gp i ulong v f64 to void
+if eq get rev_cfg 25 0
+ogrp add get og 10 i v
+ret
+end
+put rev_g i v
+end
+
+fn rev_ga i ulong dv f64 to void
+if eq get rev_cfg 25 0
+ogra add get og 10 i dv
+ret
+end
+x = get rev_g i
+put rev_g i add x dv
+end
+
+fn rev_bx_at i ulong to ulong
+if eq get rev_cfg 25 0
+ret get obx i
+end
+ret get rev_bx i
+end
+
+fn rev_by_at i ulong to ulong
+if eq get rev_cfg 25 0
+ret get oby i
+end
+ret get rev_by i
+end
+
+fn rev_scr_add i ulong v f64 to void
+x = get rev_scr i
+put rev_scr i add x v
+end
+
+fn rev_dp_add i ulong v f64 to void
+x = get rev_dpair i
+put rev_dpair i add x v
+end
+
+fn rev_scr_zero off ulong n ulong to void
+for q ulong rev_cn n
+i = mul q REV_CH
+ie = rev_ce q n
+while lt i ie bound 999999
+put rev_scr add off i 0.0
+i = add i 1
+end
+end
+end
+
+fn rev_dp_zero off ulong n ulong to void
+for q ulong rev_cn n
+i = mul q REV_CH
+ie = rev_ce q n
+while lt i ie bound 999999
+put rev_dpair add off i 0.0
+i = add i 1
+end
+end
+end
+
+fn rev_g_zero to void
+p = get rev_cfg 10
+for q ulong rev_cn p
+i = mul q REV_CH
+ie = rev_ce q p
+while lt i ie bound 999999
+rev_gp i 0.0
+i = add i 1
+end
+end
+end
+
+note ---------------- geometry, offsets, and dynamic allocation ----------------
+
+fn rev_lp l ulong to ulong
+np = get rev_cfg 19
+if le np 1
+ret l
+end
+lp = get rev_cfg 17
+if lt l lp
+ret l
+end
+lc = get rev_cfg 18
+j = sub l lp
+if lt j mul lc np
+ret add lp rem j lc
+end
+ret sub l mul lc sub np 1
+end
+
+fn rev_lay_off pl ulong to ulong
+ret add get rev_cfg 32 mul pl get rev_cfg 33
+end
+fn rev_p_g1 pl ulong to ulong
+ret rev_lay_off pl
+end
+fn rev_p_wq pl ulong to ulong
+ret add rev_lay_off pl get rev_cfg 36
+end
+fn rev_p_wk pl ulong to ulong
+ret add rev_lay_off pl get rev_cfg 37
+end
+fn rev_p_wv pl ulong to ulong
+ret add rev_lay_off pl get rev_cfg 38
+end
+fn rev_p_wo pl ulong to ulong
+ret add rev_lay_off pl get rev_cfg 39
+end
+fn rev_p_qn pl ulong to ulong
+ret add rev_lay_off pl get rev_cfg 40
+end
+fn rev_p_kn pl ulong to ulong
+ret add rev_lay_off pl get rev_cfg 41
+end
+fn rev_p_g2 pl ulong to ulong
+ret add rev_lay_off pl get rev_cfg 42
+end
+fn rev_p_w1 pl ulong to ulong
+ret add rev_lay_off pl get rev_cfg 43
+end
+fn rev_p_wup pl ulong to ulong
+ret add rev_lay_off pl get rev_cfg 44
+end
+fn rev_p_w2 pl ulong to ulong
+ret add rev_lay_off pl get rev_cfg 45
+end
+
+fn rev_geom_check to bool
+for i ulong 8
+if eq get rev_cfg i 0
+ret false
+end
+end
+if lt get rev_cfg 0 2
+ret false
+end
+d = get rev_cfg 2
+h = get rev_cfg 3
+hkv = get rev_cfg 4
+if ne rem d h 0
+ret false
+end
+if or gt hkv h ne rem h hkv 0
+ret false
+end
+e = div d h
+put rev_cfg 8 e
+put rev_cfg 9 mul hkv e
+fl = get rev_cfg 12
+if and ne and fl REV_FL_SWIGLU 0 ne and fl REV_FL_GEGLU 0
+ret false
+end
+if and ne and fl 66 0 ne and fl REV_FL_GELU 0
+ret false
+end
+if and ne and fl REV_FL_ROPE 0 ne rem e 2 0
+ret false
+end
+put rev_cfg 26 0
+put rev_cfg 27 0
+put rev_cfg 28 0
+put rev_cfg 29 0
+put rev_cfg 30 0
+put rev_cfg 54 0
+if ne and fl REV_FL_ROPE 0
+put rev_cfg 26 1
+end
+if ne and fl 66 0
+put rev_cfg 27 1
+end
+if ne and fl REV_FL_UNTIED 0
+put rev_cfg 28 1
+end
+if ne and fl REV_FL_QKNORM 0
+put rev_cfg 29 1
+end
+if ne and fl REV_FL_REV 0
+put rev_cfg 30 1
+end
+if ne and fl REV_FL_Q32 0
+put rev_cfg 54 1
+end
+ret true
+end
+
+fn rev_geom_lv to bool
+ll = get rev_cfg 6
+np = get rev_cfg 19
+if gt np 1
+lc = get rev_cfg 18
+if or eq lc 0 gt add get rev_cfg 17 lc ll
+ret false
+end
+put rev_cfg 11 add ll mul lc sub np 1
+else
+put rev_cfg 11 ll
+end
+ret true
+end
+
+fn rev_geom_layoff to void
+d = get rev_cfg 2
+kvd = get rev_cfg 9
+f = get rev_cfg 5
+put rev_cfg 36 d
+o = add d mul d d
+put rev_cfg 37 o
+o = add o mul d kvd
+put rev_cfg 38 o
+o = add o mul d kvd
+put rev_cfg 39 o
+o = add o mul d d
+put rev_cfg 40 o
+if eq get rev_cfg 29 1
+o = add o get rev_cfg 8
+put rev_cfg 41 o
+o = add o get rev_cfg 8
+else
+put rev_cfg 41 o
+end
+put rev_cfg 42 o
+o = add o d
+put rev_cfg 43 o
+o = add o mul d f
+put rev_cfg 44 o
+if eq get rev_cfg 27 1
+o = add o mul d f
+end
+put rev_cfg 45 o
+put rev_cfg 33 add o mul f d
+end
+
+fn rev_geom_params to bool
+if not rev_geom_lv
+ret false
+end
+d = get rev_cfg 2
+wpe = mul get rev_cfg 0 d
+put rev_cfg 31 wpe
+lay0 = wpe
+if eq get rev_cfg 26 0
+lay0 = add lay0 mul get rev_cfg 1 d
+end
+put rev_cfg 32 lay0
+rev_geom_layoff
+gf = add lay0 mul get rev_cfg 6 get rev_cfg 33
+put rev_cfg 34 gf
+lmh = add gf d
+put rev_cfg 35 lmh
+if eq get rev_cfg 28 1
+put rev_cfg 10 add lmh mul get rev_cfg 0 d
+else
+put rev_cfg 10 lmh
+end
+put rev_cfg 24 get rev_cfg 1
+put rev_cfg 53 0
+ret true
+end
+
+fn rev_geom_scr to void
+t = get rev_cfg 1
+td = mul t get rev_cfg 2
+tkv = mul t get rev_cfg 9
+tf = mul t get rev_cfg 5
+o = ulong 0
+put rev_so REV_SCR_A o
+o = add o td
+put rev_so REV_SCR_S1 o
+o = add o t
+put rev_so REV_SCR_Q o
+o = add o td
+put rev_so REV_SCR_K o
+o = add o tkv
+put rev_so REV_SCR_U o
+o = add o tkv
+put rev_so REV_SCR_O o
+o = add o td
+put rev_so REV_SCR_FOUT o
+o = add o td
+put rev_so REV_SCR_QPRE o
+o = add o td
+put rev_so REV_SCR_KPRE o
+o = add o tkv
+put rev_so REV_SCR_QNS o
+o = add o mul t get rev_cfg 3
+put rev_so REV_SCR_KNS o
+o = add o mul t get rev_cfg 4
+put rev_so REV_SCR_DA o
+o = add o td
+put rev_so REV_SCR_DQ o
+o = add o td
+put rev_so REV_SCR_DK o
+o = add o tkv
+put rev_so REV_SCR_DU o
+o = add o tkv
+put rev_so REV_SCR_DO o
+o = add o td
+put rev_so REV_SCR_FP o
+o = add o tf
+put rev_so REV_SCR_UP o
+o = add o tf
+put rev_so REV_SCR_RL o
+o = add o tf
+put rev_so REV_SCR_DF1 o
+o = add o tf
+put rev_so REV_SCR_DF2 o
+o = add o tf
+put rev_so REV_SCR_HF o
+o = add o td
+put rev_so REV_SCR_SF o
+o = add o t
+put rev_so REV_SCR_Z o
+o = add o td
+put rev_so REV_SCR_PR o
+o = add o mul t get rev_cfg 0
+put rev_so REV_SCR_DZ o
+o = add o td
+put rev_so REV_SCR_DHF o
+o = add o td
+put rev_so REV_SCR_END o
+end
+
+fn rev_alloc_work to void
+td2 = mul 2 mul get rev_cfg 1 get rev_cfg 2
+if gt td2 get rev_cfg 46
+r1 = enlarge rev_pair td2
+if ne r1 0
+exit 70
+end
+r2 = enlarge rev_dpair td2
+if ne r2 0
+exit 70
+end
+put rev_cfg 46 td2
+end
+sn = get rev_so REV_SCR_END
+if gt sn get rev_cfg 47
+r3 = enlarge rev_scr sn
+if ne r3 0
+exit 70
+end
+put rev_cfg 47 sn
+end
+pan = mul mul get rev_cfg 3 get rev_cfg 1 get rev_cfg 1
+if gt pan get rev_cfg 48
+r4 = enlarge rev_pa pan
+if ne r4 0
+exit 70
+end
+put rev_cfg 48 pan
+end
+ts = get rev_cfg 0
+if gt get rev_cfg 1 ts
+ts = get rev_cfg 1
+end
+if gt get rev_cfg 2 ts
+ts = get rev_cfg 2
+end
+if gt get rev_cfg 5 ts
+ts = get rev_cfg 5
+end
+ts = add ts 256
+if gt ts get rev_cfg 51
+r5 = enlarge rev_tmp ts
+if ne r5 0
+exit 70
+end
+put rev_cfg 51 ts
+end
+end
+
+fn rev_alloc_ck4 to void
+if eq get rev_cfg 25 0
+ret
+end
+p = get rev_cfg 10
+if gt p get rev_cfg 49
+r1 = enlarge rev_p p
+if ne r1 0
+exit 70
+end
+r2 = enlarge rev_g p
+if ne r2 0
+exit 70
+end
+r3 = enlarge rev_m p
+if ne r3 0
+exit 70
+end
+r4 = enlarge rev_v p
+if ne r4 0
+exit 70
+end
+put rev_cfg 49 p
+end
+bt = mul get rev_cfg 7 get rev_cfg 1
+if gt bt get rev_cfg 50
+r5 = enlarge rev_bx bt
+if ne r5 0
+exit 70
+end
+r6 = enlarge rev_by bt
+if ne r6 0
+exit 70
+end
+r7 = enlarge rev_los get rev_cfg 7
+if ne r7 0
+exit 70
+end
+put rev_cfg 50 bt
+end
+end
+
+fn rev_rope_col i ulong lth f64 to void
+t = get rev_cfg 1
+he = div get rev_cfg 8 2
+freq = fexp mul neg lth div f64 mul 2 i f64 get rev_cfg 8
+for pos ulong t
+ang = mul f64 pos freq
+idx = add mul pos he i
+put rev_rcos idx rev_cos ang
+put rev_rsin idx rev_sin ang
+end
+end
+
+fn rev_rope_init to void
+sz = mul get rev_cfg 1 div get rev_cfg 8 2
+if gt sz get rev_cfg 52
+r1 = enlarge rev_rcos sz
+if ne r1 0
+exit 70
+end
+r2 = enlarge rev_rsin sz
+if ne r2 0
+exit 70
+end
+put rev_cfg 52 sz
+end
+th = div f64 get rev_cfg 13 1000.0
+if le th 0.0
+th = 10000.0
+end
+lth = flog th
+for i ulong div get rev_cfg 8 2
+rev_rope_col i lth
+end
+end
+
+fn rev_geom to bool
+if not rev_geom_check
+ret false
+end
+if not rev_geom_params
+ret false
+end
+rev_geom_scr
+rev_alloc_work
+rev_alloc_ck4
+if eq get rev_cfg 26 1
+rev_rope_init
+end
+ret true
+end
+
+note Sync reversible geometry directly to model.om og/ow/ogr/obx/oby (mode 0).
+fn rev_sync_from_og to void
+put rev_cfg 0 get og 0
+put rev_cfg 1 get og 1
+put rev_cfg 2 get og 2
+put rev_cfg 3 get og 3
+put rev_cfg 4 get og 3
+put rev_cfg 5 get og 4
+put rev_cfg 6 get og 5
+put rev_cfg 7 get og 6
+put rev_cfg 12 REV_FL_REV
+put rev_cfg 13 10000000
+put rev_cfg 14 bitcast ulong 0.00001f64
+put rev_cfg 15 bitcast ulong 0.0f64
+put rev_cfg 16 100
+put rev_cfg 17 get og 57
+put rev_cfg 18 get og 58
+put rev_cfg 19 get og 59
+put rev_cfg 20 get og 40
+put rev_cfg 21 get og 41
+put rev_cfg 22 get og 42
+put rev_cfg 23 get og 43
+put rev_cfg 25 0
+if not rev_geom
+exit 12
+end
+put rev_cfg 24 get og 9
+end
+
+note ---------------- shared single-layer matrix & norm kernels ----------------
+
+fn rev_mm_axpy_p yb ulong wb ulong xv f64 n ulong to void
+for j ulong n
+pv = rev_wg add wb j
+rev_scr_add add yb j mul xv pv
+end
+end
+
+fn rev_mm_axpy_g dwb ulong dyb ulong xv f64 n ulong to void
+for j ulong n
+dv = get rev_scr add dyb j
+rev_ga add dwb j mul xv dv
+end
+end
+
+fn rev_mm_fwd x0 ulong w0 ulong y0 ulong m ulong k ulong n ulong to void
+rev_scr_zero y0 mul m n
+for i ulong m
+xb = add x0 mul i k
+yb = add y0 mul i n
+for p ulong k
+xv = get rev_scr add xb p
+rev_mm_axpy_p yb add w0 mul p n xv n
+end
+end
+end
+
+fn rev_mm_dx_row dyb ulong w0 ulong dxb ulong k ulong n ulong to void
+for p ulong k
+wb = add w0 mul p n
+acc = 0.0f64
+for j ulong n
+dv = get rev_scr add dyb j
+wv = rev_wg add wb j
+acc = add acc mul dv wv
+end
+rev_scr_add add dxb p acc
+end
+end
+
+fn rev_mm_dx dy0 ulong w0 ulong dx0 ulong m ulong k ulong n ulong to void
+for i ulong m
+rev_mm_dx_row add dy0 mul i n w0 add dx0 mul i k k n
+end
+end
+
+fn rev_mm_dw x0 ulong dy0 ulong dw0 ulong m ulong k ulong n ulong to void
+for i ulong m
+xb = add x0 mul i k
+dyb = add dy0 mul i n
+for p ulong k
+xv = get rev_scr add xb p
+rev_mm_axpy_g add dw0 mul p n dyb xv n
+end
+end
+end
+
+note RMSNorm forward reading from rev_pair[x0..] -> rev_scr[y0..], saving den at rev_scr[so]
+fn rev_rms_pair_vec x0 ulong g0 ulong y0 ulong n ulong to f64
+s2 = 0.0f64
+for j ulong n
+v = get rev_pair add x0 j
+s2 = add s2 mul v v
+end
+s = fsqrt add div s2 f64 n bitcast f64 get rev_cfg 14
+inv = div 1.0 s
+for j2 ulong n
+xv = get rev_pair add x0 j2
+gv = rev_wg add g0 j2
+put rev_scr add y0 j2 mul mul xv inv gv
+end
+ret s
+end
+
+fn rev_rms_pair_fwd x0 ulong g0 ulong y0 ulong s0 ulong ct ulong d ulong to void
+for t ulong ct
+s = rev_rms_pair_vec add x0 mul t d g0 add y0 mul t d d
+put rev_scr add s0 t s
+end
+end
+
+fn rev_rms_pair_dot x0 ulong g0 ulong dy0 ulong n ulong to f64
+dot = 0.0f64
+for j ulong n
+dy = get rev_scr add dy0 j
+gv = rev_wg add g0 j
+xv = get rev_pair add x0 j
+dot = add dot mul mul dy gv xv
+end
+ret dot
+end
+
+fn rev_rms_pair_bwd_j xj ulong gj ulong dyj ulong dxj ulong to void
+xv = get rev_pair xj
+dy = get rev_scr dyj
+rev_ga gj mul dy mul xv get rev_rms_c 0
+gv = rev_wg gj
+t1 = sub mul dy gv mul xv get rev_rms_c 1
+rev_dp_add dxj mul t1 get rev_rms_c 0
+end
+
+fn rev_rms_pair_bwd_vec x0 ulong g0 ulong dy0 ulong dx0 ulong s f64 to void
+d = get rev_cfg 2
+dot = rev_rms_pair_dot x0 g0 dy0 d
+put rev_rms_c 0 div 1.0 s
+put rev_rms_c 1 div dot mul f64 d mul s s
+for j ulong d
+rev_rms_pair_bwd_j add x0 j add g0 j add dy0 j add dx0 j
+end
+end
+
+fn rev_rms_pair_bwd x0 ulong g0 ulong dy0 ulong dx0 ulong s0 ulong ct ulong to void
+d = get rev_cfg 2
+for t ulong ct
+s = get rev_scr add s0 t
+rev_rms_pair_bwd_vec add x0 mul t d g0 add dy0 mul t d add dx0 mul t d s
+end
+end
+
+note RMSNorm on rev_scr -> rev_scr (used for final RMSNorm HF -> Z)
+fn rev_rms_scr_vec x0 ulong g0 ulong y0 ulong n ulong to f64
+s2 = 0.0f64
+for j ulong n
+v = get rev_scr add x0 j
+s2 = add s2 mul v v
+end
+s = fsqrt add div s2 f64 n bitcast f64 get rev_cfg 14
+inv = div 1.0 s
+for j2 ulong n
+xv = get rev_scr add x0 j2
+gv = rev_wg add g0 j2
+put rev_scr add y0 j2 mul mul xv inv gv
+end
+ret s
+end
+
+fn rev_rms_scr_fwd x0 ulong g0 ulong y0 ulong s0 ulong ct ulong d ulong to void
+for t ulong ct
+s = rev_rms_scr_vec add x0 mul t d g0 add y0 mul t d d
+put rev_scr add s0 t s
+end
+end
+
+fn rev_rms_scr_dot x0 ulong g0 ulong dy0 ulong n ulong to f64
+dot = 0.0f64
+for j ulong n
+dy = get rev_scr add dy0 j
+gv = rev_wg add g0 j
+xv = get rev_scr add x0 j
+dot = add dot mul mul dy gv xv
+end
+ret dot
+end
+
+fn rev_rms_scr_bwd_j xj ulong gj ulong dyj ulong dxj ulong to void
+xv = get rev_scr xj
+dy = get rev_scr dyj
+rev_ga gj mul dy mul xv get rev_rms_c 0
+gv = rev_wg gj
+t1 = sub mul dy gv mul xv get rev_rms_c 1
+rev_scr_add dxj mul t1 get rev_rms_c 0
+end
+
+fn rev_rms_scr_bwd_vec x0 ulong g0 ulong dy0 ulong dx0 ulong s f64 to void
+d = get rev_cfg 2
+dot = rev_rms_scr_dot x0 g0 dy0 d
+put rev_rms_c 0 div 1.0 s
+put rev_rms_c 1 div dot mul f64 d mul s s
+for j ulong d
+rev_rms_scr_bwd_j add x0 j add g0 j add dy0 j add dx0 j
+end
+end
+
+fn rev_rms_scr_bwd x0 ulong g0 ulong dy0 ulong dx0 ulong s0 ulong ct ulong to void
+d = get rev_cfg 2
+for t ulong ct
+s = get rev_scr add s0 t
+rev_rms_scr_bwd_vec add x0 mul t d g0 add dy0 mul t d add dx0 mul t d s
+end
+end
+
+note ---------------- RoPE & QK-RMSNorm ----------------
+
+fn rev_rope_pair p0 ulong p1 ulong c f64 s f64 inv bool to void
+x0 = get rev_scr p0
+x1 = get rev_scr p1
+if inv
+put rev_scr p0 add mul x0 c mul x1 s
+put rev_scr p1 sub mul x1 c mul x0 s
+else
+put rev_scr p0 sub mul x0 c mul x1 s
+put rev_scr p1 add mul x0 s mul x1 c
+end
+end
+
+fn rev_rope_vec v0 ulong pos ulong inv bool to void
+he = div get rev_cfg 8 2
+rb = mul pos he
+for i ulong he
+c = get rev_rcos add rb i
+s = get rev_rsin add rb i
+rev_rope_pair add v0 i add v0 add i he c s inv
+end
+end
+
+fn rev_rope_row t ulong qbase ulong kbase ulong inv bool to void
+e = get rev_cfg 8
+d = get rev_cfg 2
+kvd = get rev_cfg 9
+for hi ulong get rev_cfg 3
+rev_rope_vec add qbase add mul t d mul hi e t inv
+end
+for kh ulong get rev_cfg 4
+rev_rope_vec add kbase add mul t kvd mul kh e t inv
+end
+end
+
+fn rev_qkn_fwd_one src ulong dst ulong g0 ulong sslot ulong to void
+e = get rev_cfg 8
+for j ulong e
+put rev_scr add dst j get rev_scr add src j
+end
+put rev_scr sslot rev_rms_scr_vec dst g0 src e
+end
+
+fn rev_qkn_fwd_qh pl ulong t ulong hi ulong to void
+off = add mul t get rev_cfg 2 mul hi get rev_cfg 8
+s0 = add get rev_so REV_SCR_QNS add mul t get rev_cfg 3 hi
+rev_qkn_fwd_one add get rev_so REV_SCR_Q off add get rev_so REV_SCR_QPRE off rev_p_qn pl s0
+end
+
+fn rev_qkn_fwd_kh pl ulong t ulong kh ulong to void
+off = add mul t get rev_cfg 9 mul kh get rev_cfg 8
+s1 = add get rev_so REV_SCR_KNS add mul t get rev_cfg 4 kh
+rev_qkn_fwd_one add get rev_so REV_SCR_K off add get rev_so REV_SCR_KPRE off rev_p_kn pl s1
+end
+
+fn rev_qkn_fwd_row pl ulong t ulong to void
+for hi ulong get rev_cfg 3
+rev_qkn_fwd_qh pl t hi
+end
+for kh ulong get rev_cfg 4
+rev_qkn_fwd_kh pl t kh
+end
+end
+
+fn rev_qkn_dot pre ulong g0 ulong e ulong to f64
+dot = 0.0f64
+for j ulong e
+dv = get rev_tmp j
+gv = rev_wg add g0 j
+xv = get rev_scr add pre j
+dot = add dot mul mul dv gv xv
+end
+ret dot
+end
+
+fn rev_qkn_bwd_j pj ulong gj ulong dj ulong j3 ulong to void
+xv = get rev_scr pj
+dv = get rev_tmp j3
+rev_ga gj mul dv mul xv get rev_rms_c 0
+gv = rev_wg gj
+t1 = sub mul dv gv mul xv get rev_rms_c 1
+rev_scr_add dj mul t1 get rev_rms_c 0
+end
+
+fn rev_qkn_bwd_one pre ulong g0 ulong d0 ulong s f64 to void
+e = get rev_cfg 8
+for j ulong e
+put rev_tmp j get rev_scr add d0 j
+put rev_scr add d0 j 0.0
+end
+dot = rev_qkn_dot pre g0 e
+put rev_rms_c 0 div 1.0 s
+put rev_rms_c 1 div dot mul f64 e mul s s
+for j3 ulong e
+rev_qkn_bwd_j add pre j3 add g0 j3 add d0 j3 j3
+end
+end
+
+fn rev_qkn_bwd_qh pl ulong t ulong hi ulong to void
+off = add mul t get rev_cfg 2 mul hi get rev_cfg 8
+si = add get rev_so REV_SCR_QNS add mul t get rev_cfg 3 hi
+sv = get rev_scr si
+rev_qkn_bwd_one add get rev_so REV_SCR_QPRE off rev_p_qn pl add get rev_so REV_SCR_DQ off sv
+end
+
+fn rev_qkn_bwd_kh pl ulong t ulong kh ulong to void
+off = add mul t get rev_cfg 9 mul kh get rev_cfg 8
+si = add get rev_so REV_SCR_KNS add mul t get rev_cfg 4 kh
+sv = get rev_scr si
+rev_qkn_bwd_one add get rev_so REV_SCR_KPRE off rev_p_kn pl add get rev_so REV_SCR_DK off sv
+end
+
+fn rev_qkn_bwd_row pl ulong t ulong to void
+for hi ulong get rev_cfg 3
+rev_qkn_bwd_qh pl t hi
+end
+for kh ulong get rev_cfg 4
+rev_qkn_bwd_kh pl t kh
+end
+end
+
+fn rev_qk_post_fwd pl ulong ct ulong to void
+if eq get rev_cfg 29 1
+for t ulong ct
+rev_qkn_fwd_row pl t
+end
+end
+if eq get rev_cfg 26 1
+qb = get rev_so REV_SCR_Q
+kb = get rev_so REV_SCR_K
+for t2 ulong ct
+rev_rope_row t2 qb kb false
+end
+end
+end
+
+fn rev_qk_post_bwd pl ulong ct ulong to void
+if eq get rev_cfg 26 1
+dq = get rev_so REV_SCR_DQ
+dk = get rev_so REV_SCR_DK
+for t ulong ct
+rev_rope_row t dq dk true
+end
+end
+if eq get rev_cfg 29 1
+for t2 ulong ct
+rev_qkn_bwd_row pl t2
+end
+end
+end
+
+note ---------------- single-layer causal GQA attention (1 layer PA only) ----------------
+
+fn rev_dot_scr a ulong b ulong n ulong to f64
+s = 0.0f64
+for c ulong n
+av = get rev_scr add a c
+bv = get rev_scr add b c
+s = add s mul av bv
+end
+ret s
+end
+
+fn rev_axpy_scr dst ulong src ulong w f64 n ulong to void
+for c ulong n
+sv = get rev_scr add src c
+rev_scr_add add dst c mul w sv
+end
+end
+
+fn rev_pa_off hi ulong t ulong to ulong
+tc = get rev_cfg 1
+ret add mul hi mul tc tc mul t tc
+end
+
+fn rev_attn_scores hi ulong kh ulong t ulong to f64
+e = get rev_cfg 8
+qb = add get rev_so REV_SCR_Q add mul t get rev_cfg 2 mul hi e
+k0 = add get rev_so REV_SCR_K mul kh e
+mx = -1.0e300f64
+isq = fsqrt f64 e
+kvd = get rev_cfg 9
+for j ulong add t 1
+kb = add k0 mul j kvd
+sc = div rev_dot_scr qb kb e isq
+put rev_tmp j sc
+if gt sc mx
+mx = sc
+end
+end
+ret mx
+end
+
+fn rev_attn_soft pb ulong t ulong mx f64 to f64
+sm = 0.0f64
+for j ulong add t 1
+w = fexp sub get rev_tmp j mx
+put rev_pa add pb j w
+sm = add sm w
+end
+ret div 1.0 sm
+end
+
+fn rev_attn_accum pb ulong ob ulong v0 ulong t ulong invs f64 to void
+e = get rev_cfg 8
+kvd = get rev_cfg 9
+rev_scr_zero ob e
+for j ulong add t 1
+p0 = get rev_pa add pb j
+pw = mul p0 invs
+put rev_pa add pb j pw
+rev_axpy_scr ob add v0 mul j kvd pw e
+end
+end
+
+fn rev_attn_pos_fwd hi ulong kh ulong t ulong to void
+mx = rev_attn_scores hi kh t
+pb = rev_pa_off hi t
+invs = rev_attn_soft pb t mx
+e = get rev_cfg 8
+off = add mul t get rev_cfg 2 mul hi e
+ob = add get rev_so REV_SCR_O off
+v0 = add get rev_so REV_SCR_U mul kh e
+rev_attn_accum pb ob v0 t invs
+end
+
+fn rev_attn_head_fwd hi ulong ct ulong to void
+kh = div hi div get rev_cfg 3 get rev_cfg 4
+for t ulong ct
+rev_attn_pos_fwd hi kh t
+end
+end
+
+fn rev_attn_b1_loop pb ulong dob ulong v0 ulong dv0 ulong t ulong to f64
+e = get rev_cfg 8
+kvd = get rev_cfg 9
+dotp = 0.0f64
+for j ulong add t 1
+pw = get rev_pa add pb j
+off = mul j kvd
+dp = rev_dot_scr dob add v0 off e
+rev_axpy_scr add dv0 off dob pw e
+put rev_tmp j dp
+dotp = add dotp mul pw dp
+end
+ret dotp
+end
+
+fn rev_attn_pos_bwd1 hi ulong kh ulong t ulong to f64
+e = get rev_cfg 8
+off = add mul t get rev_cfg 2 mul hi e
+dob = add get rev_so REV_SCR_DO off
+pb = rev_pa_off hi t
+koff = mul kh e
+v0 = add get rev_so REV_SCR_U koff
+dv0 = add get rev_so REV_SCR_DU koff
+ret rev_attn_b1_loop pb dob v0 dv0 t
+end
+
+fn rev_attn_b2_ds j ulong to f64
+pw = get rev_pa add get rev_at_p 0 j
+d1 = sub get rev_tmp j get rev_at_s 0
+ret mul mul pw d1 get rev_at_s 1
+end
+
+fn rev_attn_b2_j off ulong koff ulong j ulong to void
+ds = rev_attn_b2_ds j
+ko = mul j get rev_cfg 9
+e = get rev_cfg 8
+rev_axpy_scr add get rev_so REV_SCR_DQ off add add get rev_so REV_SCR_K koff ko ds e
+rev_axpy_scr add add get rev_so REV_SCR_DK koff ko add get rev_so REV_SCR_Q off ds e
+end
+
+fn rev_attn_b2_loop off ulong koff ulong t ulong to void
+for j ulong add t 1
+rev_attn_b2_j off koff j
+end
+end
+
+fn rev_attn_pos_bwd2 hi ulong kh ulong t ulong dotp f64 to void
+e = get rev_cfg 8
+put rev_at_s 0 dotp
+put rev_at_s 1 div 1.0 fsqrt f64 e
+put rev_at_p 0 rev_pa_off hi t
+off = add mul t get rev_cfg 2 mul hi e
+koff = mul kh e
+rev_attn_b2_loop off koff t
+end
+
+fn rev_attn_head_bwd hi ulong ct ulong to void
+kh = div hi div get rev_cfg 3 get rev_cfg 4
+for t ulong ct
+dotp = rev_attn_pos_bwd1 hi kh t
+rev_attn_pos_bwd2 hi kh t dotp
+end
+end
+
+note ---------------- FFN activations (ReLU / GELU / SwiGLU / GeGLU) ----------------
+
+fn rev_ffn_fwd_swi n ulong to void
+f1 = get rev_so REV_SCR_FP
+f2 = get rev_so REV_SCR_UP
+f3 = get rev_so REV_SCR_RL
+for i ulong n
+g = get rev_scr add f1 i
+u = get rev_scr add f2 i
+s = rev_sig g
+put rev_scr add f3 i mul mul g s u
+end
+end
+
+fn rev_ffn_fwd_geglu n ulong to void
+f1 = get rev_so REV_SCR_FP
+f2 = get rev_so REV_SCR_UP
+f3 = get rev_so REV_SCR_RL
+for i ulong n
+g = get rev_scr add f1 i
+u = get rev_scr add f2 i
+gu = rev_gelu g
+put rev_scr add f3 i mul gu u
+end
+end
+
+fn rev_ffn_fwd_gelu n ulong to void
+f1 = get rev_so REV_SCR_FP
+f3 = get rev_so REV_SCR_RL
+for i ulong n
+g = get rev_scr add f1 i
+put rev_scr add f3 i rev_gelu g
+end
+end
+
+fn rev_ffn_fwd_relu n ulong to void
+f1 = get rev_so REV_SCR_FP
+f3 = get rev_so REV_SCR_RL
+for i ulong n
+v = get rev_scr add f1 i
+if gt v 0.0
+put rev_scr add f3 i v
+else
+put rev_scr add f3 i 0.0
+end
+end
+end
+
+fn rev_ffn_act_fwd ct ulong to void
+n = mul ct get rev_cfg 5
+fl = get rev_cfg 12
+if ne and fl REV_FL_SWIGLU 0
+rev_ffn_fwd_swi n
+ret
+end
+if ne and fl REV_FL_GEGLU 0
+rev_ffn_fwd_geglu n
+ret
+end
+if ne and fl REV_FL_GELU 0
+rev_ffn_fwd_gelu n
+ret
+end
+rev_ffn_fwd_relu n
+end
+
+fn rev_ffn_bwd_swi_one df1 ulong df2 ulong f1 ulong f2 ulong i ulong to void
+dy = get rev_scr add df1 i
+g = get rev_scr add f1 i
+sig = rev_sig g
+put rev_scr add df2 i mul dy mul g sig
+ds = mul sig add 1.0 mul g sub 1.0 sig
+u = get rev_scr add f2 i
+put rev_scr add df1 i mul mul dy u ds
+end
+
+fn rev_ffn_bwd_swi f1 ulong f2 ulong n ulong to void
+df1 = get rev_so REV_SCR_DF1
+df2 = get rev_so REV_SCR_DF2
+for i ulong n
+rev_ffn_bwd_swi_one df1 df2 f1 f2 i
+end
+end
+
+fn rev_ffn_bwd_geglu_one df1 ulong df2 ulong f1 ulong f2 ulong i ulong to void
+dy = get rev_scr add df1 i
+g = get rev_scr add f1 i
+put rev_scr add df2 i mul dy rev_gelu g
+u = get rev_scr add f2 i
+gd = rev_gelu_d g
+put rev_scr add df1 i mul mul dy u gd
+end
+
+fn rev_ffn_bwd_geglu f1 ulong f2 ulong n ulong to void
+df1 = get rev_so REV_SCR_DF1
+df2 = get rev_so REV_SCR_DF2
+for i ulong n
+rev_ffn_bwd_geglu_one df1 df2 f1 f2 i
+end
+end
+
+fn rev_ffn_act_bwd ct ulong to void
+n = mul ct get rev_cfg 5
+f1 = get rev_so REV_SCR_FP
+f2 = get rev_so REV_SCR_UP
+fl = get rev_cfg 12
+if ne and fl REV_FL_SWIGLU 0
+rev_ffn_bwd_swi f1 f2 n
+ret
+end
+if ne and fl REV_FL_GEGLU 0
+rev_ffn_bwd_geglu f1 f2 n
+ret
+end
+df1 = get rev_so REV_SCR_DF1
+if ne and fl REV_FL_GELU 0
+for i3 ulong n
+dy3 = get rev_scr add df1 i3
+g3 = get rev_scr add f1 i3
+put rev_scr add df1 i3 mul dy3 rev_gelu_d g3
+end
+ret
+end
+for i4 ulong n
+if le get rev_scr add f1 i4 0.0
+put rev_scr add df1 i4 0.0
+end
+end
+end
+
+note ---------------- F(x2) and G(y1) forward/inverse/backward ----------------
+
+note Compute F(x2) into rev_scr[SCR_FOUT] from x2 = rev_pair[ct*D .. 2*ct*D)
+fn rev_f_fwd pl ulong ct ulong to void
+d = get rev_cfg 2
+kvd = get rev_cfg 9
+x2o = mul ct d
+a = get rev_so REV_SCR_A
+rev_rms_pair_fwd x2o rev_p_g1 pl a get rev_so REV_SCR_S1 ct d
+rev_mm_fwd a rev_p_wq pl get rev_so REV_SCR_Q ct d d
+rev_mm_fwd a rev_p_wk pl get rev_so REV_SCR_K ct d kvd
+rev_mm_fwd a rev_p_wv pl get rev_so REV_SCR_U ct d kvd
+rev_qk_post_fwd pl ct
+for hi ulong get rev_cfg 3
+rev_attn_head_fwd hi ct
+end
+rev_mm_fwd get rev_so REV_SCR_O rev_p_wo pl get rev_so REV_SCR_FOUT ct d d
+end
+
+note Compute G(y1) into rev_scr[SCR_FOUT] from y1 = rev_pair[0 .. ct*D)
+fn rev_g_fwd pl ulong ct ulong to void
+d = get rev_cfg 2
+f = get rev_cfg 5
+a = get rev_so REV_SCR_A
+rev_rms_pair_fwd 0 rev_p_g2 pl a get rev_so REV_SCR_S1 ct d
+rev_mm_fwd a rev_p_w1 pl get rev_so REV_SCR_FP ct d f
+if eq get rev_cfg 27 1
+rev_mm_fwd a rev_p_wup pl get rev_so REV_SCR_UP ct d f
+end
+rev_ffn_act_fwd ct
+rev_mm_fwd get rev_so REV_SCR_RL rev_p_w2 pl get rev_so REV_SCR_FOUT ct f d
+end
+
+note ---------------- Q30 fixed-point reversible residual stream ----------------
+
+fn rev_q32_quant x f64 to long
+s = mul x REV_Q32_SCALE
+if ge s 0.0
+ret long add s 0.5
+end
+ret long sub s 0.5
+end
+
+fn rev_q32_dequant q long to f64
+ret div f64 q REV_Q32_SCALE
+end
+
+note Simulates BF16 precision loss on branch output (f32 bits masked with 0xffff0000 = 4294901760)
+fn rev_q32_bf16_sim x f64 to f64
+u = bitcast uint f32 x
+m = and u 4294901760
+ret f64 bitcast f32 m
+end
+
+fn rev_q32_fwd_layer n ulong f_arr view f64 256 g_arr view f64 256 to void
+if gt n 256
+exit 12
+end
+for i ulong n
+qf = rev_q32_quant rev_q32_bf16_sim get f_arr i
+put rev_q32_x1 i add get rev_q32_x1 i qf
+qg = rev_q32_quant rev_q32_bf16_sim get g_arr i
+put rev_q32_x2 i add get rev_q32_x2 i qg
+end
+end
+
+fn rev_q32_inv_layer n ulong f_arr view f64 256 g_arr view f64 256 to void
+if gt n 256
+exit 12
+end
+for i ulong n
+qg = rev_q32_quant rev_q32_bf16_sim get g_arr i
+put rev_q32_x2 i sub get rev_q32_x2 i qg
+qf = rev_q32_quant rev_q32_bf16_sim get f_arr i
+put rev_q32_x1 i sub get rev_q32_x1 i qf
+end
+end
+
+fn rev_q32_sync_from_pair n ulong to void
+if gt n 256
+exit 12
+end
+for i ulong n
+q1 = rev_q32_quant get rev_pair i
+q2 = rev_q32_quant get rev_pair add n i
+put rev_q32_x1 i q1
+put rev_q32_x2 i q2
+put rev_pair i rev_q32_dequant q1
+put rev_pair add n i rev_q32_dequant q2
+end
+end
+
+fn rev_q32_step_scr_x1 n ulong is_inv bool to void
+if gt n 256
+exit 12
+end
+fout = get rev_so REV_SCR_FOUT
+for i ulong n
+qf = rev_q32_quant rev_q32_bf16_sim get rev_scr add fout i
+cur = get rev_q32_x1 i
+if is_inv
+cur = sub cur qf
+else
+cur = add cur qf
+end
+put rev_q32_x1 i cur
+put rev_pair i rev_q32_dequant cur
+end
+end
+
+fn rev_q32_step_scr_x2 n ulong is_inv bool to void
+if gt n 256
+exit 12
+end
+fout = get rev_so REV_SCR_FOUT
+for j ulong n
+qg = rev_q32_quant rev_q32_bf16_sim get rev_scr add fout j
+cur = get rev_q32_x2 j
+if is_inv
+cur = sub cur qg
+else
+cur = add cur qg
+end
+put rev_q32_x2 j cur
+put rev_pair add n j rev_q32_dequant cur
+end
+end
+
+note Forward layer l: y1 = x1 + F(x2), y2 = x2 + G(y1) in-place in rev_pair.
+fn rev_fwd_layer l ulong ct ulong to void
+pl = rev_lp l
+n = mul ct get rev_cfg 2
+fout = get rev_so REV_SCR_FOUT
+rev_f_fwd pl ct
+if eq get rev_cfg 54 1
+rev_q32_step_scr_x1 n false
+else
+for i ulong n
+v1 = add get rev_pair i get rev_scr add fout i
+put rev_pair i v1
+end
+end
+rev_g_fwd pl ct
+if eq get rev_cfg 54 1
+rev_q32_step_scr_x2 n false
+else
+for j ulong n
+y2i = add n j
+v2 = add get rev_pair y2i get rev_scr add fout j
+put rev_pair y2i v2
+end
+end
+end
+
+note Algebraic inverse reconstruction of layer l: x2 = y2 - G(y1), x1 = y1 - F(x2) in-place in rev_pair.
+fn rev_inv_layer l ulong ct ulong to void
+pl = rev_lp l
+n = mul ct get rev_cfg 2
+fout = get rev_so REV_SCR_FOUT
+rev_g_fwd pl ct
+if eq get rev_cfg 54 1
+rev_q32_step_scr_x2 n true
+else
+for j ulong n
+x2i = add n j
+v2 = sub get rev_pair x2i get rev_scr add fout j
+put rev_pair x2i v2
+end
+end
+rev_f_fwd pl ct
+if eq get rev_cfg 54 1
+rev_q32_step_scr_x1 n true
+else
+for i ulong n
+v1 = sub get rev_pair i get rev_scr add fout i
+put rev_pair i v1
+end
+end
+end
+
+note Backward G(y1) using dy2 copied into rev_scr[SCR_FOUT]; accumulates dW and adds dy1_g into rev_dpair[0..n)
+fn rev_g_bwd pl ulong ct ulong to void
+d = get rev_cfg 2
+f = get rev_cfg 5
+dy2 = get rev_so REV_SCR_FOUT
+df1 = get rev_so REV_SCR_DF1
+da = get rev_so REV_SCR_DA
+rev_mm_dw get rev_so REV_SCR_RL dy2 rev_p_w2 pl ct f d
+rev_scr_zero df1 mul ct f
+rev_mm_dx dy2 rev_p_w2 pl df1 ct f d
+rev_ffn_act_bwd ct
+rev_mm_dw get rev_so REV_SCR_A df1 rev_p_w1 pl ct d f
+rev_scr_zero da mul ct d
+rev_mm_dx df1 rev_p_w1 pl da ct d f
+if eq get rev_cfg 27 1
+df2 = get rev_so REV_SCR_DF2
+rev_mm_dw get rev_so REV_SCR_A df2 rev_p_wup pl ct d f
+rev_mm_dx df2 rev_p_wup pl da ct d f
+end
+rev_rms_pair_bwd 0 rev_p_g2 pl da 0 get rev_so REV_SCR_S1 ct
+end
+
+note Backward F(x2) using dy1 copied into rev_scr[SCR_FOUT]; accumulates dW and adds dx2_f into rev_dpair[n..2n)
+fn rev_f_bwd pl ulong ct ulong to void
+d = get rev_cfg 2
+kvd = get rev_cfg 9
+dy1 = get rev_so REV_SCR_FOUT
+dor = get rev_so REV_SCR_DO
+rev_mm_dw get rev_so REV_SCR_O dy1 rev_p_wo pl ct d d
+rev_scr_zero dor mul ct d
+rev_mm_dx dy1 rev_p_wo pl dor ct d d
+dq = get rev_so REV_SCR_DQ
+dk = get rev_so REV_SCR_DK
+du = get rev_so REV_SCR_DU
+rev_scr_zero dq mul ct d
+rev_scr_zero dk mul ct kvd
+rev_scr_zero du mul ct kvd
+for hi ulong get rev_cfg 3
+rev_attn_head_bwd hi ct
+end
+rev_qk_post_bwd pl ct
+a = get rev_so REV_SCR_A
+rev_mm_dw a dq rev_p_wq pl ct d d
+rev_mm_dw a dk rev_p_wk pl ct d kvd
+rev_mm_dw a du rev_p_wv pl ct d kvd
+da = get rev_so REV_SCR_DA
+rev_scr_zero da mul ct d
+rev_mm_dx dq rev_p_wq pl da ct d d
+rev_mm_dx dk rev_p_wk pl da ct d kvd
+rev_mm_dx du rev_p_wv pl da ct d kvd
+n = mul ct d
+rev_rms_pair_bwd n rev_p_g1 pl da n get rev_so REV_SCR_S1 ct
+end
+
+fn rev_bwd_prep_g n ulong to void
+fout = get rev_so REV_SCR_FOUT
+if eq get rev_cfg 54 1
+rev_q32_step_scr_x2 n true
+for j ulong n
+put rev_scr add fout j get rev_dpair add n j
+end
+ret
+end
+for j ulong n
+x2i = add n j
+gv = get rev_scr add fout j
+put rev_pair x2i sub get rev_pair x2i gv
+put rev_scr add fout j get rev_dpair x2i
+end
+end
+
+fn rev_bwd_prep_f n ulong to void
+fout = get rev_so REV_SCR_FOUT
+if eq get rev_cfg 54 1
+rev_q32_step_scr_x1 n true
+for i ulong n
+put rev_scr add fout i get rev_dpair i
+end
+ret
+end
+for i ulong n
+fv = get rev_scr add fout i
+put rev_pair i sub get rev_pair i fv
+put rev_scr add fout i get rev_dpair i
+end
+end
+
+note Backward layer l: algebraically reconstructs (x1, x2) in rev_pair and backprops (dy1, dy2) -> (dx1, dx2) in rev_dpair.
+fn rev_bwd_layer l ulong ct ulong to void
+pl = rev_lp l
+n = mul ct get rev_cfg 2
+rev_g_fwd pl ct
+rev_bwd_prep_g n
+rev_g_bwd pl ct
+rev_f_fwd pl ct
+rev_bwd_prep_f n
+rev_f_bwd pl ct
+end
+
+note ---------------- embedding, head, and full reversible model ----------------
+
+fn rev_emb_fwd_rope wte_b ulong hb ulong hb2 ulong d ulong to void
+for j ulong d
+v = rev_wg add wte_b j
+put rev_pair add hb j v
+put rev_pair add hb2 j v
+end
+end
+
+fn rev_emb_fwd_wpe wte_b ulong wpe_b ulong hb ulong hb2 ulong d ulong to void
+for j ulong d
+v1 = rev_wg add wte_b j
+v2 = rev_wg add wpe_b j
+sv = add v1 v2
+put rev_pair add hb j sv
+put rev_pair add hb2 j sv
+end
+end
+
+fn rev_emb_fwd_pos tok ulong pos ulong hb ulong to void
+d = get rev_cfg 2
+hb2 = add mul get rev_cfg 24 d hb
+wte_b = mul tok d
+if eq get rev_cfg 26 1
+rev_emb_fwd_rope wte_b hb hb2 d
+else
+wpe_b = add get rev_cfg 31 mul pos d
+rev_emb_fwd_wpe wte_b wpe_b hb hb2 d
+end
+end
+
+fn rev_emb_fwd b ulong ct ulong to void
+d = get rev_cfg 2
+xb = mul b get rev_cfg 1
+for pos ulong ct
+tok = rev_bx_at add xb pos
+rev_emb_fwd_pos tok pos mul pos d
+end
+if eq get rev_cfg 54 1
+rev_q32_sync_from_pair mul ct d
+end
+end
+
+fn rev_dot_sp a ulong p ulong n ulong to f64
+s = 0.0f64
+for j ulong n
+av = get rev_scr add a j
+pv = rev_wg add p j
+s = add s mul av pv
+end
+ret s
+end
+
+fn rev_loss_soft pb ulong v ulong mx f64 to f64
+sm = 0.0f64
+for c ulong v
+lv = get rev_scr add pb c
+w = fexp sub lv mx
+put rev_scr add pb c w
+sm = add sm w
+end
+invs = div 1.0 sm
+for c2 ulong v
+pv = get rev_scr add pb c2
+put rev_scr add pb c2 mul pv invs
+end
+ret sm
+end
+
+fn rev_loss_pos b ulong pos ulong to f64
+v = get rev_cfg 0
+d = get rev_cfg 2
+lmw = ulong 0
+if eq get rev_cfg 28 1
+lmw = get rev_cfg 35
+end
+zb = add get rev_so REV_SCR_Z mul pos d
+pb = add get rev_so REV_SCR_PR mul pos v
+mx = -1.0e300f64
+for c ulong v
+dot = rev_dot_sp zb add lmw mul c d d
+put rev_scr add pb c dot
+if gt dot mx
+mx = dot
+end
+end
+yt = rev_by_at add mul b get rev_cfg 1 pos
+ly = get rev_scr add pb yt
+sm = rev_loss_soft pb v mx
+ret sub flog sm sub ly mx
+end
+
+fn rev_head_fwd b ulong ct ulong want_loss bool to f64
+d = get rev_cfg 2
+n = mul ct d
+hf = get rev_so REV_SCR_HF
+for i ulong n
+y1 = get rev_pair i
+y2 = get rev_pair add n i
+put rev_scr add hf i mul 0.5 add y1 y2
+end
+rev_rms_scr_fwd hf get rev_cfg 34 get rev_so REV_SCR_Z get rev_so REV_SCR_SF ct d
+if not want_loss
+ret 0.0f64
+end
+lsum = 0.0f64
+for pos ulong ct
+lsum = add lsum rev_loss_pos b pos
+end
+ret div lsum f64 ct
+end
+
+fn rev_logit_bwd_row zb ulong wb ulong dzb ulong dl f64 to void
+d = get rev_cfg 2
+for j ulong d
+zv = get rev_scr add zb j
+wv = rev_wg add wb j
+rev_ga add wb j mul dl zv
+rev_scr_add add dzb j mul dl wv
+end
+end
+
+fn rev_head_bwd_pos b ulong pos ulong scale f64 to void
+v = get rev_cfg 0
+d = get rev_cfg 2
+lmw = ulong 0
+if eq get rev_cfg 28 1
+lmw = get rev_cfg 35
+end
+zb = add get rev_so REV_SCR_Z mul pos d
+pb = add get rev_so REV_SCR_PR mul pos v
+dzb = add get rev_so REV_SCR_DZ mul pos d
+yt = rev_by_at add mul b get rev_cfg 1 pos
+for c ulong v
+dl = get rev_scr add pb c
+if eq c yt
+dl = sub dl 1.0
+end
+rev_logit_bwd_row zb add lmw mul c d dzb mul dl scale
+end
+end
+
+fn rev_head_bwd b ulong ct ulong sc f64 to void
+d = get rev_cfg 2
+n = mul ct d
+dz = get rev_so REV_SCR_DZ
+dhf = get rev_so REV_SCR_DHF
+rev_scr_zero dz n
+for pos ulong ct
+rev_head_bwd_pos b pos sc
+end
+rev_scr_zero dhf n
+rev_rms_scr_bwd get rev_so REV_SCR_HF get rev_cfg 34 dz dhf get rev_so REV_SCR_SF ct
+for i ulong n
+hv = mul 0.5 get rev_scr add dhf i
+put rev_dpair i hv
+put rev_dpair add n i hv
+end
+end
+
+fn rev_emb_bwd_rope wte_b ulong hb ulong hb2 ulong d ulong to void
+for j ulong d
+gv = add get rev_dpair add hb j get rev_dpair add hb2 j
+rev_ga add wte_b j gv
+end
+end
+
+fn rev_emb_bwd_wpe wte_b ulong wpe_b ulong hb ulong hb2 ulong d ulong to void
+for j ulong d
+gv = add get rev_dpair add hb j get rev_dpair add hb2 j
+rev_ga add wte_b j gv
+rev_ga add wpe_b j gv
+end
+end
+
+fn rev_emb_bwd_pos tok ulong pos ulong hb ulong to void
+d = get rev_cfg 2
+hb2 = add mul get rev_cfg 24 d hb
+wte_b = mul tok d
+if eq get rev_cfg 26 1
+rev_emb_bwd_rope wte_b hb hb2 d
+else
+wpe_b = add get rev_cfg 31 mul pos d
+rev_emb_bwd_wpe wte_b wpe_b hb hb2 d
+end
+end
+
+fn rev_emb_bwd b ulong ct ulong to void
+d = get rev_cfg 2
+xb = mul b get rev_cfg 1
+for pos ulong ct
+tok = rev_bx_at add xb pos
+rev_emb_bwd_pos tok pos mul pos d
+end
+end
+
+fn rev_fwd_model b ulong want_loss bool to f64
+ct = get rev_cfg 24
+rev_emb_fwd b ct
+lv = get rev_cfg 11
+for l ulong lv
+rev_fwd_layer l ct
+end
+ret rev_head_fwd b ct want_loss
+end
+
+fn rev_bwd_model b ulong sc f64 to void
+ct = get rev_cfg 24
+rev_head_bwd b ct sc
+lv = get rev_cfg 11
+for r ulong lv
+rev_bwd_layer sub sub lv 1 r ct
+end
+rev_emb_bwd b ct
+end
+
+fn rev_grad to f64
+rev_g_zero
+bb = get rev_cfg 7
+ct = get rev_cfg 24
+sc = div 1.0 f64 mul bb ct
+lsum = 0.0f64
+for b ulong bb
+ls = rev_fwd_model b true
+if eq get rev_cfg 25 0
+put olos b ls
+else
+put rev_los b ls
+end
+lsum = add lsum ls
+rev_bwd_model b sc
+end
+ret div lsum f64 bb
+end
+
+note ---------------- CK04 deterministic init & Adam/AdamW ----------------
+
+fn rev_is_gain_lay off ulong to bool
+d = get rev_cfg 2
+if lt off d
+ret true
+end
+g2 = get rev_cfg 42
+if and ge off g2 lt off add g2 d
+ret true
+end
+if eq get rev_cfg 29 1
+qn = get rev_cfg 40
+kn = get rev_cfg 41
+if and ge off qn lt off add kn get rev_cfg 8
+ret true
+end
+end
+ret false
+end
+
+fn rev_is_gain i ulong to bool
+lay0 = get rev_cfg 32
+if lt i lay0
+ret false
+end
+if ge i get rev_cfg 34
+ret lt i get rev_cfg 35
+end
+ret rev_is_gain_lay rem sub i lay0 get rev_cfg 33
+end
+
+fn rev_is_outproj i ulong to bool
+lay0 = get rev_cfg 32
+gf = get rev_cfg 34
+if or lt i lay0 ge i gf
+ret false
+end
+off = rem sub i lay0 get rev_cfg 33
+d = get rev_cfg 2
+wo0 = get rev_cfg 39
+if and ge off wo0 lt off add wo0 mul d d
+ret true
+end
+ret ge off get rev_cfg 45
+end
+
+fn rev_init_params to void
+p = get rev_cfg 10
+sd = get rev_cfg 20
+rs = div 1.0 fsqrt f64 mul 2 get rev_cfg 6
+for q ulong rev_cn p
+i = mul q REV_CH
+ie = rev_ce q p
+while lt i ie bound 999999
+if ne get rev_cfg 25 0
+put rev_m i 0.0
+put rev_v i 0.0
+end
+if rev_is_gain i
+rev_wp i 1.0
+else
+r = mul f64 shr smx add sd i 11 1.1102230246251565e-16
+val = mul sub mul 2.0 r 1.0 0.034641016151377546
+if rev_is_outproj i
+val = mul val rs
+end
+rev_wp i val
+end
+i = add i 1
+end
+end
+end
+
+fn rev_lr s ulong to f64
+lr = bitcast f64 get rev_cfg 23
+wu = get rev_cfg 16
+tot = get rev_cfg 22
+if and gt wu 0 lt s wu
+ret div mul lr f64 add s 1 f64 wu
+end
+rt = ulong 1
+if gt tot wu
+rt = sub tot wu
+end
+prog = div f64 sub s wu f64 rt
+if gt prog 1.0
+prog = 1.0
+end
+if ne and get rev_cfg 12 REV_FL_ADAMW 0
+ret mul lr add 0.1 mul 0.45 add 1.0 rev_cos mul 3.1415926535897932 prog
+end
+ret mul lr sub 1.0 mul 0.9 prog
+end
+
+fn rev_grad_clip to void
+p = get rev_cfg 10
+s2 = 0.0f64
+for q ulong rev_cn p
+i = mul q REV_CH
+ie = rev_ce q p
+while lt i ie bound 999999
+g = rev_gg i
+s2 = add s2 mul g g
+i = add i 1
+end
+end
+gn = fsqrt s2
+if gt gn 1.0
+sc = div 1.0 gn
+for q2 ulong rev_cn p
+i2 = mul q2 REV_CH
+ie2 = rev_ce q2 p
+while lt i2 ie2 bound 999999
+rev_gp i2 mul rev_gg i2 sc
+i2 = add i2 1
+end
+end
+end
+end
+
+fn rev_adam_prep to void
+s = get rev_cfg 21
+is_aw = ne and get rev_cfg 12 REV_FL_ADAMW 0
+b1 = 0.9f64
+b2 = 0.99f64
+if is_aw
+b2 = 0.95f64
+end
+p1 = 1.0f64
+p2 = 1.0f64
+for k ulong rev_cn add s 1
+j = mul k REV_CH
+je = rev_ce k add s 1
+while lt j je bound 999999
+p1 = mul p1 b1
+p2 = mul p2 b2
+j = add j 1
+end
+end
+put rev_ad_f 0 rev_lr s
+put rev_ad_f 1 b1
+put rev_ad_f 2 b2
+put rev_ad_f 3 div 1.0 sub 1.0 p1
+put rev_ad_f 4 div 1.0 sub 1.0 p2
+if is_aw
+put rev_ad_f 5 bitcast f64 get rev_cfg 15
+else
+put rev_ad_f 5 0.0
+end
+end
+
+fn rev_adam_upd i ulong m f64 v f64 to void
+w = rev_wg i
+if and gt get rev_ad_f 5 0.0 not rev_is_gain i
+w = sub w mul mul get rev_ad_f 0 get rev_ad_f 5 w
+end
+num = mul get rev_ad_f 0 mul m get rev_ad_f 3
+den = add fsqrt mul v get rev_ad_f 4 1.0e-8
+rev_wp i sub w div num den
+end
+
+fn rev_adam_one i ulong to void
+g = rev_gg i
+b1 = get rev_ad_f 1
+m = mul b1 get rev_m i
+m = add m mul sub 1.0 b1 g
+b2 = get rev_ad_f 2
+v = mul b2 get rev_v i
+v = add v mul sub 1.0 b2 mul g g
+put rev_m i m
+put rev_v i v
+rev_adam_upd i m v
+end
+
+fn rev_adam to void
+if eq get rev_cfg 25 0
+put og 41 get rev_cfg 21
+oadam
+put rev_cfg 21 add get rev_cfg 21 1
+put og 41 get rev_cfg 21
+ret
+end
+rev_grad_clip
+rev_adam_prep
+p = get rev_cfg 10
+for q ulong rev_cn p
+i = mul q REV_CH
+ie = rev_ce q p
+while lt i ie bound 999999
+rev_adam_one i
+i = add i 1
+end
+end
+put rev_cfg 21 add get rev_cfg 21 1
+end
+
+note ---------------- OLLMCK04 checkpoint save & load ----------------
+
+fn rev_ck_put8 o ulong v ulong to void
+for k ulong 8
+put rev_ck add o k uchar and shr v mul k 8 255
+end
+end
+
+fn rev_opw_get8 o ulong to ulong
+v = ulong 0
+for k ulong 8
+v = or v shl ulong get rev_opw add o k mul k 8
+end
+ret v
+end
+
+fn rev_fnvk h ulong n ulong to ulong
+x = h
+for i ulong n
+x = mul xor x ulong get rev_ck i 1099511628211
+end
+ret x
+end
+
+fn rev_fnvw h ulong n ulong to ulong
+x = h
+for i ulong n
+x = mul xor x ulong get rev_opw i 1099511628211
+end
+ret x
+end
+
+fn rev_argp ai ulong to ulong
+r = argread ai rev_arg 0 4096
+if or le r 0 gt r 4096
+exit 2
+end
+ret ulong r
+end
+
+fn rev_argu ai ulong to ulong
+n = rev_argp ai
+if gt n 19
+exit 2
+end
+v = ulong 0
+for k ulong n
+c = ulong get rev_arg k
+if or lt c 48 gt c 57
+exit 2
+end
+v = add mul v 10 sub c 48
+end
+ret v
+end
+
+fn rev_copen_tmp ai ulong to void
+pl = rev_argp ai
+if gt pl 4000
+exit 2
+end
+for i ulong pl
+put rev_path i get rev_arg i
+end
+put rev_path pl 46
+put rev_path add pl 1 116
+put rev_path add pl 2 109
+put rev_path add pl 3 112
+fd = int fopen rev_path 0 add pl 4 577 420
+if lt fd 0
+exit 70
+end
+put rev_cfd 0 fd
+end
+
+fn rev_cwput pos ulong n ulong to void
+fd = get rev_cfd 0
+p = ulong 0
+while lt p n bound 999999
+w = pwrite fd rev_ck p sub n p long add pos p
+if le w 0
+exit 70
+end
+p = add p ulong w
+end
+end
+
+fn rev_crename pl ulong to void
+put rev_pk 0 2
+put rev_pk 1 0
+put rev_pk 2 uchar and add pl 4 255
+put rev_pk 3 uchar shr add pl 4 8
+for i ulong add pl 4
+put rev_pk add 4 i get rev_path i
+end
+q = add 8 pl
+put rev_pk q uchar and pl 255
+put rev_pk add q 1 uchar shr pl 8
+for j ulong pl
+put rev_pk add add q 2 j get rev_path j
+end
+if ne renames rev_pk 0 add add q 2 pl 0 0
+exit 70
+end
+end
+
+fn rev_cwend ai ulong to void
+fd = get rev_cfd 0
+if ne fsync fd 0
+exit 70
+end
+if ne fclose fd 0
+exit 70
+end
+rev_crename rev_argp ai
+end
+
+fn rev_ck_enc_chunk k ulong i ulong m ulong to void
+if eq k 0
+for j ulong m
+rev_ck_put8 mul j 8 bitcast ulong rev_wg add i j
+end
+ret
+end
+if eq k 1
+for j ulong m
+rev_ck_put8 mul j 8 bitcast ulong get rev_m add i j
+end
+ret
+end
+for j ulong m
+rev_ck_put8 mul j 8 bitcast ulong get rev_v add i j
+end
+end
+
+fn rev_ck_dec_chunk k ulong i ulong m ulong to void
+if eq k 0
+for j ulong m
+rev_wp add i j bitcast f64 rev_opw_get8 mul j 8
+end
+ret
+end
+if eq k 1
+for j ulong m
+put rev_m add i j bitcast f64 rev_opw_get8 mul j 8
+end
+ret
+end
+for j ulong m
+put rev_v add i j bitcast f64 rev_opw_get8 mul j 8
+end
+end
+
+fn rev_ck_body_one k ulong i ulong m ulong to void
+rev_ck_enc_chunk k i m
+nb = mul m 8
+put rev_ck_st 0 rev_fnvk get rev_ck_st 0 nb
+rev_cwput get rev_ck_st 1 nb
+put rev_ck_st 1 add get rev_ck_st 1 nb
+end
+
+fn rev_ck_body_pool k ulong to void
+p = get rev_cfg 10
+nc = div add p sub REV_CKC 1 REV_CKC
+for q ulong rev_cn nc
+c = mul q REV_CH
+ce = rev_ce q nc
+while lt c ce bound 500001
+i = mul c REV_CKC
+m = sub p i
+if gt m REV_CKC
+m = REV_CKC
+end
+rev_ck_body_one k i m
+c = add c 1
+end
+end
+end
+
+fn rev_ck_body to ulong
+put rev_ck_st 0 14695981039346656037
+put rev_ck_st 1 REV_CKHDR
+for k ulong 3
+rev_ck_body_pool k
+end
+ret get rev_ck_st 0
+end
+
+fn rev_ck4_head fnv ulong to void
+rev_ck_put8 0 REV_MAGIC_CK4
+for i ulong 8
+rev_ck_put8 add 8 mul i 8 get rev_cfg i
+end
+rev_ck_put8 72 get rev_cfg 20
+rev_ck_put8 80 get rev_cfg 21
+rev_ck_put8 88 get rev_cfg 22
+rev_ck_put8 96 get rev_cfg 23
+rev_ck_put8 104 get rev_cfg 10
+rev_ck_put8 112 get rev_cfg 12
+rev_ck_put8 120 get rev_cfg 13
+rev_ck_put8 128 get rev_cfg 14
+rev_ck_put8 136 get rev_cfg 15
+rev_ck_put8 144 get rev_cfg 16
+rev_ck_put8 152 get rev_cfg 17
+rev_ck_put8 160 get rev_cfg 18
+rev_ck_put8 168 get rev_cfg 19
+rev_ck_put8 176 0
+rev_ck_put8 184 0
+rev_ck_put8 192 0
+rev_ck_put8 200 fnv
+end
+
+fn rev_ck4_save ai ulong to void
+rev_copen_tmp ai
+h = rev_ck_body
+rev_ck4_head h
+rev_cwput 0 REV_CKHDR
+rev_cwend ai
+end
+
+fn rev_ofsz ai ulong to ulong
+n = rev_argp ai
+fd = int fopen rev_arg 0 n 0 0
+if lt fd 0
+exit 70
+end
+sz = fseek fd 0 2
+if lt sz 0
+exit 70
+end
+if ne fclose fd 0
+exit 70
+end
+ret ulong sz
+end
+
+fn rev_oprd ai ulong pos ulong off ulong n ulong to ulong
+plen = rev_argp ai
+fd = int fopen rev_arg 0 plen 0 0
+if lt fd 0
+exit 70
+end
+got = ulong 0
+while lt got n bound 999999
+r = pread fd rev_opw add off got sub n got long add pos got
+if lt r 0
+c = fclose fd
+exit 70
+end
+if eq r 0
+break
+end
+got = add got ulong r
+end
+if ne fclose fd 0
+exit 70
+end
+ret got
+end
+
+fn rev_ck4_load ai ulong to void
+sz = rev_ofsz ai
+if lt sz REV_CKHDR
+exit 10
+end
+if ne rev_oprd ai 0 0 REV_CKHDR REV_CKHDR
+exit 10
+end
+if ne rev_opw_get8 0 REV_MAGIC_CK4
+exit 11
+end
+for i ulong 8
+put rev_cfg i rev_opw_get8 add 8 mul i 8
+end
+put rev_cfg 20 rev_opw_get8 72
+put rev_cfg 21 rev_opw_get8 80
+put rev_cfg 22 rev_opw_get8 88
+put rev_cfg 23 rev_opw_get8 96
+p_file = rev_opw_get8 104
+put rev_cfg 12 rev_opw_get8 112
+put rev_cfg 13 rev_opw_get8 120
+put rev_cfg 14 rev_opw_get8 128
+put rev_cfg 15 rev_opw_get8 136
+put rev_cfg 16 rev_opw_get8 144
+put rev_cfg 17 rev_opw_get8 152
+put rev_cfg 18 rev_opw_get8 160
+put rev_cfg 19 rev_opw_get8 168
+want_fnv = rev_opw_get8 200
+put rev_cfg 25 1
+if not rev_geom
+exit 12
+end
+p = get rev_cfg 10
+if ne p p_file
+exit 13
+end
+want_sz = add REV_CKHDR mul 24 p
+if lt sz want_sz
+exit 10
+end
+if gt sz want_sz
+exit 15
+end
+put rev_ck_st 0 14695981039346656037
+put rev_ck_st 1 REV_CKHDR
+for k ulong 3
+rev_ck4_load_pool ai k
+end
+if ne get rev_ck_st 0 want_fnv
+exit 14
+end
+end
+
+fn rev_ck4_load_one ai ulong k ulong i ulong m ulong to void
+nb = mul m 8
+if ne rev_oprd ai get rev_ck_st 1 0 nb nb
+exit 10
+end
+put rev_ck_st 0 rev_fnvw get rev_ck_st 0 nb
+rev_ck_dec_chunk k i m
+put rev_ck_st 1 add get rev_ck_st 1 nb
+end
+
+fn rev_ck4_load_pool ai ulong k ulong to void
+p = get rev_cfg 10
+nc = div add p sub REV_CKC 1 REV_CKC
+for q ulong rev_cn nc
+c = mul q REV_CH
+ce = rev_ce q nc
+while lt c ce bound 500001
+i = mul c REV_CKC
+m = sub p i
+if gt m REV_CKC
+m = REV_CKC
+end
+rev_ck4_load_one ai k i m
+c = add c 1
+end
+end
+end
+
+note ---------------- selftest & oracle dump helpers ----------------
+
+fn rev_setup_ck4 fl ulong v ulong t ulong d ulong h ulong hkv ulong to void
+put rev_cfg 0 v
+put rev_cfg 1 t
+put rev_cfg 2 d
+put rev_cfg 3 h
+put rev_cfg 4 hkv
+put rev_cfg 12 or fl REV_FL_REV
+put rev_cfg 13 10000000
+put rev_cfg 14 bitcast ulong 0.00001f64
+put rev_cfg 15 bitcast ulong 0.01f64
+put rev_cfg 16 10
+put rev_cfg 25 1
+end
+
+fn rev_fill_seq to void
+bb = get rev_cfg 7
+t = get rev_cfg 1
+v = get rev_cfg 0
+for b ulong bb
+for pos ulong t
+idx = add mul b t pos
+tk = rem smx add 101 add mul b 31 pos v
+tg = rem smx add 701 add mul b 31 pos v
+if eq get rev_cfg 25 0
+put obx idx tk
+put oby idx tg
+else
+put rev_bx idx tk
+put rev_by idx tg
+end
+end
+end
+end
+
+fn rev_perturb_weights amp f64 to void
+p = get rev_cfg 10
+for i ulong p
+r = mul f64 shr smx add 424242 i 11 1.1102230246251565e-16
+dv = mul sub mul 2.0 r 1.0 amp
+rev_wp i add rev_wg i dv
+end
+end
+
+fn rev_pair_maxdiff n2 ulong to f64
+mx = 0.0f64
+for j ulong n2
+a = get rev_pair j
+b = get rev_dpair j
+err = fabs sub a b
+if gt err mx
+mx = err
+end
+end
+ret mx
+end
+
+fn rev_check_inv to f64
+ct = get rev_cfg 24
+n = mul ct get rev_cfg 2
+rev_emb_fwd 0 ct
+for i ulong mul 2 n
+put rev_dpair i get rev_pair i
+end
+lv = get rev_cfg 11
+for l ulong lv
+rev_fwd_layer l ct
+end
+for r ulong lv
+rev_inv_layer sub sub lv 1 r ct
+end
+ret rev_pair_maxdiff mul 2 n
+end
+
+fn rev_fd_one idx ulong h f64 to f64
+orig = rev_wg idx
+bb = get rev_cfg 7
+rev_wp idx add orig h
+lp = 0.0f64
+for b ulong bb
+lp = add lp rev_fwd_model b true
+end
+rev_wp idx sub orig h
+lm = 0.0f64
+for b2 ulong bb
+lm = add lm rev_fwd_model b2 true
+end
+rev_wp idx orig
+ret div div sub lp lm f64 bb sub add orig h sub orig h
+end
+
+fn rev_fd_rel ga f64 gn f64 to f64
+dn = fabs ga
+if gt fabs gn dn
+dn = fabs gn
+end
+if lt dn 1.0e-2
+dn = 1.0e-2
+end
+ret div fabs sub gn ga dn
+end
+
+fn rev_check_grad nsamp ulong to f64
+ls = rev_grad
+p = get rev_cfg 10
+mx = 0.0f64
+for k ulong nsamp
+idx = rem smx add 918273645 k p
+ga = rev_gg idx
+gn = rev_fd_one idx 1.0e-5
+rel = rev_fd_rel ga gn
+if gt rel mx
+mx = rel
+end
+end
+ret mx
+end
+
+fn rev_print_res ok bool tag1 ulong tag2 ulong v1 f64 v2 ulong to void
+if ok
+oputc 80
+oputc 65
+oputc 83
+oputc 83
+else
+oputc 70
+oputc 65
+oputc 73
+oputc 76
+end
+oputc 32
+oputc tag1
+oputc tag2
+oputc 32
+oputx bitcast ulong v1
+oputc 32
+oputu v2
+oputc 10
+end
+
+fn rev_selftest_1 to ulong
+fails = ulong 0
+rev_setup_ck4 0 32 4 8 2 2
+put rev_cfg 5 16
+put rev_cfg 6 2
+put rev_cfg 7 2
+put rev_cfg 17 0
+put rev_cfg 18 0
+put rev_cfg 19 0
+put rev_cfg 20 42
+put rev_cfg 21 0
+put rev_cfg 22 50
+put rev_cfg 23 bitcast ulong 0.01f64
+if not rev_geom
+ret 1
+end
+rev_init_params
+rev_perturb_weights 0.25
+rev_fill_seq
+e1 = rev_check_inv
+ok1 = lt e1 1.0e-12
+if not ok1
+fails = add fails 1
+end
+rev_print_res ok1 73 49 e1 rev_act_bytes_used
+g1 = rev_check_grad 24
+ok2 = lt g1 1.0e-8
+if not ok2
+fails = add fails 1
+end
+rev_print_res ok2 71 49 g1 rev_pair_bytes
+ret fails
+end
+
+fn rev_selftest_2 to ulong
+fails = ulong 0
+rev_setup_ck4 27 32 4 8 2 1
+put rev_cfg 5 16
+put rev_cfg 6 3
+put rev_cfg 7 2
+put rev_cfg 17 1
+put rev_cfg 18 1
+put rev_cfg 19 3
+put rev_cfg 20 99
+put rev_cfg 21 0
+put rev_cfg 22 50
+put rev_cfg 23 bitcast ulong 0.01f64
+if not rev_geom
+ret 1
+end
+rev_init_params
+rev_perturb_weights 0.2
+rev_fill_seq
+e2 = rev_check_inv
+ok3 = lt e2 1.0e-12
+if not ok3
+fails = add fails 1
+end
+rev_print_res ok3 73 50 e2 rev_act_bytes_used
+g2 = rev_check_grad 24
+ok4 = lt g2 1.0e-8
+if not ok4
+fails = add fails 1
+end
+rev_print_res ok4 71 50 g2 get rev_cfg 11
+l0 = rev_grad
+rev_adam
+for stp ulong 4
+ls = rev_grad
+rev_adam
+end
+lf = rev_grad
+ok5 = lt lf l0
+uok = ulong 0
+if ok5
+uok = 1
+else
+fails = add fails 1
+end
+rev_print_res ok5 84 82 lf uok
+ret fails
+end
+
+fn rev_popcnt64 x ulong to ulong
+c = ulong 0
+v = x
+while ne v 0 bound 64
+c = add c and v 1
+v = shr v 1
+end
+ret c
+end
+
+fn rev_q32_pert seed ulong to f64
+r = mul f64 shr smx seed 11 1.1102230246251565e-16
+v = mul sub mul 2.0 r 1.0 1.5e-4
+if lt fabs v 5.0e-5
+if ge v 0.0
+v = add v 5.0e-5
+else
+v = sub v 5.0e-5
+end
+end
+ret rev_q32_bf16_sim v
+end
+
+fn rev_q32_gen_fg l ulong n ulong f_arr edit f64 256 g_arr edit f64 256 to void
+for i ulong n
+put f_arr i rev_q32_pert add mul l 1009 add mul i 17 31337
+put g_arr i rev_q32_pert add mul l 2029 add mul i 29 91827
+end
+end
+
+fn rev_q32_init_val seed ulong odd ulong to f64
+r = mul f64 shr smx seed 11 1.1102230246251565e-16
+mag = add 100000.0 mul r 1000.0
+if ne odd 0
+ret neg mag
+end
+ret mag
+end
+
+fn rev_q32_init_stream n ulong to void
+for i ulong n
+odd1 = and i 1
+odd2 = and add i 1 1
+q1 = rev_q32_quant rev_q32_init_val add 5000 i odd1
+q2 = rev_q32_quant rev_q32_init_val add 9000 i odd2
+put rev_q32_x1 i q1
+put rev_q32_x2 i q2
+put rev_q32_hist i q1
+put rev_q32_hist add n i q2
+end
+end
+
+fn rev_q32_save_state n ulong off ulong to void
+for i ulong n
+put rev_q32_hist add off i get rev_q32_x1 i
+put rev_q32_hist add add off n i get rev_q32_x2 i
+end
+end
+
+fn rev_q32_diff_state n ulong off ulong to ulong
+diffs = ulong 0
+for i ulong n
+d1 = xor bitcast ulong get rev_q32_x1 i bitcast ulong get rev_q32_hist add off i
+if ne d1 0
+diffs = add diffs rev_popcnt64 d1
+end
+d2 = xor bitcast ulong get rev_q32_x2 i bitcast ulong get rev_q32_hist add off add n i
+if ne d2 0
+diffs = add diffs rev_popcnt64 d2
+end
+end
+ret diffs
+end
+
+fn rev_q32_selftest to ulong
+n = ulong 64
+nl = ulong 8
+f_arr = new f64 256 0.0
+g_arr = new f64 256 0.0
+rev_q32_init_stream n
+for l ulong nl
+rev_q32_gen_fg l n edit f_arr edit g_arr
+rev_q32_fwd_layer n view f_arr view g_arr
+rev_q32_save_state n mul add l 1 mul 2 n
+end
+diffs = ulong 0
+if eq rev_q32_diff_state n 0 0
+diffs = add diffs 1
+end
+for r ulong nl
+l = sub sub nl 1 r
+diffs = add diffs rev_q32_diff_state n mul add l 1 mul 2 n
+rev_q32_gen_fg l n edit f_arr edit g_arr
+rev_q32_inv_layer n view f_arr view g_arr
+end
+diffs = add diffs rev_q32_diff_state n 0
+if ne rev_q32_quant div 1.0 REV_Q32_SCALE 1
+diffs = add diffs 1
+end
+if ne rev_q32_quant neg div 1.0 REV_Q32_SCALE -1
+diffs = add diffs 1
+end
+ret diffs
+end
+
+fn rev_det_alloc p ulong to void
+if gt p get rev_det_sz 0
+r = enlarge rev_det_g p
+if ne r 0
+exit 70
+end
+put rev_det_sz 0 p
+end
+end
+
+fn rev_det_snap_g p ulong to void
+for q ulong rev_cn p
+i = mul q REV_CH
+ie = rev_ce q p
+while lt i ie bound 999999
+put rev_det_g i bitcast ulong rev_gg i
+i = add i 1
+end
+end
+end
+
+fn rev_det_poison p ulong to void
+for q ulong rev_cn p
+i = mul q REV_CH
+ie = rev_ce q p
+while lt i ie bound 999999
+rev_gp i 0.123456789
+i = add i 1
+end
+end
+end
+
+fn rev_det_cmp_g p ulong to ulong
+diffs = ulong 0
+nz = ulong 0
+for q ulong rev_cn p
+i = mul q REV_CH
+ie = rev_ce q p
+while lt i ie bound 999999
+b1 = get rev_det_g i
+b2 = bitcast ulong rev_gg i
+if ne b2 0
+nz = add nz 1
+end
+if ne b1 b2
+diffs = add diffs rev_popcnt64 xor b1 b2
+end
+i = add i 1
+end
+end
+if eq nz 0
+diffs = add diffs 1
+end
+ret diffs
+end
+
+fn rev_det_bwd_setup to void
+rev_setup_ck4 27 32 4 8 2 1
+put rev_cfg 5 16
+put rev_cfg 6 3
+put rev_cfg 7 2
+put rev_cfg 17 1
+put rev_cfg 18 1
+put rev_cfg 19 3
+put rev_cfg 20 99
+put rev_cfg 21 0
+put rev_cfg 22 50
+put rev_cfg 23 bitcast ulong 0.01f64
+if not rev_geom
+exit 12
+end
+rev_init_params
+rev_perturb_weights 0.2
+rev_fill_seq
+end
+
+fn rev_det_bwd_selftest to ulong
+rev_det_bwd_setup
+p = get rev_cfg 10
+rev_det_alloc p
+ls1 = rev_grad
+rev_det_snap_g p
+rev_det_bwd_setup
+rev_det_poison p
+ls2 = rev_grad
+diffs = rev_det_cmp_g p
+if ne bitcast ulong ls1 bitcast ulong ls2
+diffs = add diffs rev_popcnt64 xor bitcast ulong ls1 bitcast ulong ls2
+end
+ret diffs
+end
+
+fn rev_print_pf ok bool to void
+if ok
+oputc 80
+oputc 65
+oputc 83
+oputc 83
+else
+oputc 70
+oputc 65
+oputc 73
+oputc 76
+end
+oputc 32
+end
+
+fn rev_print_q32 diffs ulong nl ulong to void
+rev_print_pf eq diffs 0
+oputc 81
+oputc 51
+oputc 50
+oputc 32
+oputu diffs
+oputc 32
+oputu nl
+oputc 10
+end
+
+fn rev_print_detbwd diffs ulong p ulong to void
+rev_print_pf eq diffs 0
+oputc 68
+oputc 69
+oputc 84
+oputc 66
+oputc 87
+oputc 68
+oputc 32
+oputu diffs
+oputc 32
+oputu p
+oputc 10
+end
+
+fn rev_selftest to int
+f1 = rev_selftest_1
+f2 = rev_selftest_2
+f3 = rev_q32_selftest
+rev_print_q32 f3 8
+f4 = rev_det_bwd_selftest
+rev_print_detbwd f4 get rev_cfg 10
+oflush
+if gt add add f1 f2 add f3 f4 0
+ret 1
+end
+ret 0
+end
+
+note Write binary f64 buffer helper for oracle cross-checking
+fn rev_write_f64_fd fd int vals_kind ulong n ulong to void
+c = ulong 0
+while lt c n bound 999999
+m = sub n c
+if gt m REV_CKC
+m = REV_CKC
+end
+for j ulong m
+idx = add c j
+v = 0.0f64
+if eq vals_kind 0
+v = rev_wg idx
+end
+if eq vals_kind 1
+v = rev_gg idx
+end
+if eq vals_kind 2
+v = get rev_pair idx
+end
+if eq vals_kind 3
+v = get rev_dpair idx
+end
+rev_ck_put8 mul j 8 bitcast ulong v
+end
+nb = mul m 8
+p = ulong 0
+while lt p nb bound 999999
+w = write fd rev_ck p sub nb p
+if le w 0
+exit 70
+end
+p = add p ulong w
+end
+c = add c m
+end
+end
+
+fn rev_open_out ai ulong to int
+pl = rev_argp ai
+if gt pl 4000
+exit 2
+end
+for i ulong pl
+put rev_path i get rev_arg i
+end
+fd = int fopen rev_path 0 pl 577 420
+if lt fd 0
+exit 70
+end
+ret fd
+end
+
+note CLI: selftest | ck4_save PATH ... | oracle_dump FL V T D H HKV F L B LP LC NP SEED STEPS OUTBIN CK4OUT
+fn rev_cmd_word to ulong
+r = argread 1 rev_arg 0 4096
+if or le r 0 gt r 8
+ret 0
+end
+v = ulong 0
+for k ulong ulong r
+v = or v shl ulong get rev_arg k mul k 8
+end
+ret v
+end
+
+fn rev_oracle_cfg to void
+put rev_cfg 0 rev_argu 3
+put rev_cfg 1 rev_argu 4
+put rev_cfg 2 rev_argu 5
+put rev_cfg 3 rev_argu 6
+put rev_cfg 4 rev_argu 7
+put rev_cfg 5 rev_argu 8
+put rev_cfg 6 rev_argu 9
+put rev_cfg 7 rev_argu 10
+put rev_cfg 17 rev_argu 11
+put rev_cfg 18 rev_argu 12
+put rev_cfg 19 rev_argu 13
+put rev_cfg 20 rev_argu 14
+put rev_cfg 12 rev_argu 2
+put rev_cfg 13 10000000
+put rev_cfg 14 bitcast ulong 0.00001f64
+put rev_cfg 15 bitcast ulong 0.05f64
+put rev_cfg 16 10
+put rev_cfg 21 0
+put rev_cfg 22 50
+put rev_cfg 23 bitcast ulong 0.01f64
+put rev_cfg 25 1
+if not rev_geom
+exit 12
+end
+end
+
+fn rev_oracle_hdr fd int inv_err f64 ls f64 to void
+rev_ck_put8 0 get rev_cfg 10
+rev_ck_put8 8 bitcast ulong inv_err
+rev_ck_put8 16 bitcast ulong ls
+rev_ck_put8 24 rev_act_bytes_used
+rev_ck_put8 32 rev_pair_bytes
+wp = ulong 0
+while lt wp 40 bound 40
+w = write fd rev_ck wp sub 40 wp
+if le w 0
+exit 70
+end
+wp = add wp ulong w
+end
+end
+
+fn rev_oracle_steps fd int steps ulong to void
+for s ulong steps
+lstep = rev_grad
+rev_ck_put8 0 bitcast ulong lstep
+w2 = write fd rev_ck 0 8
+if ne w2 8
+exit 70
+end
+rev_adam
+end
+end
+
+fn rev_oracle_dump to int
+if ne ulong argcnt 18
+exit 2
+end
+rev_oracle_cfg
+rev_init_params
+rev_perturb_weights 0.2
+rev_fill_seq
+inv_err = rev_check_inv
+ls = rev_grad
+fd = rev_open_out 16
+p = get rev_cfg 10
+rev_oracle_hdr fd inv_err ls
+rev_write_f64_fd fd 0 p
+rev_write_f64_fd fd 1 p
+rev_oracle_steps fd rev_argu 15
+rev_write_f64_fd fd 0 p
+if ne fsync fd 0
+exit 70
+end
+if ne fclose fd 0
+exit 70
+end
+rev_ck4_save 17
+oputc 79
+oputc 75
+oputc 32
+oputx bitcast ulong inv_err
+oputc 32
+oputx bitcast ulong ls
+oputc 32
+oputu rev_act_bytes_used
+oputc 10
+oflush
+ret 0
+end
+
+fn rev_mode0_test to int
+put og 0 256
+put og 1 4
+put og 2 8
+put og 3 2
+put og 4 16
+put og 5 2
+put og 6 2
+put og 57 0
+put og 58 0
+put og 59 0
+if not ogeom
+exit 12
+end
+put og 40 77
+put og 41 0
+put og 42 50
+put og 43 bitcast ulong 0.01f64
+oinit
+rev_sync_from_og
+rev_perturb_weights 0.2
+rev_fill_seq
+e0 = rev_check_inv
+g0 = rev_check_grad 24
+l0 = rev_grad
+rev_adam
+for s ulong 4
+ld = rev_grad
+rev_adam
+end
+lf = rev_grad
+ok = and lt e0 1.0e-12 and lt g0 1.0e-8 and eq rev_act_bytes_used 0 lt lf l0
+rev_print_res ok 77 48 e0 rev_act_bytes_used
+rev_print_res ok 77 71 g0 get og 8
+oflush
+if ok
+ret 0
+end
+ret 1
+end
+
+fn rev_ck4_verify to int
+if ne ulong argcnt 3
+exit 2
+end
+rev_ck4_load 2
+oputc 67
+oputc 52
+oputc 32
+oputu get rev_cfg 10
+oputc 32
+oputu get rev_cfg 12
+oputc 32
+oputu get rev_cfg 11
+oputc 10
+oflush
+ret 0
+end
+
+fn rev_cli to int
+if lt ulong argcnt 2
+exit 2
+end
+w = rev_cmd_word
+note "selftest" = 8391162081330357619
+if eq w 8391162081330357619
+ret rev_selftest
+end
+note "mode0" = 207859511149
+if eq w 207859511149
+ret rev_mode0_test
+end
+note "ck4load" = 28254628855704419
+if eq w 28254628855704419
+ret rev_ck4_verify
+end
+note "oracle" = 111516198204015
+if eq w 111516198204015
+ret rev_oracle_dump
+end
+note "q32" = 3289969
+if eq w 3289969
+dq = rev_q32_selftest
+rev_print_q32 dq 8
+oflush
+if ne dq 0
+ret 1
+end
+ret 0
+end
+note "detbwd" = 110463915681124
+if eq w 110463915681124
+dd = rev_det_bwd_selftest
+rev_print_detbwd dd get rev_cfg 10
+oflush
+if ne dd 0
+ret 1
+end
+ret 0
+end
+exit 2
+end
+
+fn rev_ollm_cmd to int
+if lt ulong argcnt 3
+ret rev_selftest
+end
+r = argread 2 rev_arg 0 4096
+if or le r 0 gt r 8
+exit 2
+end
+w = ulong 0
+for k ulong ulong r
+w = or w shl ulong get rev_arg k mul k 8
+end
+if eq w 8391162081330357619
+ret rev_selftest
+end
+if eq w 207859511149
+ret rev_mode0_test
+end
+if eq w 3289969
+dq = rev_q32_selftest
+rev_print_q32 dq 8
+oflush
+if ne dq 0
+ret 1
+end
+ret 0
+end
+if eq w 110463915681124
+dd = rev_det_bwd_selftest
+rev_print_detbwd dd get rev_cfg 10
+oflush
+if ne dd 0
+ret 1
+end
+ret 0
+end
+exit 2
+end

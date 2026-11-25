@@ -138,6 +138,7 @@ lead=
 pre=
 pool=lpool.om
 plat=lio.om
+rev_mod=rev.om
 post=$src/noserve.om
 bin=ollm
 
@@ -155,14 +156,17 @@ case "$TARGET" in
     bin=ollm-gb10
     ;;
   macos)
-    lead='target a64macos'
+    lead='target a64macos
+om2'
     plat=mio.om
     post=$src/noserve.om
     bin=ollm-macos
     ;;
   x86linux)
-    lead='target x86linux'
+    lead='target x86linux
+om2'
     plat=lio.om
+    rev_mod=norev.om
     post=$src/noserve.om
     bin=ollm-x86linux
     ;;
@@ -170,6 +174,7 @@ case "$TARGET" in
     lead='target x86efi'
     pool=epool.om
     plat=eio.om
+    rev_mod=norev.om
     post=$src/noserve.om
     bin=ollm.efi
     ;;
@@ -177,6 +182,7 @@ case "$TARGET" in
     lead='target a64efi'
     pool=epool.om
     plat=eio.om
+    rev_mod=norev.om
     post=$src/noserve.om
     bin=ollm-aa64.efi
     EFIRT=${EFIRT:-$(dirname "$OMC")/../a64efi/efirt.om}
@@ -205,7 +211,28 @@ om_file="$OUT/$bin.om"
     "$src/adam.om" \
     "$src/ckpt.om" \
     "$src/bpe.om" \
-    "$src/spec.om" \
+    "$src/spec.om"
+  if [ "$TARGET" != x86efi ] && [ "$TARGET" != a64efi ]; then
+    cat \
+      "$src/$rev_mod" \
+      "$src/arboris.om" \
+      "$src/sp_solve.om" \
+      "$src/omg.om"
+  else
+    cat "$src/$rev_mod"
+    cat <<'EOF'
+fn cmdspforge to void
+exit 2
+end
+fn cmdomg to void
+exit 2
+end
+fn cmdarboris to void
+exit 2
+end
+EOF
+  fi
+  cat \
     "$src/cli.om" \
     "$src/$plat" \
     "$post"
@@ -222,7 +249,11 @@ if [ "$TARGET" = gb10 ]; then
     "$g/gk.om" \
     "$g/gr.om" \
     "$g/gb.om" \
-    "$g/gg.om" >> "$om_file"
+    "$g/gg.om" \
+    "$g/gt.om" \
+    "$g/gm.om" \
+    "$g/ring.om" \
+    "$g/ejit.om" >> "$om_file"
 fi
 
 "$OMC" < "$om_file" > "$OUT/$bin.tmp"

@@ -213,6 +213,25 @@ if eq w 28273260578173043
 cmdspguard
 ret 0
 end
+if eq w 28542713840693363
+cmdspforge
+ret 0
+end
+if eq w 6778223
+cmdomg
+ret 0
+end
+if eq w 32485562537636449
+cmdarboris
+ret 0
+end
+if eq w 7759218
+rr = rev_ollm_cmd
+if ne rr 0
+exit rr
+end
+ret 0
+end
 if eq w 0
 lo = ocmdlo
 hi = ocmdhi

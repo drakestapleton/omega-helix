@@ -5,7 +5,7 @@ OMC ?= $(shell command -v omc 2>/dev/null || ([ -x "$(HOME)/.local/bin/omc" ] &&
 DRIVER := ../wdrive/wbuild.om
 JSON := $(ROOT)/native/net/json.om
 NATIVE := $(ROOT)/native
-MODEL := $(NATIVE)/math.om $(NATIVE)/data.om $(NATIVE)/lpool.om $(NATIVE)/model.om $(NATIVE)/adam.om $(NATIVE)/ckpt.om $(NATIVE)/bpe.om $(NATIVE)/spec.om $(NATIVE)/cli.om $(NATIVE)/lio.om $(NATIVE)/noserve.om $(NATIVE)/nogpu.om
+MODEL := $(NATIVE)/math.om $(NATIVE)/data.om $(NATIVE)/lpool.om $(NATIVE)/model.om $(NATIVE)/adam.om $(NATIVE)/ckpt.om $(NATIVE)/bpe.om $(NATIVE)/spec.om $(NATIVE)/rev.om $(NATIVE)/arboris.om $(NATIVE)/sp_solve.om $(NATIVE)/omg.om $(NATIVE)/cli.om $(NATIVE)/lio.om $(NATIVE)/noserve.om $(NATIVE)/nogpu.om
 .DELETE_ON_ERROR:
 .PHONY: all replay
 all: $(addprefix $(OUT)/,contrast mix grade select with-example mean)
