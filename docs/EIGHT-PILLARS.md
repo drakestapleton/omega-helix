@@ -30,13 +30,32 @@ Omega Helix extends its static, zero-CUDA, zero-`libc` transformer engine with *
 
 ---
 
-## Zero-Python Verification Gate
+## Zero-Python Verification Gate & 15-Second Unified Demo
 
-Run the entire pure-Omega engine + 8-pillar self-tests + 4 byte-traceability locks + `fcache -> spforge -> spapp -> speval` pipeline with **zero Python**:
+Run the entire pure-Omega engine + 8-pillar self-tests + 4 byte-traceability locks + unified `omg pack -> train -> omg samp -> omc`, `arboris guide -> omc`, `fcache -> spforge -> spapp -> speval`, and `rev train` (ARM64) pipeline with **zero Python**:
 
 ```sh
-sh scripts/verify-om.sh
+sh scripts/verify-om.sh        # full pure-Omega zero-Python gate
+sh scripts/demo-8-pillars.sh   # 15-second unified 8-pillar laptop demo
 ```
+
+### Unified Pure-Omega CLI Commands (`ollm`)
+
+```sh
+ollm omg pack <in.om> <out.tok>                                    # pack .om -> V=256 OMG token stream
+ollm omg decode <in.tok> <out.om>                                  # decode OMG tokens -> .om source
+ollm omg samp <ck> <seed> <budget> <temp_milli> <out.om>           # OMG-masked neural decode (100% omc-valid)
+ollm arboris guide <ck> <corpus.tok> <seed> <budget> <tm> <out.om> # 3-layer Arboris bypass + OMG wall + LTP0
+ollm rev train <steps> [lr_milli]                                  # zero-activation Q32 reversible train (ARM64)
+omega-helix pillars --json                                         # Studio CLI 8-pillar & lock verifier
+```
+
+### Studio UI & REST API Integration
+
+Studio exposes the unified 8-pillar loop directly inside Tabs 2–4 and over `/api/runtime/{locks,omg,arbsamp,spforge}`:
+- **Tab 2 (Design):** `OMG V=256 typed graph` tokenizer option, Closed-Form `spforge`, and Reversible Q32 Core toggles.
+- **Tab 3 (Forge & Telemetry):** One-click **8-Pillar Locks** verifier (`OMG ✓ · Arboris ✓ · Rev Q32 (0-bit, 0B act) ✓`).
+- **Tab 4 (Playground & Exports):** `OMG-Masked (100% omc-valid)` and `Arboris-Guided (Bypass + OMG + LTP0)` decode engines with bypass hit-rate, `LTP0` count, decoded `.om`, and live `omc` compile check.
 
 ---
 

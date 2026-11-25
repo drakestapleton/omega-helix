@@ -3128,6 +3128,71 @@ end
 exit 2
 end
 
+fn rev_train_cli to int
+steps = ulong 10
+lr_milli = ulong 10
+if ge ulong argcnt 4
+steps = rev_argu 3
+end
+if ge ulong argcnt 5
+lr_milli = rev_argu 4
+end
+if or eq steps 0 gt steps 200
+exit 2
+end
+if eq lr_milli 0
+exit 2
+end
+rev_setup_ck4 27 32 4 8 2 1
+put rev_cfg 5 16
+put rev_cfg 6 3
+put rev_cfg 7 2
+put rev_cfg 17 1
+put rev_cfg 18 1
+put rev_cfg 19 3
+put rev_cfg 20 99
+put rev_cfg 21 0
+put rev_cfg 22 add steps 10
+put rev_cfg 23 bitcast ulong div f64 lr_milli 1000.0
+if not rev_geom
+ret 1
+end
+rev_init_params
+rev_perturb_weights 0.2
+rev_fill_seq
+l0 = rev_grad
+for stp ulong steps
+ls = rev_grad
+rev_adam
+end
+lf = rev_grad
+dq = rev_q32_selftest
+oputc 82
+oputc 69
+oputc 86
+oputc 84
+oputc 82
+oputc 65
+oputc 73
+oputc 78
+oputc 32
+oputu steps
+oputc 32
+oputu rev_act_bytes_used
+oputc 32
+oputu dq
+oputc 32
+oputl rmic l0
+oputc 32
+oputl rmic lf
+oputc 10
+oflush
+if or ne dq 0 gt lf l0
+ret 1
+end
+ret 0
+end
+
 fn rev_ollm_cmd to int
 if lt ulong argcnt 3
 ret rev_selftest
@@ -3163,6 +3228,9 @@ if ne dd 0
 ret 1
 end
 ret 0
+end
+if eq w 474214396532
+ret rev_train_cli
 end
 exit 2
 end

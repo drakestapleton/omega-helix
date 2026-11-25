@@ -6,8 +6,12 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
+import platform
+import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.parse
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,6 +36,85 @@ from distill import verifiers as distill_verifiers  # noqa: E402
 import runtime as sovereign_runtime  # noqa: E402
 import commons as sovereign_commons  # noqa: E402
 import ssh_remote  # noqa: E402
+
+
+_DEFAULT_OMG_SEED = (
+    "om2\n"
+    "fn scale x ulong k ulong to ulong\n"
+    "  res = mul x k\n"
+    "  res = add res 1\n"
+    "  ret res\n"
+    "end\n"
+    "fn main to int\n"
+    "  a = ulong 7\n"
+    "  b = scale a 3\n"
+    "  if gt b 10\n"
+    "    ret int sub b 10\n"
+    "  end\n"
+    "  ret 0\n"
+    "end\n"
+)
+
+
+def _find_omc_bin() -> str | None:
+    for cand in (
+        os.environ.get("OMC", ""),
+        shutil.which("omc") or "",
+        str(Path.home() / ".local" / "bin" / "omc"),
+        str(Path.home() / "canon" / "omega-mv" / "seed" / "out" / "omc"),
+    ):
+        if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def _compile_om_text(om_text: str) -> tuple[bool, int]:
+    omc = _find_omc_bin()
+    if not omc:
+        return False, -1
+    hdr = "target a64macos\n" if platform.system() == "Darwin" else ""
+    p = subprocess.run([omc], input=(hdr + om_text).encode("utf-8"), capture_output=True, check=False)
+    return p.returncode == 0, int(p.returncode)
+
+
+def _run_eight_pillar_locks(bin_dir: Path | None, root: Path | None, steps: int = 8, lr_milli: int = 10) -> dict[str, Any]:
+    bins = runner.ensure_binaries(["ollm"], bin_dir=bin_dir, root=root)
+    ollm = str(bins["ollm"])
+    r_omg = subprocess.run([ollm, "omg"], capture_output=True, text=True, check=False)
+    r_arb = subprocess.run([ollm, "arboris"], capture_output=True, text=True, check=False)
+    rev_supported = platform.system() == "Darwin" or platform.machine().lower() in ("aarch64", "arm64")
+    rev_ok = True
+    act_bytes = 0
+    q32_bits = 0
+    loss_init = None
+    loss_final = None
+    rev_out = ""
+    if rev_supported:
+        r_rev = subprocess.run([ollm, "rev", "train", str(int(steps)), str(int(lr_milli))], capture_output=True, text=True, check=False)
+        rev_ok = r_rev.returncode == 0
+        rev_out = r_rev.stdout.strip()
+        for ln in rev_out.splitlines():
+            if ln.startswith("REVTRAIN "):
+                parts = ln.split()
+                if len(parts) >= 6:
+                    act_bytes = int(parts[2])
+                    q32_bits = int(parts[3])
+                    loss_init = int(parts[4]) / 1_000_000.0
+                    loss_final = int(parts[5]) / 1_000_000.0
+    omg_ok = r_omg.returncode == 0 and "OMG_SELFTEST PASS" in r_omg.stdout
+    arb_ok = r_arb.returncode == 0 and "ARBORIS_SELFTEST PASS" in r_arb.stdout
+    return {
+        "ok": bool(omg_ok and arb_ok and rev_ok),
+        "omg_pass": omg_ok,
+        "arboris_pass": arb_ok,
+        "rev_supported": rev_supported,
+        "rev_pass": rev_ok,
+        "act_bytes": act_bytes,
+        "q32_inv_bits": q32_bits,
+        "rev_loss_init": loss_init,
+        "rev_loss_final": loss_final,
+        "output": "\n".join(x for x in (r_omg.stdout.strip(), r_arb.stdout.strip(), rev_out) if x),
+    }
 
 
 class StudioServer(ThreadingHTTPServer):
@@ -260,6 +343,14 @@ class StudioHandler(BaseHTTPRequestHandler):
                 self._stream_sse(drun)
                 return
 
+        if path == "/api/runtime/locks":
+            try:
+                res = _run_eight_pillar_locks(self.server.manager.bin_dir, self.server.manager.root)
+                self._send_json(HTTPStatus.OK, res)
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
         if path == "/api/trust/verify":
             try:
                 q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -437,6 +528,192 @@ class StudioHandler(BaseHTTPRequestHandler):
                 stopped = self.server.distill_manager.stop_run(run_id)
                 self._send_json(HTTPStatus.OK, {"ok": True, "stopped": stopped})
                 return
+
+        if path == "/api/runtime/locks":
+            try:
+                res = _run_eight_pillar_locks(
+                    self.server.manager.bin_dir,
+                    self.server.manager.root,
+                    steps=int(body.get("steps", 8)),
+                    lr_milli=int(body.get("lr_milli", 10)),
+                )
+                self._send_json(HTTPStatus.OK, res)
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/api/runtime/omg":
+            try:
+                bins = runner.ensure_binaries(["ollm"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
+                ollm = str(bins["ollm"])
+                action = str(body.get("action", "samp")).strip().lower()
+                if action == "selftest":
+                    r = subprocess.run([ollm, "omg"], capture_output=True, text=True, check=False)
+                    self._send_json(HTTPStatus.OK, {"ok": r.returncode == 0, "stdout": r.stdout, "stderr": r.stderr})
+                    return
+                with tempfile.TemporaryDirectory(prefix="helix-omg-") as td:
+                    tdp = Path(td)
+                    if action == "pack":
+                        src_om = str(body.get("source_om") or _DEFAULT_OMG_SEED)
+                        in_p = tdp / "in.om"
+                        out_p = Path(body["out_tok"]).expanduser().resolve() if body.get("out_tok") else (tdp / "out.tok")
+                        in_p.write_text(src_om, encoding="utf-8")
+                        r = subprocess.run([ollm, "omg", "pack", str(in_p), str(out_p)], capture_output=True, text=True, check=False)
+                        if r.returncode != 0:
+                            raise ValueError(f"omg pack rc={r.returncode}: {r.stderr.strip()}")
+                        parts = r.stdout.strip().split()
+                        self._send_json(HTTPStatus.OK, {
+                            "ok": True,
+                            "action": "pack",
+                            "in_bytes": int(parts[1]) if len(parts) > 1 else len(src_om),
+                            "ntok": int(parts[2]) if len(parts) > 2 else 0,
+                            "sem_id": parts[3] if len(parts) > 3 else "",
+                            "tok_path": str(out_p) if body.get("out_tok") else "",
+                        })
+                        return
+                    ck_path = body.get("ck_path")
+                    if not ck_path and body.get("run_id"):
+                        run = self.server.manager.get_run(str(body["run_id"]))
+                        if run and run.base_ck:
+                            ck_path = run.base_ck
+                    if not ck_path:
+                        # Auto-init tiny V=256 OMG model for zero-friction Playground exploration
+                        ck_p = tdp / "omg_auto.ck"
+                        r_i = subprocess.run([ollm, "init", str(ck_p), "256", "16", "16", "2", "32", "2", "4", "1", "10", "4000"], capture_output=True, text=True, check=False)
+                        if r_i.returncode != 0:
+                            raise ValueError(f"auto omg init failed rc={r_i.returncode}")
+                        ck_path = str(ck_p)
+                    out_om = tdp / "samp.om"
+                    r = subprocess.run([
+                        ollm, "omg", "samp",
+                        str(Path(ck_path).expanduser().resolve()),
+                        str(int(body.get("seed", 42))),
+                        str(int(body.get("budget", 64))),
+                        str(int(body.get("temp_milli", 0))),
+                        str(out_om),
+                    ], capture_output=True, text=True, check=False)
+                    if r.returncode != 0:
+                        raise ValueError(f"omg samp rc={r.returncode}: {r.stderr.strip()}")
+                    parts = r.stdout.strip().split()
+                    src_out = out_om.read_text(encoding="utf-8", errors="replace")
+                    compiled, omc_rc = _compile_om_text(src_out)
+                    self._send_json(HTTPStatus.OK, {
+                        "ok": True,
+                        "action": "samp",
+                        "ntok": int(parts[1]) if len(parts) > 1 else 0,
+                        "out_bytes": int(parts[2]) if len(parts) > 2 else len(src_out),
+                        "sem_id": parts[3] if len(parts) > 3 else "",
+                        "source_om": src_out,
+                        "omc_compiled": compiled,
+                        "omc_rc": omc_rc,
+                    })
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/api/runtime/arbsamp":
+            try:
+                bins = runner.ensure_binaries(["ollm"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
+                ollm = str(bins["ollm"])
+                with tempfile.TemporaryDirectory(prefix="helix-arb-") as td:
+                    tdp = Path(td)
+                    corpus_tok = body.get("corpus_tok")
+                    if not corpus_tok:
+                        seed_om = str(body.get("seed_om") or _DEFAULT_OMG_SEED)
+                        in_p = tdp / "seed.om"
+                        tok_p = tdp / "seed.tok"
+                        in_p.write_text(seed_om, encoding="utf-8")
+                        r_pk = subprocess.run([ollm, "omg", "pack", str(in_p), str(tok_p)], capture_output=True, text=True, check=False)
+                        if r_pk.returncode != 0:
+                            raise ValueError(f"omg pack rc={r_pk.returncode}")
+                        corpus_tok = str(tok_p)
+                    ck_path = body.get("ck_path")
+                    if not ck_path and body.get("run_id"):
+                        run = self.server.manager.get_run(str(body["run_id"]))
+                        if run and run.base_ck:
+                            ck_path = run.base_ck
+                    if not ck_path:
+                        ck_p = tdp / "arb_auto.ck"
+                        r_i = subprocess.run([ollm, "init", str(ck_p), "256", "16", "16", "2", "32", "2", "4", "1", "10", "4000"], capture_output=True, text=True, check=False)
+                        if r_i.returncode != 0:
+                            raise ValueError(f"auto init failed rc={r_i.returncode}")
+                        ck_path = str(ck_p)
+                    out_om = tdp / "guide.om"
+                    r = subprocess.run([
+                        ollm, "arboris", "guide",
+                        str(Path(ck_path).expanduser().resolve()),
+                        str(Path(corpus_tok).expanduser().resolve()),
+                        str(int(body.get("seed", 42))),
+                        str(int(body.get("budget", 64))),
+                        str(int(body.get("temp_milli", 0))),
+                        str(out_om),
+                    ], capture_output=True, text=True, check=False)
+                    if r.returncode != 0:
+                        raise ValueError(f"arboris guide rc={r.returncode}: {r.stderr.strip()}")
+                    parts = r.stdout.strip().split()
+                    ntok = int(parts[1]) if len(parts) > 1 else 0
+                    bypass = int(parts[2]) if len(parts) > 2 else 0
+                    ltp0 = int(parts[3]) if len(parts) > 3 else 0
+                    out_bytes = int(parts[4]) if len(parts) > 4 else 0
+                    sem_id = parts[5] if len(parts) > 5 else ""
+                    src_out = out_om.read_text(encoding="utf-8", errors="replace")
+                    compiled, omc_rc = _compile_om_text(src_out)
+                    self._send_json(HTTPStatus.OK, {
+                        "ok": True,
+                        "ntok": ntok,
+                        "bypass_hits": bypass,
+                        "ltp0_calls": ltp0,
+                        "bypass_rate": round(bypass / ntok, 4) if ntok > 0 else 0.0,
+                        "out_bytes": out_bytes,
+                        "sem_id": sem_id,
+                        "source_om": src_out,
+                        "omc_compiled": compiled,
+                        "omc_rc": omc_rc,
+                    })
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/api/runtime/spforge":
+            try:
+                bins = runner.ensure_binaries(["ollm"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
+                ollm = str(bins["ollm"])
+                base_ck = str(Path(body["base_ck"]).expanduser().resolve())
+                corpus = str(Path(body["corpus"]).expanduser().resolve())
+                out_dir = Path(body["out_dir"]).expanduser().resolve()
+                out_dir.mkdir(parents=True, exist_ok=True)
+                windows = int(body.get("windows", 8))
+                ridge_milli = int(body.get("ridge_milli", 10000))
+                gn_iters = int(body.get("gn_iters", 1))
+                fc_path = out_dir / "frozen.hc"
+                sp_path = out_dir / "closed.sp"
+                spec_ck = out_dir / "spec.ck"
+                r1 = subprocess.run([ollm, "fcache", base_ck, corpus, str(windows), str(fc_path)], capture_output=True, text=True, check=False)
+                if r1.returncode != 0:
+                    raise ValueError(f"fcache rc={r1.returncode}: {r1.stderr.strip()}")
+                r2 = subprocess.run([ollm, "spforge", base_ck, str(fc_path), str(sp_path), str(ridge_milli), str(gn_iters)], capture_output=True, text=True, check=False)
+                if r2.returncode != 0:
+                    raise ValueError(f"spforge rc={r2.returncode}: {r2.stderr.strip()}")
+                r3 = subprocess.run([ollm, "spapp", base_ck, str(sp_path), str(spec_ck)], capture_output=True, text=True, check=False)
+                if r3.returncode != 0:
+                    raise ValueError(f"spapp rc={r3.returncode}: {r3.stderr.strip()}")
+                r4 = subprocess.run([ollm, "speval", base_ck, str(sp_path), corpus, str(windows)], capture_output=True, text=True, check=False)
+                if r4.returncode != 0:
+                    raise ValueError(f"speval rc={r4.returncode}: {r4.stderr.strip()}")
+                sp_parts = r2.stdout.strip().split()
+                ev_parts = r4.stdout.strip().split()
+                self._send_json(HTTPStatus.OK, {
+                    "ok": True,
+                    "sp_path": str(sp_path),
+                    "spec_ck": str(spec_ck),
+                    "sp_bytes": sp_path.stat().st_size,
+                    "loss_before_unats": int(sp_parts[5]) if len(sp_parts) > 5 else 0,
+                    "loss_after_unats": int(sp_parts[6]) if len(sp_parts) > 6 else 0,
+                    "eval_unats": int(ev_parts[3]) if len(ev_parts) > 3 else 0,
+                })
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
 
         if path == "/api/runtime/gsamp":
             try:
