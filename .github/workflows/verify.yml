@@ -1,0 +1,90 @@
+name: Verify Omega Helix
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x86_64
+            os: ubuntu-latest
+            omc_url: https://interplane.io/omega/downloads/omega-compiler-bb1f6ccb-linux-x86_64.tar.gz
+            omc_sha_url: https://interplane.io/omega/downloads/omega-bb1f6ccb-linux-x86_64.sha256
+            omc_file: omega-compiler-bb1f6ccb-linux-x86_64.tar.gz
+            artifact: verify-ci-linux-x86_64.log
+          - label: linux-aarch64
+            os: ubuntu-24.04-arm
+            omc_url: https://interplane.io/omega/downloads/omega-compiler-3086ed3ca106-linux-aarch64.tar.gz
+            omc_sha_url: https://interplane.io/omega/downloads/omega-3086ed3ca106.sha256
+            omc_file: omega-compiler-3086ed3ca106-linux-aarch64.tar.gz
+            artifact: verify-ci-linux-aarch64.log
+          - label: macos-arm64
+            os: macos-latest
+            omc_url: https://interplane.io/omega/downloads/omega-compiler-1ad353af8-macos-arm64.tar.gz
+            omc_sha_url: https://interplane.io/omega/downloads/omega-1ad353af8-macos-arm64.sha256
+            omc_file: omega-compiler-1ad353af8-macos-arm64.tar.gz
+            artifact: verify-ci-macos-arm64.log
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download & SHA-256 verify seeded omc compiler
+        run: |
+          mkdir -p "$RUNNER_TEMP/omc-dist"
+          curl -sSfL "${{ matrix.omc_url }}" -o "$RUNNER_TEMP/omc-dist/${{ matrix.omc_file }}"
+          curl -sSfL "${{ matrix.omc_sha_url }}" -o "$RUNNER_TEMP/omc-dist/omc.sha256"
+          cd "$RUNNER_TEMP/omc-dist"
+          if command -v sha256sum >/dev/null 2>&1; then
+            grep -F "${{ matrix.omc_file }}" omc.sha256 | sha256sum -c -
+          else
+            grep -F "${{ matrix.omc_file }}" omc.sha256 | shasum -a 256 -c -
+          fi
+          tar -xzf "${{ matrix.omc_file }}"
+          chmod +x omc
+          if [ "$(uname -s)" = Darwin ] && command -v codesign >/dev/null 2>&1; then
+            xattr -cr omc 2>/dev/null || true
+            codesign -s - -f omc
+          fi
+          echo "OMC=$RUNNER_TEMP/omc-dist/omc" >> "$GITHUB_ENV"
+
+      - name: Run scripts/verify.sh & verify-30s.sh
+        shell: bash
+        run: |
+          set -o pipefail
+          OUT="$RUNNER_TEMP/omega-helix-ci" sh scripts/verify.sh 2>&1 | tee "${{ matrix.artifact }}"
+          echo "=== VERIFY_LOG_SHA256 ==="
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${{ matrix.artifact }}"
+          else
+            shasum -a 256 "${{ matrix.artifact }}"
+          fi
+
+      - name: Run install.sh (--no-download)
+        run: |
+          sh install.sh --prefix "$RUNNER_TEMP/omega-helix-install" --no-download
+          "$RUNNER_TEMP/omega-helix-install/bin/omega-helix" doctor --json
+          "$RUNNER_TEMP/omega-helix-install/bin/omega-helix" verify --json
+
+      - name: Upload verification receipt log
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}

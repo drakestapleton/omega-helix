@@ -1,0 +1,8 @@
+*.om linguist-detectable=true
+tests/** linguist-vendored
+tools/studio/** linguist-vendored
+tools/openwaldo/*.py linguist-vendored
+tools/distill/** linguist-vendored
+tools/runtime/** linguist-vendored
+tools/commons/** linguist-vendored
+tools/combined/**/*.py linguist-vendored

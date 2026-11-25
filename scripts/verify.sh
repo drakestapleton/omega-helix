@@ -28,6 +28,20 @@ if [ "$OS" = Darwin ]; then
   OUT="$OUT" TARGET=univ sh "$here/scripts/build.sh"
   OUT="$OUT" TARGET=interchange sh "$here/scripts/build.sh"
   BIN="$OUT/ollm-macos"
+elif [ "$ARCH" = x86_64 ] || [ "$ARCH" = amd64 ]; then
+  OUT="$OUT" TARGET=x86linux sh "$here/scripts/build.sh"
+  OUT="$OUT" TARGET=tok sh "$here/scripts/build.sh"
+  OUT="$OUT" TARGET=openwaldo sh "$here/scripts/build.sh"
+  OUT="$OUT" TARGET=univ sh "$here/scripts/build.sh"
+  OUT="$OUT" TARGET=interchange sh "$here/scripts/build.sh"
+  BIN="$OUT/ollm-x86linux"
+  if command -v ldd >/dev/null 2>&1; then
+    if ldd "$BIN" 2>&1 | grep -qiE 'libc|libcuda|cublas'; then
+      echo "ERROR: $BIN must be statically linked with zero CUDA/libc" >&2
+      exit 1
+    fi
+    echo "STATIC_ELF_ZERO_CUDA_OK"
+  fi
 else
   OUT="$OUT" TARGET=aarch64 sh "$here/scripts/build.sh"
   OUT="$OUT" TARGET=gb10 sh "$here/scripts/build.sh"
@@ -108,6 +122,7 @@ echo "--- 4e. Sovereign Commons, Trust Audit, Memory Migration, Porting Kit, Lea
 OLLM_BIN="$BIN" OMEGA_HELIX_BIN_DIR="$OUT" \
   python3 -W error::ResourceWarning -m unittest discover -s "$here/tools/commons" -p "test_*.py" -v
 OMEGA_HELIX_BIN_DIR="$OUT" "$here/bin/omega-helix" verify --json >/dev/null
+OUT="$OUT/verify30s" sh "$here/scripts/verify-30s.sh" >/dev/null
 
 if [ "$OS" = Linux ] && [ "$ARCH" = aarch64 ]; then
   GSL_WORK="$xdir/gsl" sh "$here/tests/test_gpu_spec_loop.sh" build

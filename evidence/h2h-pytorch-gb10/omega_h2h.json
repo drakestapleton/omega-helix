@@ -1,0 +1,15 @@
+{
+  "binary_bytes": 791988,
+  "init_line": "I 15833472",
+  "cold_start_with_380MB_ckpt_io_ms": 7258.3,
+  "dt_5_steps_s": 8.0929,
+  "dt_35_steps_s": 13.8996,
+  "steady_30_steps_s": 5.8067,
+  "steady_step_ms": 193.56,
+  "steady_tok_per_s": 84646.7,
+  "total_35_tok_per_s": 41255.8,
+  "out35_tail": [
+    "T 35 4847386",
+    "GT 677222 70161131 117157171 160 1044649 3244654 10605 42233519 6588973711 3913059"
+  ]
+}
