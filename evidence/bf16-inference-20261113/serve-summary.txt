@@ -1,0 +1,5 @@
+SUMMARY pass=122 fail=0
+model_line 1 MODEL ollm-ck02-v4096-t256-d384-h12-l8-step60000-fnv0a3ae8e8c031f163
+bind_loopback_only 1
+SERVE_CHECK PASS
+full_log_sha256 f0bb0ef4f0ab738a2f5fc376693d40a3ed18299c95377f7e36f3943a886dbe98

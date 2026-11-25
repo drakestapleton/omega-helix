@@ -1,0 +1,403 @@
+{
+  "window": "20261113T023656Z-b1e470",
+  "verdict": "PASS",
+  "inputs": {
+    "$WORK/llm-checks/combined/ollm-gb10": "c6f9bb02b165bd9b6e98dc10695bd3134d3bba4b84d75ba166d6646db11f7a9f",
+    "$WORK/llm-checks/combined-base/ollm-gb10": "3027bda78c4dcc509bb7df50b2dbbba71b61297b9ea036bdeb4a34f1475f2322",
+    "$WORK/llm-checks/omc-pinned": "2c82480596bbdc50cda9626866209ef662d5834f278f839ff4ce0250c495029f",
+    "$WORK/llm-checks/combined/ollm.om": "c809f32e6978068b364c58708a708d1ea581143c0b1e3eb5c156669a1be0a00e",
+    "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882": "73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+    "$MODELS/omega-llm-golden/a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f": "a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f",
+    "$R11B/run/ck30000.bin": "55227184444881aa688db0d751b57e8405431be5a0f2e7f16cf4b7732cdfc060"
+  },
+  "checks": [
+    {
+      "tag": "bf16-0-0",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gdbench",
+        "$MODELS/omega-llm-golden/a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f",
+        "250",
+        "The Omega compiler reads a program and",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "8"
+      ],
+      "exit": 0,
+      "stdout_sha256": "00337c9a2e9e3acc44e9d98e7644b53782ec09d5741bf93fa162c36a2bc88c23",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "bf16-0-1",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gdbench",
+        "$MODELS/omega-llm-golden/a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f",
+        "250",
+        "Once upon a time, a small fox found a red ball.",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "8"
+      ],
+      "exit": 0,
+      "stdout_sha256": "ce47c3a52d8ab0c385a346cf53df55aa4fbc06addd180a1ffdd0eca895a3039a",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "bf16-0-2",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gdbench",
+        "$MODELS/omega-llm-golden/a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f",
+        "250",
+        "1 2 3 4 5. The answer is",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "8"
+      ],
+      "exit": 0,
+      "stdout_sha256": "db5c83901c67be2774f7b64880709ebc40dcd0d6691435333ab9a201e7da8488",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "bf16-0-3",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gdbench",
+        "$MODELS/omega-llm-golden/a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f",
+        "250",
+        "fn main to int ret 0 end. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. ",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "8"
+      ],
+      "exit": 0,
+      "stdout_sha256": "bf1e3665287752cdcc8e1266cd86e0e80a46dcf29d166b891da755b592425a11",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "f32-0",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gdbench",
+        "$MODELS/omega-llm-golden/a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f",
+        "250",
+        "The Omega compiler reads a program and",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "2"
+      ],
+      "exit": 0,
+      "stdout_sha256": "f477b53589299b3529629ad1287b59c658330189cfadcb57acabfe2a423ccf53",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "profile-0",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gdbench",
+        "$MODELS/omega-llm-golden/a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f",
+        "1",
+        "Once upon a time",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "7"
+      ],
+      "exit": 0,
+      "stdout_sha256": "b3501012f730cebe7de5369578123644bb3730fa0cdbf8d8ab505a86942be358",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "old-baseline-0",
+      "argv": [
+        "$WORK/llm-checks/combined-base/ollm-gb10",
+        "gdbench",
+        "$MODELS/omega-llm-golden/a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f",
+        "250",
+        "The Omega compiler reads a program and",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "4"
+      ],
+      "exit": 42,
+      "stdout_sha256": "ef3c33c6700f9a8a917bb0b61d75efb045c77889176ad1ef2f7b918cc558af80",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "old-candidate-0",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gdbench",
+        "$MODELS/omega-llm-golden/a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f",
+        "250",
+        "The Omega compiler reads a program and",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "4"
+      ],
+      "exit": 42,
+      "stdout_sha256": "ef3c33c6700f9a8a917bb0b61d75efb045c77889176ad1ef2f7b918cc558af80",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "empty-0-base",
+      "argv": [
+        "$WORK/llm-checks/combined-base/ollm-gb10",
+        "gdbench",
+        "$MODELS/omega-llm-golden/a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f",
+        "250",
+        "",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "2"
+      ],
+      "exit": 2,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "empty-0-candidate",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gdbench",
+        "$MODELS/omega-llm-golden/a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f",
+        "250",
+        "",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "2"
+      ],
+      "exit": 2,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "sample-0-1",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gsampb",
+        "$MODELS/omega-llm-golden/a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f",
+        "0",
+        "64",
+        "0",
+        "Once upon a time, a small fox found a red ball.",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882"
+      ],
+      "exit": 0,
+      "stdout_sha256": "4a9645153ef8de0191cdfd089e3a3cf3e2fa497484da8c80db21fb4870980268",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "sample-0-2",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gsampb",
+        "$MODELS/omega-llm-golden/a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f",
+        "0",
+        "64",
+        "0",
+        "Once upon a time, a small fox found a red ball.",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882"
+      ],
+      "exit": 0,
+      "stdout_sha256": "4a9645153ef8de0191cdfd089e3a3cf3e2fa497484da8c80db21fb4870980268",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "bf16-1-0",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gdbench",
+        "$R11B/run/ck30000.bin",
+        "250",
+        "The Omega compiler reads a program and",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "8"
+      ],
+      "exit": 0,
+      "stdout_sha256": "101d4fca1a1b0e27c50612caea38d879e6204c037e3fbe5d321ad5157bbd428b",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "bf16-1-1",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gdbench",
+        "$R11B/run/ck30000.bin",
+        "250",
+        "Once upon a time, a small fox found a red ball.",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "8"
+      ],
+      "exit": 0,
+      "stdout_sha256": "c4e9ec0a35eaf47adcd5c0647e2d3fd24ecfe83f992482b26e29173bca2bfca5",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "bf16-1-2",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gdbench",
+        "$R11B/run/ck30000.bin",
+        "250",
+        "1 2 3 4 5. The answer is",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "8"
+      ],
+      "exit": 0,
+      "stdout_sha256": "80fc0562744531da6d3506ec438569f19db49df89904ff7344f2afe8ee20a53f",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "bf16-1-3",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gdbench",
+        "$R11B/run/ck30000.bin",
+        "250",
+        "fn main to int ret 0 end. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. The moon and stars were bright. ",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "8"
+      ],
+      "exit": 0,
+      "stdout_sha256": "5d93947553c9453986d75e17d2eb67a25fefbcdb0ba066eb78140f734336db03",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "f32-1",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gdbench",
+        "$R11B/run/ck30000.bin",
+        "250",
+        "The Omega compiler reads a program and",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "2"
+      ],
+      "exit": 0,
+      "stdout_sha256": "cee3f643cf430effdbc5330dd924cf182a205eb4e71b969c8b233aba88c3c889",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "profile-1",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gdbench",
+        "$R11B/run/ck30000.bin",
+        "1",
+        "Once upon a time",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "7"
+      ],
+      "exit": 0,
+      "stdout_sha256": "c024a744e9b3617d464b13ea5f29d20e8cc43751dbcdb6890e66f1fb738dd555",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "old-baseline-1",
+      "argv": [
+        "$WORK/llm-checks/combined-base/ollm-gb10",
+        "gdbench",
+        "$R11B/run/ck30000.bin",
+        "250",
+        "The Omega compiler reads a program and",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "4"
+      ],
+      "exit": 42,
+      "stdout_sha256": "ad1cbe7cb8e310f070ea1c729bb173e75f6d9e19df462de41338b9fac47eb269",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "old-candidate-1",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gdbench",
+        "$R11B/run/ck30000.bin",
+        "250",
+        "The Omega compiler reads a program and",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "4"
+      ],
+      "exit": 42,
+      "stdout_sha256": "ad1cbe7cb8e310f070ea1c729bb173e75f6d9e19df462de41338b9fac47eb269",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "empty-1-base",
+      "argv": [
+        "$WORK/llm-checks/combined-base/ollm-gb10",
+        "gdbench",
+        "$R11B/run/ck30000.bin",
+        "250",
+        "",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "2"
+      ],
+      "exit": 2,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "empty-1-candidate",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gdbench",
+        "$R11B/run/ck30000.bin",
+        "250",
+        "",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "2"
+      ],
+      "exit": 2,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "sample-1-1",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gsampb",
+        "$R11B/run/ck30000.bin",
+        "0",
+        "64",
+        "0",
+        "Once upon a time, a small fox found a red ball.",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882"
+      ],
+      "exit": 0,
+      "stdout_sha256": "8ff890d1b9b4b26b63c6aa60d89bd6f4927a67829ab79cf5eb4892f35b8c8894",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "sample-1-2",
+      "argv": [
+        "$WORK/llm-checks/combined/ollm-gb10",
+        "gsampb",
+        "$R11B/run/ck30000.bin",
+        "0",
+        "64",
+        "0",
+        "Once upon a time, a small fox found a red ball.",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882"
+      ],
+      "exit": 0,
+      "stdout_sha256": "8ff890d1b9b4b26b63c6aa60d89bd6f4927a67829ab79cf5eb4892f35b8c8894",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "mutant-build",
+      "argv": [
+        "$WORK/llm-checks/omc-pinned"
+      ],
+      "exit": 0,
+      "stdout_sha256": "c15a2e07ef2e26613cff000b11eaffbfa4f45f391f4bfc188193ff64cba40cc3",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "tag": "mutant-profile",
+      "argv": [
+        "$WORK/llm-checks/combined-qualification-run/numerical/no-bf16",
+        "gdbench",
+        "$MODELS/omega-llm-golden/a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f",
+        "1",
+        "Once upon a time",
+        "$MODELS/omega-llm-golden/73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882",
+        "7"
+      ],
+      "exit": 0,
+      "stdout_sha256": "87b0c14609b4b7f204b69ccf783ca0e4dd3465eb146c0cc49c367800ac87b59c",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

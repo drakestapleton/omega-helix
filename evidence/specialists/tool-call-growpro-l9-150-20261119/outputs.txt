@@ -1,0 +1,102 @@
+=== OLLM FROZEN-CORE SPECIALIST RUN (M2 CPU, DARWIN ARM64, f64) ===
+START 2026-11-19T14:48:33Z
+CPU: Apple M2 (ncpu=8, mem=8589934592)
+OS: Darwin 25.6.0 RELEASE_ARM64_T8112 arm64
+
+--- 0. FCACHEM (W=160, completion-only mask) ---
+FCACHE 160 256 384 8
+real 618.10
+user 608.94
+sys 3.70
+FCACHEM_BIT_IDENTICAL (sha256: 3f127597f9eed16fc973040c76463e4fd75b9c4837744e8b2beeafdfaf803166)
+
+--- 1. GROWPRO L=8->9 TOTAL=150 LRMICRO=3500 ---
+GP 8 9 17603712
+real 3.30
+user 2.97
+sys 0.27
+
+--- 2. BASE vs STEP-0 HELD-OUT EVAL (W=9) ---
+BASE_V2_EVAL: E 60000 9 7183552 6325274
+STEP0_EVAL: E 0 9 7183552 6325274
+
+--- 3. TRAINFC LEG 1 (0 -> 50, every 25, freeze=8, B=1) ---
+FC 25 8 5511696
+FC 50 8 2289094
+real 363.16
+user 346.75
+sys 4.73
+STEP50_EVAL: E 50 9 4528072 3987066
+
+--- 4. TRAINFC LEG 2 (50 -> 100, every 25, freeze=8, B=1) ---
+FC 75 8 961954
+FC 100 8 628315
+real 321.92
+user 307.98
+sys 3.88
+STEP100_EVAL: E 100 9 4757065 4188699
+
+--- 5. TRAINFC LEG 3 (100 -> 150, every 25, freeze=8, B=1) ---
+FC 125 8 690457
+FC 150 8 439281
+real 313.11
+user 303.54
+sys 3.00
+STEP150_EVAL: E 150 9 4954553 4362591
+
+--- 6. SPEXT & SPAPP & SPEVAL ROUND-TRIP ---
+SPEXT 8 9 1770624
+SIZES: base_ck=380003448 spec_ck=422489208 pack=14165040
+1317cf8784c16ca9ff522d5bf9022b8fa966b67550e19f71a076c98cd53363d4  spec_growpro_l9.ck
+6e21157c45d463ed5c92d141a85ba632f07cb41353e928efea745a3971e99927  tool-call_growpro_l9_150.sp
+SPEVAL_PACK: E 60000 9 4954553 4362591
+SPAPP 8 9 1770624
+REBUILT_EVAL: E 60000 9 4954553 4362591
+
+--- 7. INDEPENDENT BIT-IDENTICAL BASE WEIGHTS CHECK (CK02 header = 120 bytes) ---
+BASE: magic=b'OLLMCK02' shapes=(4096, 256, 384, 12, 1536, 8) fz_params=15833088 fz_bytes=126664704
+SPEC: magic=b'OLLMCK02' shapes=(4096, 256, 384, 12, 1536, 9) base_match=True
+REBUILT: magic=b'OLLMCK02' shapes=(4096, 256, 384, 12, 1536, 9) base_match=True
+BASE_PRESERVATION_VERIFIED: 100% bit-identical across all 15,833,088 frozen base parameters (126,664,704 bytes)
+
+--- 8. NEGATIVE CONTROLS (rc=60, rc=61, rc=62) ---
+NEG_TRUNC_RC=60
+NEG_FLIP_RC=61
+NEG_WRONGBASE_RC=62
+
+--- 9A. QUALITATIVE SAMPLES (unspaced "Call:" boundary, N=32, temp=0.100, seed=42) ---
+>>> PROMPT: User: What is 17 + 25?\nCall:
+BASE omega-v2.ck:
+ 15 15 15 15 40 40 5.
+Little did Light 5 5 
+SPECIALIST spsamp:
+ NONE
+
+>>> PROMPT: User: Read SECURITY.md.\nCall:
+BASE omega-v2.ck:
+
+Read SEST.
+Read SEST.
+Read SEST.
+Read SEST.
+SPECIALIST spsamp:
+ NONE
+
+>>> PROMPT: User: Multiply 29 by 14.\nCall:
+BASE omega-v2.ck:
+ 123, 23, 44, 4, 4, 44.
+Mile: 4, 4
+SPECIALIST spsamp:
+ NONE
+
+--- 9B. QUALITATIVE SAMPLES (exact tokenized " User: ...\nCall: " boundary, N=32, temp=0.100, seed=42) ---
+>>> [ User: What is 17 + 25?\nCall: ]
+<tool_call>calc(25 / 15 / 15)</tool_call>
+>>> [ User: Read SECURITY.md.\nCall: ]
+<tool_call>shell(df -n <tool_call>
+>>> [ User: Multiply 29 by 14.\nCall: ]
+<tool_call>search(25 + 15)</tool_call>
+>>> [ User: What is 17 + 25?\nCall: <tool_call>]
+calc(25 / 125)</tool_call>
+
+END 2026-11-19T15:12:47Z

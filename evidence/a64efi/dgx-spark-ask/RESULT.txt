@@ -1,0 +1,27 @@
+Typed conversation (`ask`) with the Omega LLM on a DGX Spark with no operating system, so no NVIDIA operating-system driver
+(nvidia.ko) loaded, 2026-11-12. The machine's own UEFI firmware started the image and stayed beneath it, its display support
+for the NVIDIA display device included: the image reads the keyboard, writes the screen and the file, and waits between key
+polls through firmware calls; the clock behind J and OLLM DONE is the processor's own counter, read directly by the image.
+
+image       a67ac2401cc2f57d77ab54f4a7937f0c9216db68f01b3b9524429b0afb65da6b: `TARGET=a64efi sh tests/omegallm/build.sh` (ollm-aa64.efi; the same
+            bytes at d31ec797, 526115d9 and 3bee29ed), on the machine's EFI system partition, started by the firmware through a boot
+            entry selected for one boot (BootNext)
+checkpoint  ddf790fc0dd10372746a58fbf8b1754b2e4b3b80c9afbc075df7662d51b8159b (run/v0 ck-20000, V 256)
+job file    ask \OLLM\CK.BIN 7 80 700
+operator    Drake, at the machine's own keyboard and screen
+OUT.TXT     376 bytes, sha256 868d9f94d8f020d0c51763f68a8991610e2b260e1bbec58e6d67c1068b21bdcd. Not published: it holds the operator's typed words
+            and the answers to them. From it:
+  banner    OLLM efi 102
+  machine   ID cpu=- fw=American Megatrends fwrev=00050024 smbios=NVIDIA/NVIDIA_DGX_Spark/A.7
+  turns     2 typed lines of 5 and 46 bytes; each answer 80 bytes
+  end       OLLM DONE 1 679444 (one job, milliseconds by the machine's counter); the machine then restarted into its installed
+            system, as \OLLM\REBOOT.TXT asks (seen by the operator, not logged; the boot list afterwards was clean)
+
+Check, after the run: for turn t (0, 1) the aarch64 Linux build of 3bee29ed (the same sources) gives, for
+`ollm sample ck-20000.bin (7 + t) 80 700 LINE` with the typed line as LINE, exactly the bytes the bare machine printed as its
+answer (the image adds a line feed when the answer does not end in one). turn 0 EQUAL, turn 1 EQUAL.
+
+An earlier session the same day left no record: the script that started the second session deleted \OLLM\OUT.TXT first
+(operator glue outside this repository; it now keeps the previous file).
+
+Label: EXERCISED on physical hardware, one machine, one session, the v0 checkpoint. Not QUALIFIED.

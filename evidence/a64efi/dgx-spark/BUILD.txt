@@ -1,0 +1,16 @@
+Build record of the image that ran on the DGX Spark on 2026-11-12 (RESULT.txt in this directory).
+
+image sha256 f2e31985d8c0b76196d54570fd50b5aef67bf5737f29be03c8b0ebf6a82ecaba (also in RESULT.txt, line "image")
+source sha256 53fd78df1afa4b1a4128a29d93aaa2de1ffa153be9e995731ebaa0994cad82ba (one concatenated unit, composed as below)
+compiler that built the booted bytes: a candidate of omega-mv branch omc/a64efi, omc sha256 e31da79404224bb4834d1111c6ae9d38db02f7e832d2ac3188c55640e4012e8a, not committed anywhere
+compiler that reproduces them: omega-mv commit d7fbd5658312e321b39edd992b27d8f3aefea882, seed/out/omc sha256 34c51cdc467a0103700786ed5acea49db8a919ce277c62c8e5b680d476022f32: the same source gives the same image sha256 (recomputed when this file was written)
+
+Composition of the source, in order:
+  line 1: target a64efi
+  omega-mv d7fbd565 seed/a64efi/efirt.om                 sha256 e778b2ce15960e658a461c926388b17005e39de58bf7d1c7e216e8881a5293dd
+  aien-train bb19fba9983962e65863f6a5229df55db386ef44 native/omegallm: math.om data.om epool.om model.om adam.om ckpt.om bpe.om cli.om eio.om noserve.om nogpu.om
+  in the text so far, the one line "fn main to int" renamed "fn ocmain to int"
+  omega-mv d7fbd565 evidence/a64efi-dgx-spark-20261112/pciid.om   sha256 b13efefdcb515cacc2de0453d75e4ac613a7703c735888fea065cc11ea376094 (its fn main calls ocmain, then reads the NVIDIA devices' identity through the firmware)
+
+To recompute: compose as above and run  seed/out/omc < source > image  with the omega-mv commit's compiler.
+This is not the image tests/omegallm/build.sh TARGET=a64efi builds: that one has no pciid.om.

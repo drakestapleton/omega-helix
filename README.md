@@ -12,19 +12,25 @@ Omega Helix (`ollm` / `ollm-gb10`) is an entire end-to-end language model stack 
 
 ---
 
-## Verified DGX Spark (GB10, `sm_121`) Training Speeds
+## Complete Rung-by-Rung Training Progression (CPU → Raw GB10 FP32 → SM121 `k1`–`k9` → BF16 Tensor Core)
 
-All measurements below were collected on a single **NVIDIA DGX Spark (GB10, SM 12.1)** running the pure-Omega 15.8M v2 architecture (`V=4096, T=256, D=384, H=12, F=1536, L=8, B=64`, `16,384` tokens/step, `15,833,472` parameters), with full receipts preserved in [`evidence/`](evidence/):
+Every single rung in the Omega Helix bring-up ladder — from the initial single-core byte-level CPU proof-of-concept (`v0`) through raw-driver Blackwell GB10 FP32 (`Rungs 4–8`), ten bit-exact SM121 SASS kernel optimization rounds (`k1`–`k9`), BF16 Tensor-Core training (`Rungs 9–10`), and the looped-core study — is preserved in [`evidence/`](evidence/):
 
-| Run | Precision / Kernel | Steps (Tokens) | Throughput | Step Time | Final Held-Out Loss | Receipt |
-|---|---|---:|---:|---:|---:|---|
-| **Rung 10** | `gtrainb` (BF16 Tensor Core) | 60,000 (983.0M) | **85,285 tok/s** | `0.19211 s` | `1.204466 nats` (`0.449322 bpb`) | [`evidence/gpu-r10/README.md`](evidence/gpu-r10/README.md) |
-| **Rung 9** | `gtrainb` (BF16 Tensor Core) | 30,000 (491.5M) | **84,913 tok/s** | `0.19295 s` | `1.251860 nats` (`0.467002 bpb`) | [`evidence/gpu-r9/README.md`](evidence/gpu-r9/README.md) |
-| **Rung 7** | `gtrainf` (FP32 SASS) | 30,000 (491.5M) | **68,549 tok/s** | `0.23901 s` | `1.254741 nats` (`0.468077 bpb`) | [`evidence/gpu-r7/README.md`](evidence/gpu-r7/README.md) |
-| **Rung 8** | `gtrainf` (FP32 SASS) | 60,000 (983.0M) | **66,953 tok/s** | `0.24471 s` | `1.206290 nats` (`0.450002 bpb`) | [`evidence/gpu-r8/README.md`](evidence/gpu-r8/README.md) |
-| **Loop Study (`base`)** | `gtrainf` (FP32 SASS, 8L) | 6,000 (98.3M) | **66,600 tok/s** | `0.246 s` | `2.152378 nats` (Omega src) | [`docs/LOOP.md`](docs/LOOP.md) |
+| Rung | Hardware & Kernel | Model Shape (`P`) | Steps (Tokens) | Throughput | Step Time | Held-Out Loss | Receipt |
+|---|---|---|---:|---:|---:|---:|---|
+| **v0** | Grace CPU (1 core, f64) | Byte `V256 T64 D64 L2` (`0.12M`) | 20,000 (20.5M) | — | — | `1.463036 bpb` | [`evidence/v0/`](evidence/v0/) |
+| **Rung 3 (`v1`)** | Grace CPU (20 cores, f64) | BPE `V4096 T128 D192 L4 B40` (`2.58M`) | 9,000 (46.1M) | `1,102 tok/s` | `4.646 s` | `1.823975 nats` (`0.680427 bpb`) | [`evidence/v1/README.md`](evidence/v1/README.md) |
+| **Rung 4** | GB10 `gtrainf` (FP32 SASS) | Same Rung-3 shape (`2.58M`) | 9,000 (46.1M) | **95,246 tok/s** *(86.4× CPU)* | `0.05375 s` | `1.826877 nats` (`0.681510 bpb`) | [`evidence/gpu/README.md`](evidence/gpu/README.md) |
+| **Rung 5** | GB10 `gtrainf` (FP32 SASS) | v1 max `T256 D256 L8 B64` (`7.41M`) | 9,000 (147.5M) | **43,023 tok/s** | `0.3808 s` | `1.445466 nats` (`0.539226 bpb`) | [`evidence/gpu-max/README.md`](evidence/gpu-max/README.md) |
+| **Rung 6** | GB10 `gtrainf` (+ Kahan CE) | v1 max `T256 D256 L8 B64` (`7.41M`) | 30,000 (491.5M) | **43,445 tok/s** | `0.37712 s` | `1.338156 nats` (`0.499194 bpb`) | [`evidence/gpu-r6/README.md`](evidence/gpu-r6/README.md) |
+| **`k1`–`k9`** | GB10 SM121 SASS opt rounds | 10 bit-identical kernel rounds | — | *~1.6× faster/step* | — | Bit-identical ckpt every round | [`evidence/gpu-k1/`](evidence/gpu-k1/)…[`gpu-k9/`](evidence/gpu-k9/) |
+| **Rung 7** | GB10 `gtrainf` (`k9` FP32) | v2 `T256 D384 F1536 L8 B64` (`15.83M`) | 30,000 (491.5M) | **68,549 tok/s** | `0.23901 s` | `1.254741 nats` (`0.468077 bpb`) | [`evidence/gpu-r7/README.md`](evidence/gpu-r7/README.md) |
+| **Rung 8** | GB10 `gtrainf` (`k9` FP32) | v2 `T256 D384 F1536 L8 B64` (`15.83M`) | 60,000 (983.0M) | **66,953 tok/s** | `0.24471 s` | `1.206290 nats` (`0.450002 bpb`) | [`evidence/gpu-r8/README.md`](evidence/gpu-r8/README.md) |
+| **Rung 9** | GB10 `gtrainb` (BF16 TC) | v2 `T256 D384 F1536 L8 B64` (`15.83M`) | 30,000 (491.5M) | **84,913 tok/s** | `0.19295 s` | `1.251860 nats` (`0.467002 bpb`) | [`evidence/gpu-r9/README.md`](evidence/gpu-r9/README.md) |
+| **Rung 10** | GB10 `gtrainb` (BF16 TC) | v2 `T256 D384 F1536 L8 B64` (`15.83M`) | 60,000 (983.0M) | **85,285 tok/s** | `0.19211 s` | **`1.204466 nats`** (**`0.449322 bpb`**) | [`evidence/gpu-r10/README.md`](evidence/gpu-r10/README.md) |
+| **Loop Study** | GB10 `gtrainf` (Omega src) | `base` 8L / `loop` 16-app / `deep` 16L | 6,000 (98.3M) | **66,600** / 36,300 / 35,200 tok/s | `0.246 s` (`base`) | `2.152` / `2.144` / `2.210 nats` | [`docs/LOOP.md`](docs/LOOP.md) |
 
-*Status: EXERCISED on one GB10 (non-quiet shared-machine windows); CPU `eval` matches on-chip `geval` to `Δ = 0 µnats` on Rungs 7–10.*
+*Status: EXERCISED on one NVIDIA DGX Spark (GB10, `sm_121`, non-quiet shared-machine windows). CPU f64 `eval` matches on-chip `geval` to `Δ = 0 µnats` across Rungs 6–10. Additional receipts in [`evidence/`](evidence/) cover `gpu-bf` (BF16 bring-up & fragment oracles), `v3` (16-layer / 30M bank-B host acceptance), `bf16-inference-20261113` & `bf16-combined-20261113`, `specialists` (frozen-core DNA tool-call training), `serve`, `x86`, `efi`, and bare-metal `a64efi`.*
 
 ---
 
@@ -130,7 +136,7 @@ LOOP=1    sh scripts/train-gb10-bf16.sh train.tok held.tok merges4096.bin
 | [`tools/`](tools/) | Pure-Omega training driver (`wdrive/`), 165-task coding benchmark (`bench/`), contrast training (`contrast/`), learned controller (`controller/`), and weight-patch tools (`wpatch/`, `wscore/`, `wgate/`). |
 | [`docs/`](docs/) | Architecture contracts (`CONTRACT.md`, `CONTRACT-V1..V3.md`, `CONTRACT-BF16.md`), DNA specialists ([`SPECIALISTS.md`](docs/SPECIALISTS.md), [`OM-BUNDLES.md`](docs/OM-BUNDLES.md)), looped core ([`LOOP.md`](docs/LOOP.md)), and checkpoint growth ([`GROW.md`](docs/GROW.md)). |
 | [`tests/`](tests/) | Python f64 referee oracle (`oracle.py`), core receipts (`core-receipts.sh`), GPU SASS disassembler guard (`gpu-disasm.sh`), metrics benchmark (`ollm_metrics_bench.py`), and `.om` test harnesses. |
-| [`evidence/`](evidence/) | Immutable GB10 training receipts for Rungs 7–10 (`66.9k–85.3k tok/s`) and the `2026-11-21` looped-core study (`66.6k tok/s`). |
+| [`evidence/`](evidence/) | Complete immutable receipts for the entire rung ladder (`v0`, `v1`/Rung 3, Rung 4 `gpu`, Rung 5 `gpu-max`, Rung 6 `gpu-r6`, kernel rounds `gpu-k1`–`gpu-k9`, Rungs 7–10, `gpu-bf`, `v3`, `bf16-inference`, `specialists`, `serve`, `x86`, `efi`, `a64efi`, and the `2026-11-21` looped-core study). |
 
 ---
 

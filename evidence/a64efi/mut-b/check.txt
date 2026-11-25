@@ -1,0 +1,4 @@
+job 6 line mismatch
+  out: c 74 -2292031573 -2292031453
+  ref: c 74 -2292031573 -2292031897
+DIFFERENT

@@ -1,0 +1,3 @@
+fsck.fat 4.2 (2021-01-31)
+scratch-a64efi/main/disk.img: 14 files, 23458/81593 clusters
+fsck exit 0

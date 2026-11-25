@@ -1,0 +1,10 @@
+Why the 15.8M-parameter checkpoint was not run on this machine without an operating system (measured 2026-11-12 on the DGX Spark that ran RESULT.txt):
+
+EFI system partition (the only FAT volume on the machine's disk): blockdev --getsize64 /dev/nvme0n1p1 -> 312475648 bytes
+  parted -s /dev/nvme0n1 unit MiB print -> partition 1, 1.00MiB to 299MiB, 298MiB, fat32, boot, esp; partition 2 is ext4 (not tried from the image)
+rung-10 checkpoint ck60000, sha256 a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f. The file measured is the copy the served model loads on that machine, stored under its sha256 as its name:
+  sha256sum $HOME/models/omega-llm-golden/a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f -> a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f
+  stat -c %s of the same path -> 380003448 bytes
+  (120-byte header + 24 bytes for each of 15833472 parameters: 120 + 24 * 15833472 = 380003448)
+
+380003448 > 312475648: the file is larger than the whole partition. NOT_RUN on this machine for that reason; a larger FAT volume (a USB stick) removes it.

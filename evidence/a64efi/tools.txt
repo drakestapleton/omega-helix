@@ -1,0 +1,4 @@
+date 2026-11-12T10:53:50Z machine aarch64 accel -cpu host -enable-kvm
+qemu: QEMU emulator version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)
+firmware: 8ff1fb8da2d8baf739bfdf020ff9ede225172c3a1b9d98e64e2b7935fd5ad4ab QEMU_EFI.fd
+aien-train: 2accd22bd24cb01e2b24ef309dec219168abd25b status 0
