@@ -147,6 +147,7 @@
     lastStageAudio: "",
     playWeights: {},
     playOpts: { n_tokens: 48, temp_milli: 700, seed: 42, adapt_thresh_micro: 0, msg_gain_micro: 0 },
+    spiral: { preset: "mini64", pillars: [], selectedStrands: new Set(), plan: null, crystallized: [] },
   };
 
   /* ---------------- Utilities ---------------- */
@@ -1394,6 +1395,55 @@
     const playModeEl = document.querySelector('input[name="playmode"]:checked');
     const playMode = playModeEl ? playModeEl.value : "std";
     const runId = $("play-run").value || state.activeRunId;
+    if (playMode === "spiral") {
+      const btn = $("btn-sample");
+      const baseCk = ($("play-sp-base")?.value || $("sp-base-ck")?.value || "").trim();
+      const strands = ($("play-sp-strands")?.value || "").split("\n").map((s) => s.trim()).filter(Boolean);
+      const topK = Number($("play-sp-topk")?.value || 4);
+      if (!baseCk || !strands.length) {
+        toast("Enter seed.ck and at least one .sp2 strand pack path.", "err");
+        sfx.err();
+        return;
+      }
+      btn.disabled = true;
+      $("sample-out").textContent = "Routing Top-K Spiral Weave…";
+      try {
+        const res = await api("/api/spiral/sample", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            base_ck: baseCk,
+            strands,
+            prompt: $("play-prompt").value,
+            max_tok: state.playOpts.n_tokens,
+            top_k: topK,
+            temp_milli: state.playOpts.temp_milli,
+          }),
+        });
+        if (!res.ok) {
+          $("sample-out").textContent = res.error || "Spiral sampling failed.";
+          sfx.err();
+          return;
+        }
+        $("sample-out").textContent = res.text || res.stdout || "(empty output)";
+        $("sample-meta").textContent = `Spiral Weave · Top-${res.top_k} of ${res.n_strands} strands · ${res.elapsed_sec}s`;
+        const rBox = $("spiral-routing-out");
+        if (rBox) {
+          rBox.replaceChildren();
+          (res.routing || []).slice(0, 16).forEach((rt) => {
+            const p = el("span", "exit-pill");
+            p.appendChild(document.createTextNode(`${rt.strand} `));
+            p.appendChild(el("b", "", Number(rt.weight).toFixed(3)));
+            rBox.appendChild(p);
+          });
+        }
+        $("exit-pills").replaceChildren();
+        sfx.assign();
+      } finally {
+        btn.disabled = false;
+      }
+      return;
+    }
     if (playMode === "omg" || playMode === "arbsamp") {
       const btn = $("btn-sample");
       btn.disabled = true;
@@ -1579,6 +1629,39 @@
       if (id) loadRunDetail(id);
     });
     $("btn-sample").addEventListener("click", runSample);
+    document.querySelectorAll('input[name="playmode"]').forEach((r) => {
+      r.addEventListener("change", () => {
+        const cfg = $("spiral-play-cfg");
+        if (cfg) cfg.hidden = r.value !== "spiral" || !r.checked;
+      });
+    });
+    document.querySelectorAll(".qt-spiral-btn[data-spiral]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        sfx.milestone();
+        selectSpiralPreset(btn.dataset.spiral, true);
+      });
+    });
+    document.querySelectorAll(".spiral-preset-btn[data-spiral]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        sfx.tap();
+        selectSpiralPreset(btn.dataset.spiral, false);
+      });
+    });
+    if ($("spiral-local-dir")) {
+      $("spiral-local-dir").addEventListener("change", () => refreshSpiralPlan());
+    }
+    if ($("btn-copy-router")) {
+      $("btn-copy-router").addEventListener("click", async () => {
+        const txt = $("spiral-router-cmd")?.textContent || "";
+        if (txt && txt !== "—") {
+          await navigator.clipboard.writeText(txt).catch(() => {});
+          sfx.tap();
+          toast("Copied omega-router serve command.", "ok");
+        }
+      });
+    }
+    if ($("btn-sp-cryst")) $("btn-sp-cryst").addEventListener("click", runSpiralCryst);
+    if ($("btn-sp-eval")) $("btn-sp-eval").addEventListener("click", runSpiralEval);
     if ($("btn-verify-locks")) $("btn-verify-locks").addEventListener("click", runVerifyLocks);
     document.querySelectorAll(".qt-card[data-qt]").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -2015,6 +2098,197 @@
     subscribeDistillEvents(res.run_id);
   }
 
+  /* ---------------- Spiral Weave (Razor MoE — 1B to 32.5B) ---------------- */
+  function fmtParamsShort(n) {
+    if (typeof n !== "number" || !Number.isFinite(n)) return "—";
+    if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
+    if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+    return fmtNum(n);
+  }
+
+  async function loadSpiralPresets() {
+    const res = await api("/api/spiral/presets");
+    if (!res.ok) return;
+    state.spiral.pillars = res.pillars || [];
+    state.spiral.selectedStrands = new Set();
+    state.spiral.pillars.forEach((p) => (p.strands || []).forEach((s) => state.spiral.selectedStrands.add(s.id)));
+    renderSpiralPillars();
+    await refreshSpiralPlan();
+  }
+
+  function renderSpiralPillars() {
+    const box = $("spiral-pillars");
+    if (!box) return;
+    box.replaceChildren();
+    let total = 0;
+    state.spiral.pillars.forEach((p) => {
+      total += (p.strands || []).length;
+      const card = el("div", "spiral-pillar");
+      card.style.setProperty("--pillar-c", p.color || "#22d3ee");
+
+      const head = el("div", "spiral-pillar-head");
+      const lbl = el("label");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      const allOn = (p.strands || []).every((s) => state.spiral.selectedStrands.has(s.id));
+      cb.checked = allOn;
+      cb.addEventListener("change", () => {
+        (p.strands || []).forEach((s) => {
+          if (cb.checked) state.spiral.selectedStrands.add(s.id);
+          else state.spiral.selectedStrands.delete(s.id);
+        });
+        renderSpiralPillars();
+        refreshSpiralPlan();
+      });
+      lbl.append(cb, document.createTextNode(`${p.index}. ${p.name}`));
+      head.append(lbl, el("span", "badge", p.waldo_default || "openwaldo"));
+      card.appendChild(head);
+
+      const chips = el("div", "spiral-strand-chips");
+      (p.strands || []).forEach((s) => {
+        const b = el("button", "spiral-strand-chip", s.name);
+        b.type = "button";
+        const on = state.spiral.selectedStrands.has(s.id);
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+        b.addEventListener("click", () => {
+          sfx.tap();
+          if (state.spiral.selectedStrands.has(s.id)) state.spiral.selectedStrands.delete(s.id);
+          else state.spiral.selectedStrands.add(s.id);
+          renderSpiralPillars();
+          refreshSpiralPlan();
+        });
+        chips.appendChild(b);
+      });
+      card.appendChild(chips);
+      box.appendChild(card);
+    });
+    if ($("sp-picked-meta")) {
+      $("sp-picked-meta").textContent = `${state.spiral.selectedStrands.size} / ${total} strands selected`;
+    }
+  }
+
+  async function selectSpiralPreset(presetId, jumpToDesign = false) {
+    state.spiral.preset = presetId || "mini64";
+    document.querySelectorAll(".spiral-preset-btn[data-spiral]").forEach((b) => {
+      b.setAttribute("aria-pressed", b.dataset.spiral === state.spiral.preset ? "true" : "false");
+    });
+    await refreshSpiralPlan();
+    if (jumpToDesign) {
+      activateTab("tab-design", false);
+      $("spiral-design-block")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      toast(`Loaded Spiral Weave preset: ${state.spiral.preset}`, "ok");
+    }
+  }
+
+  async function refreshSpiralPlan() {
+    const res = await api("/api/spiral/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        preset: state.spiral.preset,
+        selected_strands: Array.from(state.spiral.selectedStrands),
+        local_dir: ($("spiral-local-dir")?.value || "").trim(),
+      }),
+    });
+    if (!res.ok) return;
+    state.spiral.plan = res;
+    if ($("sp-total")) $("sp-total").textContent = `${fmtParamsShort(res.total_params)} (${res.n_strands} str)`;
+    if ($("sp-active")) $("sp-active").textContent = `${fmtParamsShort(res.active_params_per_token)} · ${res.effective_layers}L`;
+    if ($("sp-w4")) $("sp-w4").textContent = `${res.w4_gib} GiB W4`;
+    if ($("sp-cryst-est")) $("sp-cryst-est").textContent = `~${res.est_sec_per_strand}s/str (${res.est_total_cryst_sec}s)`;
+    if ($("spiral-router-cmd") && res.omega_router_config) {
+      $("spiral-router-cmd").textContent = res.omega_router_config.serve_cmd;
+    }
+    if ($("spiral-cmd")) {
+      $("spiral-cmd").textContent = (res.resolved_cmd_preview || []).join("\n");
+    }
+    if ($("sp-kpi-topk")) $("sp-kpi-topk").textContent = String(res.top_k);
+  }
+
+  async function runSpiralCryst() {
+    const base_ck = ($("sp-base-ck")?.value || "").trim();
+    const domain_tok = ($("sp-domain-tok")?.value || "").trim();
+    const out_sp2 = ($("sp-out-sp2")?.value || "").trim();
+    if (!base_ck || !domain_tok || !out_sp2) {
+      toast("Enter seed.ck, domain.tok, and output .sp2 paths.", "err");
+      sfx.err();
+      return;
+    }
+    const btn = $("btn-sp-cryst");
+    btn.disabled = true;
+    if ($("sp-meter-status")) $("sp-meter-status").textContent = "crystallizing (spcryst)…";
+    try {
+      const plan = state.spiral.plan || {};
+      const res = await api("/api/spiral/cryst", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          base_ck,
+          domain_tok,
+          out_sp2,
+          f_exp: plan.f_exp || 256,
+          lambda_milli: plan.lambda_milli || 1000,
+          strand_id: state.spiral.crystallized.length + 1,
+          quant_bits: plan.quant_bits || 4,
+        }),
+      });
+      if (!res.ok) {
+        if ($("sp-meter-status")) $("sp-meter-status").textContent = `error: ${res.error}`;
+        toast(res.error || "spcryst failed", "err");
+        sfx.err();
+        return;
+      }
+      state.spiral.crystallized.push(res);
+      if ($("sp-kpi-sps")) $("sp-kpi-sps").textContent = `${res.sec_per_strand}s`;
+      if ($("sp-kpi-count")) $("sp-kpi-count").textContent = String(state.spiral.crystallized.length);
+      if ($("sp-kpi-bytes")) $("sp-kpi-bytes").textContent = fmtBytes(res.pack?.bytes || 0);
+      if ($("sp-meter-status")) $("sp-meter-status").textContent = `ready · ${res.sec_per_strand}s/strand · sha:${(res.pack?.sha256 || "").slice(0, 12)}`;
+      const playTa = $("play-sp-strands");
+      if (playTa) {
+        const cur = playTa.value.split("\n").map((s) => s.trim()).filter(Boolean);
+        if (!cur.includes(res.out_sp2)) {
+          cur.push(res.out_sp2);
+          playTa.value = cur.join("\n");
+        }
+      }
+      if ($("play-sp-base") && !$("play-sp-base").value) $("play-sp-base").value = base_ck;
+      sfx.milestone();
+      toast(`Crystallized ${res.out_sp2} in ${res.sec_per_strand}s`, "ok");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function runSpiralEval() {
+    const base_ck = ($("sp-base-ck")?.value || $("play-sp-base")?.value || "").trim();
+    const eval_tok = ($("sp-eval-tok")?.value || "").trim();
+    const strands = ($("play-sp-strands")?.value || "").split("\n").map((s) => s.trim()).filter(Boolean);
+    if (!base_ck || !eval_tok || !strands.length) {
+      toast("Enter seed.ck, held.tok, and at least one crystallized .sp2 pack.", "err");
+      sfx.err();
+      return;
+    }
+    const btn = $("btn-sp-eval");
+    btn.disabled = true;
+    try {
+      const res = await api("/api/spiral/eval", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ base_ck, eval_tok, strands, top_k: Number($("play-sp-topk")?.value || 4), windows: 8 }),
+      });
+      if (!res.ok) {
+        toast(res.error || "spweval failed", "err");
+        sfx.err();
+        return;
+      }
+      if ($("sp-kpi-loss") && typeof res.loss === "number") $("sp-kpi-loss").textContent = res.loss.toFixed(4);
+      sfx.assign();
+      toast(`spweval complete (${res.elapsed_sec}s)`, "ok");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   async function boot() {
     initHelixAnimation();
     bindTabs();
@@ -2031,7 +2305,7 @@
     renderDag("dag-svg", null);
     renderDag("forge-dag", null);
     bindEvents();
-    await Promise.all([loadSystem(), loadCatalog(), refreshEstimate(), refreshRuns(), refreshRemotes()]);
+    await Promise.all([loadSystem(), loadCatalog(), loadSpiralPresets(), refreshEstimate(), refreshRuns(), refreshRemotes()]);
   }
 
   document.addEventListener("DOMContentLoaded", boot);

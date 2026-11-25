@@ -116,6 +116,13 @@
       <label class="qt-scale qt-scale-dna120m"><input type="radio" name="qtscale" value="dna120m"><span><b>120M DNA</b> · 116.7M+ · Multi-Strand (GB10 BF16)</span></label>
     </div>
 
+    <div class="qt-spiral-bar" role="group" aria-label="Spiral Weave Razor MoE presets">
+      <span class="small muted"><b>Spiral Weave (Razor MoE — 1B to 32.5B):</b></span>
+      <button type="button" class="qt-spiral-btn" data-spiral="mini64"><b>Mini-Spiral</b> · 64 Razor Strands · ~1.2B (W4)</button>
+      <button type="button" class="qt-spiral-btn" data-spiral="mid256"><b>Mid-Spiral</b> · 256 Strands · ~4.2B (W4)</button>
+      <button type="button" class="qt-spiral-btn qt-spiral-flagship" data-spiral="flagship2048"><b>Flagship Spiral-2048</b> · 32.5B · 15 GiB W4</button>
+    </div>
+
     <div class="qt-grid" role="group" aria-label="One-click training goals">
       <button type="button" class="qt-card" data-qt="starter">
         <span class="qt-tag c1">Recommended First Run · ~10s</span>
@@ -249,6 +256,35 @@
           <p class="muted small" id="strand-note">Each strand forks from the frozen base, grows layers and trains only its own weights. <code>spclip</code> fuses 2–4 strands at sample time.</p>
           <div class="strands" id="strands"></div>
         </div>
+
+        <div class="glass block" id="spiral-design-block">
+          <div class="block-h">
+            <h2>Spiral Weave <span class="muted small">(Razor MoE · OLLMSP02 W4 · 1B to 32.5B)</span></h2>
+            <div class="chip-row small" id="spiral-preset-chips" role="group" aria-label="Spiral Weave presets">
+              <button type="button" class="chip spiral-preset-btn" data-spiral="mini64" aria-pressed="true">Mini-Spiral (64 · ~1B)</button>
+              <button type="button" class="chip spiral-preset-btn" data-spiral="mid256" aria-pressed="false">Mid-Spiral (256 · ~4B)</button>
+              <button type="button" class="chip spiral-preset-btn" data-spiral="flagship2048" aria-pressed="false">Flagship Spiral-2048 (32.5B · 15 GiB W4)</button>
+            </div>
+          </div>
+          <p class="muted small">Train one Looped Seed Spiral (<code>L=8 × NP=4 = 32L</code>), then crystallize 64–2048 W4 razor-strands analytically with zero backprop (<code>spcryst</code>) and route Top-K at runtime (<code>spweval</code> / <code>spsamp</code>).</p>
+          <div class="est-row" aria-live="polite">
+            <div class="est"><span class="est-k">Total Params</span><span class="est-v" id="sp-total">—</span></div>
+            <div class="est"><span class="est-k">Active / Token</span><span class="est-v" id="sp-active">—</span></div>
+            <div class="est"><span class="est-k">W4 Footprint</span><span class="est-v" id="sp-w4">—</span></div>
+            <div class="est"><span class="est-k">Cryst. Est.</span><span class="est-v" id="sp-cryst-est">—</span></div>
+          </div>
+          <div class="spiral-local-row">
+            <label for="spiral-local-dir" class="small muted"><b>8-Pillar / 64-Strand Functional Picker</b> (OpenWALDO + optional local folder):</label>
+            <input id="spiral-local-dir" type="text" placeholder="/path/to/local/strand/corpora (optional)" autocomplete="off" spellcheck="false">
+            <span class="muted small" id="sp-picked-meta">64 / 64 strands selected</span>
+          </div>
+          <div class="spiral-pillars" id="spiral-pillars"></div>
+          <div class="spiral-router-box">
+            <div class="block-h"><span class="small"><b><code>omega-router</code> Serve Wiring (:18090)</b></span><button type="button" class="btn btn-sm btn-ghost" id="btn-copy-router"><svg class="ic"><use href="#i-copy"/></svg>Copy Serve Cmd</button></div>
+            <pre class="mono small" id="spiral-router-cmd">—</pre>
+          </div>
+          <details class="cmd-preview"><summary>Spiral Weave resolved commands (<code>spcryst</code> / <code>spweval</code> / <code>spsamp</code>)</summary><pre id="spiral-cmd">—</pre></details>
+        </div>
       </div>
 
       <div class="col-side">
@@ -346,6 +382,30 @@
       </div>
     </div>
 
+    <div class="glass block" id="spiral-meter-block">
+      <div class="block-h">
+        <h2>Spiral Weave Crystallization Meter <span class="muted small">(<code>OLLMSP02</code> W4 · Zero-Backprop <code>spcryst</code>)</span></h2>
+        <span class="muted small mono" id="sp-meter-status">idle · 0.00s/strand</span>
+      </div>
+      <div class="kpis">
+        <div class="kpi c1"><span class="kpi-k">Sec / Strand</span><span class="kpi-v" id="sp-kpi-sps">—</span></div>
+        <div class="kpi c2"><span class="kpi-k">Crystallized</span><span class="kpi-v" id="sp-kpi-count">0</span></div>
+        <div class="kpi c3"><span class="kpi-k">Pack Size</span><span class="kpi-v" id="sp-kpi-bytes">—</span></div>
+        <div class="kpi c4"><span class="kpi-k">Weave Loss</span><span class="kpi-v" id="sp-kpi-loss">—</span></div>
+        <div class="kpi c5"><span class="kpi-k">Top-K</span><span class="kpi-v" id="sp-kpi-topk">4</span></div>
+      </div>
+      <div class="form-grid two" style="margin-top:10px">
+        <div class="field"><label for="sp-base-ck">Seed Checkpoint (<code>seed.ck</code>)</label><input id="sp-base-ck" type="text" placeholder="~/workspace/omega-helix-spiral/run/seed.ck" spellcheck="false"></div>
+        <div class="field"><label for="sp-domain-tok">Domain Shard (<code>strand.tok</code>)</label><input id="sp-domain-tok" type="text" placeholder="~/workspace/omega-helix-spiral/data/s01.tok" spellcheck="false"></div>
+        <div class="field"><label for="sp-out-sp2">Output Pack (<code>.sp2</code>)</label><input id="sp-out-sp2" type="text" placeholder="~/workspace/omega-helix-spiral/run/s01.sp2" spellcheck="false"></div>
+        <div class="field"><label for="sp-eval-tok">Held-Out Eval (<code>held.tok</code>)</label><input id="sp-eval-tok" type="text" placeholder="~/workspace/omega-helix-spiral/data/seed_held.tok" spellcheck="false"></div>
+      </div>
+      <div class="btn-row" style="margin-top:10px">
+        <button type="button" class="btn btn-primary" id="btn-sp-cryst"><svg class="ic"><use href="#i-bolt"/></svg>Crystallize Strand (<code>spcryst</code>)</button>
+        <button type="button" class="btn btn-ghost" id="btn-sp-eval"><svg class="ic"><use href="#i-shield"/></svg>Eval Weave (<code>spweval</code>)</button>
+      </div>
+    </div>
+
     <div class="glass block">
       <div class="block-h"><h2>Forge log</h2>
         <label class="check small"><input type="checkbox" id="log-follow" checked><span>Auto-scroll</span></label></div>
@@ -368,7 +428,15 @@
           <input type="radio" name="playmode" id="pm-std" value="std" checked><label for="pm-std"><b>Standard / spclip</b><small>DNA strand mixer</small></label>
           <input type="radio" name="playmode" id="pm-omg" value="omg"><label for="pm-omg"><b>OMG-Masked</b><small>100% omc-valid .om</small></label>
           <input type="radio" name="playmode" id="pm-arb" value="arbsamp"><label for="pm-arb"><b>Arboris-Guided</b><small>Bypass + OMG + LTP0</small></label>
+          <input type="radio" name="playmode" id="pm-spiral" value="spiral"><label for="pm-spiral"><b>Spiral Weave</b><small>Top-K OLLMSP02 MoE</small></label>
         </fieldset>
+        <div id="spiral-play-cfg" class="spiral-play-cfg" hidden>
+          <div class="form-grid two">
+            <div class="field"><label for="play-sp-base">Spiral Seed <code>seed.ck</code></label><input id="play-sp-base" type="text" placeholder="/path/to/seed.ck" spellcheck="false"></div>
+            <div class="field"><label for="play-sp-topk">Top-K Strands</label><input id="play-sp-topk" type="number" min="1" max="32" value="4"></div>
+          </div>
+          <div class="field"><label for="play-sp-strands">Razor-Strand Packs (<code>.sp2</code>, one path per line)</label><textarea id="play-sp-strands" rows="2" spellcheck="false" placeholder="/path/to/s01.sp2&#10;/path/to/s02.sp2"></textarea></div>
+        </div>
         <fieldset class="seg seg-sm">
           <legend>spclip fusion mode</legend>
           <input type="radio" name="spmode" id="sp-entropy" value="1" checked><label for="sp-entropy"><b>Entropy-Gated</b><small>confident strands lead</small></label>
@@ -387,6 +455,7 @@
         <div class="glass block">
           <div class="block-h"><h2>Output</h2><span class="muted small" id="sample-meta"></span></div>
           <div class="out" id="sample-out" aria-live="polite"><span class="muted">Generated text appears here, with one pill per token showing its loop exit depth.</span></div>
+          <div class="pills" id="spiral-routing-out" aria-label="Spiral Top-K routing readout"></div>
           <div class="pills" id="exit-pills" aria-label="Per-token exit depth"></div>
         </div>
         <div class="glass block">

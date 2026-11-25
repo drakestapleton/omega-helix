@@ -216,6 +216,84 @@ class StudioTestCase(unittest.TestCase):
         self.assertIn('value="dna120m"', html)
         self.assertIn("Code + Agentic Coordination", html)
 
+    def test_spiral_weave_plan_presets_pillars_and_api(self) -> None:
+        import spiral as studio_spiral
+
+        pres = studio_spiral.list_presets_and_pillars()
+        self.assertTrue(pres["ok"])
+        self.assertEqual(pres["pillar_count"], 8)
+        self.assertEqual(pres["strand_catalog_count"], 64)
+        preset_ids = {p["id"] for p in pres["presets"]}
+        self.assertEqual(preset_ids, {"mini64", "mid256", "flagship2048"})
+
+        p_mini = studio_spiral.plan_spiral({"preset": "mini64"})
+        self.assertTrue(p_mini["valid"], p_mini["error"])
+        self.assertEqual(p_mini["n_strands"], 64)
+        self.assertEqual(p_mini["effective_layers"], 32)
+        self.assertGreaterEqual(p_mini["total_params"], 1_000_000_000)
+
+        p_mid = studio_spiral.plan_spiral({"preset": "mid256"})
+        self.assertTrue(p_mid["valid"], p_mid["error"])
+        self.assertEqual(p_mid["n_strands"], 256)
+        self.assertGreaterEqual(p_mid["total_params"], 4_000_000_000)
+
+        p_flag = studio_spiral.plan_spiral({"preset": "flagship2048"})
+        self.assertTrue(p_flag["valid"], p_flag["error"])
+        self.assertEqual(p_flag["n_strands"], 2048)
+        self.assertGreaterEqual(p_flag["total_params"], 32_000_000_000)
+        self.assertLessEqual(p_flag["w4_gib"], 16.5)
+        self.assertTrue(any("spcryst" in c for c in p_flag["resolved_cmd_preview"]))
+        self.assertTrue(any("spweval" in c for c in p_flag["resolved_cmd_preview"]))
+        self.assertTrue(any("spsamp" in c for c in p_flag["resolved_cmd_preview"]))
+        self.assertIn("omega-router", p_flag["omega_router_config"]["serve_cmd"])
+
+        # Live HTTP server check for /api/spiral/*
+        srv = studio_server.create_server(host="127.0.0.1", port=0, workspace_dir=self.tmp_root / "ws_spiral", bin_dir=self.bin_dir)
+        port = srv.server_address[1]
+        th = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
+        th.start()
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/spiral/presets", timeout=5.0) as resp:
+                doc = json.loads(resp.read().decode("utf-8"))
+            self.assertEqual(doc["strand_catalog_count"], 64)
+
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/spiral/plan",
+                data=json.dumps({"preset": "flagship2048"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
+                pl = json.loads(resp.read().decode("utf-8"))
+            self.assertTrue(pl["valid"])
+            self.assertEqual(pl["n_strands"], 2048)
+
+            # Fail-closed 400 on missing required fields for /api/spiral/cryst
+            bad_req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/spiral/cryst",
+                data=json.dumps({}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                urllib.request.urlopen(bad_req, timeout=5.0)
+                self.fail("expected 400 for missing spiral/cryst params")
+            except urllib.error.HTTPError as e:
+                try:
+                    self.assertEqual(e.code, 400)
+                finally:
+                    e.close()
+        finally:
+            srv.shutdown()
+            srv.server_close()
+            th.join(timeout=3.0)
+
+        html = (STUDIO_DIR / "ui" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('data-spiral="flagship2048"', html)
+        self.assertIn('id="spiral-pillars"', html)
+        self.assertIn('id="spiral-meter-block"', html)
+        self.assertIn('id="pm-spiral"', html)
+
     # ------------------------------------------------------------------ 4. Full DNA Merkle + Hybrid Forge
 
     def test_full_dna_merkle_chain_forge_and_spclip_sample(self) -> None:

@@ -35,6 +35,7 @@ from distill import teachers as distill_teachers  # noqa: E402
 from distill import verifiers as distill_verifiers  # noqa: E402
 import runtime as sovereign_runtime  # noqa: E402
 import commons as sovereign_commons  # noqa: E402
+import spiral as studio_spiral  # noqa: E402
 import ssh_remote  # noqa: E402
 
 
@@ -414,6 +415,10 @@ class StudioHandler(BaseHTTPRequestHandler):
                 self._stream_sse(drun)
                 return
 
+        if path == "/api/spiral/presets":
+            self._send_json(HTTPStatus.OK, studio_spiral.list_presets_and_pillars())
+            return
+
         if path == "/api/runtime/locks":
             try:
                 res = _run_eight_pillar_locks(self.server.manager.bin_dir, self.server.manager.root)
@@ -499,6 +504,88 @@ class StudioHandler(BaseHTTPRequestHandler):
         if path == "/api/chains/estimate":
             est = runner.estimate_chain(body)
             self._send_json(HTTPStatus.OK, est)
+            return
+
+        if path == "/api/spiral/plan":
+            try:
+                plan = studio_spiral.plan_spiral(body)
+                self._send_json(HTTPStatus.OK, plan)
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/api/spiral/cryst":
+            try:
+                if not body.get("base_ck") or not body.get("domain_tok") or not body.get("out_sp2"):
+                    raise ValueError("base_ck, domain_tok, and out_sp2 are required")
+                all_bins = runner.resolve_binaries(bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
+                use_gb10 = bool(body.get("use_gpu", True) and os.path.exists("/dev/nvidiactl") and all_bins.get("ollm_gb10"))
+                ollm_bin = all_bins["ollm_gb10"] if use_gb10 else runner.ensure_binaries(["ollm"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)["ollm"]
+                assert ollm_bin is not None
+                res = studio_spiral.run_spcryst(
+                    ollm_bin,
+                    str(body["base_ck"]),
+                    str(body["domain_tok"]),
+                    str(body["out_sp2"]),
+                    f_exp=int(body.get("f_exp", 256)),
+                    lambda_milli=int(body.get("lambda_milli", 1000)),
+                    max_toks=int(body.get("max_toks", 0)),
+                    strand_id=int(body.get("strand_id", 1)),
+                    quant_bits=int(body.get("quant_bits", 4)),
+                )
+                self._send_json(HTTPStatus.OK, res)
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/api/spiral/eval":
+            try:
+                strands = body.get("strands") or []
+                if isinstance(strands, str):
+                    strands = [s.strip() for s in strands.splitlines() if s.strip()]
+                if not body.get("base_ck") or not body.get("eval_tok") or not strands:
+                    raise ValueError("base_ck, eval_tok, and strands[] are required")
+                all_bins = runner.resolve_binaries(bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
+                use_gb10 = bool(body.get("use_gpu", True) and os.path.exists("/dev/nvidiactl") and all_bins.get("ollm_gb10"))
+                ollm_bin = all_bins["ollm_gb10"] if use_gb10 else runner.ensure_binaries(["ollm"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)["ollm"]
+                assert ollm_bin is not None
+                res = studio_spiral.run_spweval(
+                    ollm_bin,
+                    str(body["base_ck"]),
+                    str(body["eval_tok"]),
+                    strands,
+                    top_k=int(body.get("top_k", 4)),
+                    windows=int(body.get("windows", 8)),
+                )
+                self._send_json(HTTPStatus.OK, res)
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/api/spiral/sample":
+            try:
+                strands = body.get("strands") or []
+                if isinstance(strands, str):
+                    strands = [s.strip() for s in strands.splitlines() if s.strip()]
+                if not body.get("base_ck") or not strands:
+                    raise ValueError("base_ck and strands[] are required")
+                all_bins = runner.resolve_binaries(bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
+                use_gb10 = bool(body.get("use_gpu", True) and os.path.exists("/dev/nvidiactl") and all_bins.get("ollm_gb10"))
+                ollm_bin = all_bins["ollm_gb10"] if use_gb10 else runner.ensure_binaries(["ollm"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)["ollm"]
+                assert ollm_bin is not None
+                res = studio_spiral.run_spiral_sample(
+                    ollm_bin,
+                    str(body["base_ck"]),
+                    strands,
+                    prompt=str(body.get("prompt", "fn main")),
+                    max_tok=int(body.get("max_tok") or body.get("n_tokens") or 64),
+                    top_k=int(body.get("top_k", 4)),
+                    temp_milli=int(body.get("temp_milli", 700)),
+                    subcmd=str(body.get("subcmd") or "spsamp"),
+                )
+                self._send_json(HTTPStatus.OK, res)
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
             return
 
         if path == "/api/chains/start":
@@ -599,6 +686,10 @@ class StudioHandler(BaseHTTPRequestHandler):
                 stopped = self.server.distill_manager.stop_run(run_id)
                 self._send_json(HTTPStatus.OK, {"ok": True, "stopped": stopped})
                 return
+
+        if path == "/api/spiral/presets":
+            self._send_json(HTTPStatus.OK, studio_spiral.list_presets_and_pillars())
+            return
 
         if path == "/api/runtime/locks":
             try:
