@@ -165,6 +165,7 @@ om2'
   x86linux)
     lead='target x86linux
 om2'
+    pool=xpool.om
     plat=lio.om
     rev_mod=norev.om
     post=$src/noserve.om

@@ -61,13 +61,13 @@ end
 end
 
 fn oiset o ulong n ulong v f64 to void
-for i ulong n
+for i ulong n bound 16777216
 owp add o i v
 end
 end
 
 fn oiscale o ulong n ulong v f64 to void
-for i ulong n
+for i ulong n bound 16777216
 owp add o i mul owg add o i v
 end
 end

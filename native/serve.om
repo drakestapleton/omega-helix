@@ -320,7 +320,7 @@ global svnl_prob ulong 128
 global svnl_ex ulong 128
 global svnl_xp ulong 128
 global svnl_mn ulong 128
-global svnl_vec long 384
+global svnl_vec long 1024
 global svnl_cfg ulong 16
 
 note ======== small byte helpers over wb
