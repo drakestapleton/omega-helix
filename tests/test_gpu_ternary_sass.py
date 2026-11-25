@@ -445,10 +445,14 @@ def main():
 
         # 3. Compile and run host oracle binary
         is_mac = platform.system() == "Darwin"
-        host_hdr = "target a64macos\nom2\n" if is_mac else "om2\n"
+        is_x86 = platform.system() == "Linux" and platform.machine().lower() in ("x86_64", "amd64")
+        host_hdr = "target a64macos\nom2\n" if is_mac else ("target x86linux\nom2\n" if is_x86 else "om2\n")
         host_bin = os.path.join(tmp, "gt_host")
         compile_om(omc, host_hdr + oracle_src, host_bin, sign_macos=is_mac)
-        check(True, "compile_host_a64macos_om2" if is_mac else "compile_host_linux_om2")
+        check(
+            True,
+            "compile_host_a64macos_om2" if is_mac else ("compile_host_x86linux_om2" if is_x86 else "compile_host_linux_om2"),
+        )
 
         res = subprocess.run([host_bin], capture_output=True)
         check(res.returncode == 0, "gt_selftest_and_oracle_exec", f"rc={res.returncode}")

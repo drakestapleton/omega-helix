@@ -386,11 +386,12 @@ def build_solver_harness(out_dir):
         .replace("__TSLEEP__", str(u64_pack_word("tsleep")))
     )
     is_mac = platform.system() == "Darwin"
-    lead = "target a64macos\n" if is_mac else "om2\n"
+    is_x86 = platform.system() == "Linux" and platform.machine().lower() in ("x86_64", "amd64")
     plat = "mio.om" if is_mac else "lio.om"
-    units = ["math.om", "data.om", "lpool.om", "model.om", "adam.om", "ckpt.om", "bpe.om", "spec.om", "rev.om", "arboris.om", "sp_solve.om", "omg.om"]
+    rev_unit = "norev.om" if is_x86 else "rev.om"
+    units = ["math.om", "data.om", "lpool.om", "model.om", "adam.om", "ckpt.om", "bpe.om", "spec.om", rev_unit, "arboris.om", "sp_solve.om", "omg.om"]
     cli_txt = read_text(os.path.join(SRC, "cli.om")).replace("fn ocmd to int", "fn ocmd_orig to int", 1)
-    src_text = "target a64macos\nom2\n" if is_mac else "om2\n"
+    src_text = "target a64macos\nom2\n" if is_mac else ("target x86linux\nom2\n" if is_x86 else "om2\n")
     src_text += "\n".join(read_text(os.path.join(SRC, u)) for u in units)
     src_text += "\n" + cli_txt + "\n" + harness_om + "\n" + read_text(os.path.join(SRC, plat))
     src_text += "\n" + read_text(os.path.join(SRC, "noserve.om")) + "\n" + read_text(os.path.join(SRC, "nogpu.om"))

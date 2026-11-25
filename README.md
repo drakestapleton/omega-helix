@@ -47,7 +47,8 @@ Recorded unedited on DGX Spark GB10 (`evidence/proof-zero-cuda-gb10/{`[`transcri
 | Area | Status | Honest Scope, Receipts & Boundaries |
 |---|---|---|
 | **DGX Spark GB10 Silicon (`sm_121`)** | **PROVEN** | Rungs 4–10 (`85,285 tok/s` BF16 `1.204466 nats`), `Δ = 0 µnats` CPU vs. chip `geval`, 43/43 SM121 SASS disassembly guard slots (`tests/gpu-disasm.sh --all`), and raw `/dev/nvidia*` execution with empty CUDA `/proc/$PID/maps` ([`evidence/`](evidence/)). |
-| **Independent CPU & Oracle Verification** | **PROVEN** | Full `scripts/verify.sh` (`adamck`, `gcheck`, `kvcmp`, `oracle.py`, `oracle_universal.py`, Safetensors/GGUF `test_interchange.py`, `test_adaptive_loop.py`, Studio/Distill/Runtime/Commons suites, `verify-30s.sh`) verified on Apple Silicon macOS + DGX Spark AArch64 + GitHub Actions CI. |
+| **Independent CPU & Oracle Verification** | **PROVEN** | Full `scripts/verify.sh` + zero-Python `scripts/verify-om.sh` (`adamck`, `gcheck`, `kvcmp`, `oracle.py`, `oracle_universal.py`, Safetensors/GGUF `test_interchange.py`, `test_adaptive_loop.py`, 8-pillar runtime & 4 byte-traceability locks, Studio/Distill/Runtime/Commons suites, `verify-30s.sh`) verified on Apple Silicon macOS + DGX Spark AArch64 + GitHub Actions CI (`linux-x86_64`, `linux-aarch64`, `macos-arm64`). |
+| **8-Pillar Runtime & 4 Byte-Traceability Locks** | **CPU-SIM + NVDISASM (`LIVE GPU NOT_RUN`)** | Persistent megakernel (`gm.om`), reversible Q32 core (`rev.om`), Grace/Blackwell epoch ring (`ring.om`), 1.58-bit ternary/4-bit LUT-GEMM (`gt.om`), Arboris bypass (`arboris.om`), proof-carrying Evo-JIT (`ejit.om`), closed-form `spforge` (`sp_solve.om`), and `OMG` typed program graphs (`omg.om`) pass zero-Python `scripts/verify-om.sh`, Python `f64` oracles, and `nvdisasm -b SM121` (`0` illegal insns) — see [`docs/EIGHT-PILLARS.md`](docs/EIGHT-PILLARS.md). Live GB10 hardware execution of the new GPU pillars remains `NOT_RUN`. |
 | **QEMU-Emulated Bare-Metal Targets** | **EMULATED ONLY** | `x86efi` (QEMU + OVMF) & `a64efi` (QEMU + KVM + AAVMF) executed `.sp` DNA chains; `a64efi` also booted on physical Spark UEFI (`evidence/OMEGALLM/a64efi/dgx-spark/`). **Physical bare-metal x86 UEFI remains `NOT_RUN`.** |
 | **CPU-Only Feature Paths (`NOT_RUN` on GB10)** | **CPU ONLY (`GPU NOT_RUN`)** | Per-token adaptive loop exit & inter-pass messages (`adapteval`/`adaptsamp`/`adaptcmp`), grammar FSM `gsamp`, and `ollm spguard` JSD + anti-DNA steering run on CPU only (`docs/LOOP.md`, `docs/SOVEREIGN-RUNTIME.md`); `FREEZE_LAYERS` + fixed-`NP` looped `gtrainf`/`gtrainb` ARE proven on GB10. |
 | **Scratch 15.8M Coding-Bench Miss** | **MISSED (`0 / 159`)** | All three arms (`base`, `loop`, `deep`) trained for 6,000 steps on the small `.om` repo corpus scored **`0 of 159`** on `tools/bench/` Python/coding tasks (`docs/LOOP.md` — small scratch corpus capacity/token-budget miss). |
@@ -170,6 +171,7 @@ TARGET=openwaldo sh scripts/build.sh
 Verifies `adamck`, `init`, finite-difference gradient check (`gcheck`), CPU `train`, `eval`, `sample`, BPE roundtrip, bit-exact KV-cache (`kvcmp`), DNA specialist chaining (`growpro`/`trainf`/`spext`/`spchainsamp`), looped-core `OLLMCK03`, Python f64 oracle cross-checks, OpenWALDO BOM negative controls, and (on Linux AArch64) 165-task benchmark, contrast/controller replays, 43-slot SM121 SASS disassembly, and Lean 4 proofs:
 ```sh
 sh scripts/quickstart-cpu.sh   # 5-second CPU smoke test
+sh scripts/verify-om.sh        # pure-Omega, zero-Python gate (core + 8 pillars + 4 locks + spforge)
 sh scripts/verify.sh           # full host-verifiable gate (no GPU required)
 ```
 
@@ -228,6 +230,9 @@ Run negative-weight contrastive Anti-DNA strands with per-token FNV-1a cryptogra
 
 ### 9. Sovereign Commons, Trust Audit, Memory Migration, Porting Kit & USB-Stick Air-Gap
 Manage trunk-pinned ~14 MB `OLLMSP01` `.sp` packages (`omega-helix pkg`), run one-command offline binary/CSP/BOM/Merkle audits (`omega-helix verify`), migrate encrypted personal memory across new model trunks (`omega-helix memory migrate`), certify new silicon backends (`omega-helix port-check`), enforce BFT swarm receipts + revocable agent leases (`omega-helix lease`), and bundle everything for offline air-gapped USB deployment (`omega-helix pack-usb`) — see [`docs/COMMONS.md`](docs/COMMONS.md) and [`docs/BACKEND-PORTING-KIT.md`](docs/BACKEND-PORTING-KIT.md).
+
+### 10. 8-Pillar Pure-Omega Runtime, 4 Byte-Traceability Locks & Studio SSH Remotes
+Run the zero-Python pure-Omega gate (`sh scripts/verify-om.sh`) covering `ollm omg`, `ollm arboris`, `ollm rev selftest`, `ollm spforge` (closed-form Ridge/Gauss-Newton specialist forging from `fcache`), and all 4 byte-traceability locks (`gm_selftest`, `grg_epoch_selftest`, `ejit_selftest`, `Q32`/`DETBWD`) — see [`docs/EIGHT-PILLARS.md`](docs/EIGHT-PILLARS.md). Connect Studio to remote GPU boxes over SSH with `omega-helix host probe <host>` and `omega-helix remote connect <host>`.
 
 ---
 
