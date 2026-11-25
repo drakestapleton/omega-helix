@@ -1,0 +1,332 @@
+note SPDX-License-Identifier: Apache-2.0
+note native/univ/ugrammar.om: Pure seeded-OM-2 deterministic finite-state grammar-constrained
+note token masking inside the universal sampler (ollm-univ gsamp).
+note Grammar modes: 1 = RFC-8259 json_obj, 2 = ascii_ident, 3 = csv_num.
+
+global ugr_st ulong 8
+global ugr_mk ulong *
+global ugr_lg f64 *
+global ugr_buf ulong *
+text u_gsamp "gsamp"
+
+fn ugr_allow_range lo ulong hi ulong to void
+v = get ug 0
+e = add hi 1
+if gt e v
+e = v
+end
+c = lo
+while lt c e bound 65536
+put ugr_mk c 1
+c = add c 1
+end
+end
+
+fn ugr_allow_ch ch ulong to void
+if lt ch get ug 0
+put ugr_mk ch 1
+end
+end
+
+fn ugr_mask_all mode ulong left ulong to void
+v = get ug 0
+for c ulong v
+put ugr_mk c 0
+end
+st = get ugr_st 0
+kl = get ugr_st 1
+vl = get ugr_st 2
+if eq mode 2
+if eq st 0
+ugr_allow_range 65 90
+ugr_allow_range 97 122
+ugr_allow_ch 95
+else
+ugr_allow_range 65 90
+ugr_allow_range 97 122
+ugr_allow_range 48 57
+ugr_allow_ch 95
+ugr_allow_ch 32
+end
+ret
+end
+if eq mode 3
+if eq st 0
+ugr_allow_range 48 57
+else
+ugr_allow_range 48 57
+if gt left 1
+ugr_allow_ch 44
+end
+end
+ret
+end
+note Grammar mode 1: RFC-8259 json_obj (min budget >= 7 tokens)
+if eq st 0
+ugr_allow_ch 123
+ret
+end
+if eq st 1
+ugr_allow_ch 34
+ret
+end
+if eq st 2
+if eq kl 0
+ugr_allow_range 97 122
+else
+if or ge kl 8 le left 4
+ugr_allow_ch 34
+else
+ugr_allow_range 97 122
+ugr_allow_range 48 57
+ugr_allow_ch 95
+ugr_allow_ch 34
+end
+end
+ret
+end
+if eq st 3
+ugr_allow_ch 58
+ret
+end
+if eq st 4
+ugr_allow_range 48 57
+if ge left 4
+ugr_allow_ch 34
+end
+ret
+end
+if eq st 5
+if or le left 2 ge vl 12
+ugr_allow_ch 34
+else
+ugr_allow_range 97 122
+ugr_allow_range 65 90
+ugr_allow_range 48 57
+ugr_allow_ch 95
+ugr_allow_ch 45
+ugr_allow_ch 32
+ugr_allow_ch 34
+end
+ret
+end
+if eq st 6
+if or le left 1 ge vl 6
+ugr_allow_ch 125
+else
+ugr_allow_range 48 57
+ugr_allow_ch 125
+if ge left 7
+ugr_allow_ch 44
+end
+end
+ret
+end
+if eq st 7
+if ge left 7
+ugr_allow_ch 44
+end
+ugr_allow_ch 125
+end
+end
+
+fn ugr_step_fsm mode ulong c ulong to void
+st = get ugr_st 0
+if eq mode 2
+if eq c 32
+put ugr_st 0 0
+else
+put ugr_st 0 1
+end
+ret
+end
+if eq mode 3
+if eq c 44
+put ugr_st 0 0
+else
+put ugr_st 0 1
+end
+ret
+end
+if eq st 0
+put ugr_st 0 1
+ret
+end
+if eq st 1
+put ugr_st 0 2
+put ugr_st 1 0
+ret
+end
+if eq st 2
+if eq c 34
+put ugr_st 0 3
+else
+put ugr_st 1 add get ugr_st 1 1
+end
+ret
+end
+if eq st 3
+put ugr_st 0 4
+ret
+end
+if eq st 4
+if eq c 34
+put ugr_st 0 5
+put ugr_st 2 0
+else
+if eq c 48
+put ugr_st 0 7
+else
+put ugr_st 0 6
+put ugr_st 2 1
+end
+end
+ret
+end
+if eq st 5
+if eq c 34
+put ugr_st 0 7
+else
+put ugr_st 2 add get ugr_st 2 1
+end
+ret
+end
+if eq st 6
+if eq c 125
+put ugr_st 0 8
+else
+if eq c 44
+put ugr_st 0 1
+else
+put ugr_st 2 add get ugr_st 2 1
+end
+end
+ret
+end
+if eq st 7
+if eq c 125
+put ugr_st 0 8
+else
+put ugr_st 0 1
+end
+end
+end
+
+fn ugr_pick_masked tm ulong st ulong to ulong
+v = get ug 0
+best = ulong 0
+bv = -1.0e300f64
+for c ulong v
+if eq get ugr_mk c 1
+lg = get ugr_lg c
+if gt lg bv
+bv = lg
+best = c
+end
+end
+end
+if eq tm 0
+ret best
+end
+invt = div 1000.0 f64 tm
+sm = 0.0f64
+for c2 ulong v
+if eq get ugr_mk c2 1
+w = ufexp mul sub get ugr_lg c2 bv invt
+put ugr_lg c2 w
+sm = add sm w
+else
+put ugr_lg c2 0.0f64
+end
+end
+u = mul mul f64 shr usmx st 11 1.1102230246251565e-16 sm
+acc = 0.0f64
+for c3 ulong v
+acc = add acc get ugr_lg c3
+if lt u acc
+ret c3
+end
+end
+ret best
+end
+
+fn ugr_copy_logits to void
+for z ulong get ug 0
+lv = get utmp z
+put ugr_lg z lv
+end
+end
+
+fn ugr_alloc nn ulong to void
+r = enlarge ugr_mk get ug 0
+if ne r 0
+exit 70
+end
+r = enlarge ugr_lg get ug 0
+if ne r 0
+exit 70
+end
+r = enlarge ugr_buf nn
+if ne r 0
+exit 70
+end
+end
+
+fn ugr_emit_out cnt ulong to void
+uputc 71
+uputc 32
+for j ulong cnt
+uputc get ugr_buf j
+end
+uputc 10
+uputc 83
+for j2 ulong cnt
+uputc 32
+uputu get ugr_buf j2
+end
+uputc 10
+uflush
+end
+
+note gsamp CK SEED N TEMPMILLI GRAMMAR_MODE
+fn ucmd_gsamp to void
+if ne ulong argcnt 7
+exit 2
+end
+uck_load 2
+st = uargu 3
+nn = uargu 4
+tm = uargu 5
+gm = uargu 6
+if or eq gm 0 gt gm 3
+exit 2
+end
+if gt nn get ug 1
+nn = get ug 1
+end
+if or lt get ug 0 126 and eq gm 1 lt nn 8
+exit 2
+end
+ugr_alloc nn
+put ugr_st 0 0
+put ugr_st 1 0
+put ugr_st 2 0
+cur = ulong 0
+cnt = ulong 0
+for s ulong nn
+if and eq gm 1 eq get ugr_st 0 8
+break
+end
+ustep_kv s cur
+if ne tm 0
+st = add st 11400714819323198485
+end
+ugr_copy_logits
+ugr_mask_all gm sub nn s
+cur = ugr_pick_masked tm st
+put ugr_buf cnt cur
+cnt = add cnt 1
+ugr_step_fsm gm cur
+end
+ugr_emit_out cnt
+end

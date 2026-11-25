@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import subprocess
 import sys
 import urllib.parse
 from http import HTTPStatus
@@ -28,6 +29,7 @@ from distill import harvest as distill_harvest  # noqa: E402
 from distill import pipeline as distill_pipeline  # noqa: E402
 from distill import teachers as distill_teachers  # noqa: E402
 from distill import verifiers as distill_verifiers  # noqa: E402
+import runtime as sovereign_runtime  # noqa: E402
 
 
 class StudioServer(ThreadingHTTPServer):
@@ -338,6 +340,82 @@ class StudioHandler(BaseHTTPRequestHandler):
                 stopped = self.server.distill_manager.stop_run(run_id)
                 self._send_json(HTTPStatus.OK, {"ok": True, "stopped": stopped})
                 return
+
+        if path == "/api/runtime/gsamp":
+            try:
+                bins = runner.ensure_binaries(["ollm_univ"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
+                r = subprocess.run(
+                    [
+                        str(bins["ollm_univ"]), "gsamp",
+                        str(Path(body["ck_path"]).expanduser().resolve()),
+                        str(int(body.get("seed", 42))),
+                        str(int(body.get("n_tokens", 32))),
+                        str(int(body.get("temp_milli", 900))),
+                        str(int(body.get("mode", 1))),
+                    ],
+                    capture_output=True, text=True, check=False,
+                )
+                if r.returncode != 0:
+                    raise ValueError(f"gsamp rc={r.returncode}: {r.stderr.strip()}")
+                g_raw = ""
+                toks: list[int] = []
+                for ln in r.stdout.splitlines():
+                    if ln.startswith("G "):
+                        g_raw = ln[2:]
+                    elif ln.startswith("S "):
+                        toks = [int(x) for x in ln[2:].split()]
+                self._send_json(HTTPStatus.OK, {"ok": True, "mode": int(body.get("mode", 1)), "text": g_raw, "tokens": toks})
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/api/runtime/guard":
+            try:
+                bins = runner.ensure_binaries(["ollm"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
+                res = sovereign_runtime.run_firewall_decode(
+                    bins["ollm"], body["base_ck"], body["strands"],
+                    prompt=str(body.get("prompt", "Omega ")),
+                    n_tokens=int(body.get("n_tokens", 12)),
+                    temp_milli=int(body.get("temp_milli", 0)),
+                    seed=int(body.get("seed", 42)),
+                    disagree_milli=int(body.get("disagree_milli", 50)),
+                    max_extra=int(body.get("max_extra", 2)),
+                    merges=str(body.get("merges", "-")),
+                )
+                chk = sovereign_runtime.verify_firewall_receipt(res)
+                self._send_json(HTTPStatus.OK, {"ok": chk["verified"], "spguard": res, "verification": chk})
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/api/runtime/sleep":
+            try:
+                bins = runner.ensure_binaries(["ollm"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
+                res = sovereign_runtime.run_sleep_cycle(
+                    bins["ollm"], body["base_ck"], body["interactions"], body["held_bin"], body["out_dir"],
+                    verifiers=body.get("verifiers") or ["nonempty"],
+                    max_regression_nats=float(body.get("max_regression_nats", 0.25)),
+                    steps=int(body.get("steps", 8)),
+                    date_tag=body.get("date_tag"),
+                )
+                self._send_json(HTTPStatus.OK, {"ok": True, "receipt": res})
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/api/runtime/green":
+            try:
+                bins = runner.ensure_binaries(["ollm"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
+                res = sovereign_runtime.run_compile_until_green(
+                    bins["ollm"], body["ck_path"], body["prompt"],
+                    verifier=str(body.get("verifier", "omc_compile")),
+                    max_attempts=int(body.get("max_attempts", 3)),
+                    out_dir=body["out_dir"],
+                )
+                self._send_json(HTTPStatus.OK, {"ok": True, "receipt": res})
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
 
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": f"unknown endpoint: {path}"})
 

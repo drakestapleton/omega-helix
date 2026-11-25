@@ -209,6 +209,10 @@ if eq w 123598092333171
 cmdspclip
 ret 0
 end
+if eq w 28273260578173043
+cmdspguard
+ret 0
+end
 if eq w 0
 lo = ocmdlo
 hi = ocmdhi

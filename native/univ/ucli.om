@@ -559,5 +559,9 @@ if uarg_eq 1 u_dcheck
 ucmd_dcheck
 ret 0
 end
+if uarg_eq 1 u_gsamp
+ucmd_gsamp
+ret 0
+end
 exit 2
 end

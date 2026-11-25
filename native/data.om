@@ -52,6 +52,35 @@ end
 ret v
 end
 
+note argv[i] as a signed decimal (optional leading '-', 1 .. 18 digits).
+fn oargs i ulong to long
+n = oargp i
+if gt n 19
+exit 2
+end
+negf = ulong 0
+st = ulong 0
+if eq ulong get oarg 0 45
+if eq n 1
+exit 2
+end
+negf = ulong 1
+st = ulong 1
+end
+v = ulong 0
+for k ulong sub n st
+c = ulong get oarg add st k
+if or lt c 48 gt c 57
+exit 2
+end
+v = add mul v 10 sub c 48
+end
+if eq negf 1
+ret neg long v
+end
+ret long v
+end
+
 fn odb i ulong to ulong
 if lt i ODHALF
 ret ulong get od0 i

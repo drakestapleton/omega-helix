@@ -98,6 +98,12 @@ OLLM_INTERCHANGE_BIN="$OUT/ollm-interchange" OLLM_BIN="$BIN" \
   python3 -W error::ResourceWarning -m unittest discover -s "$here/tools/distill" -p "test_*.py" -v
 OMEGA_HELIX_BIN_DIR="$OUT" "$here/bin/omega-helix" distill probe --json >/dev/null
 
+echo "--- 4d. Sovereign Runtime Firewalls, Grammar Decoding, Sleep Cycle, Compile-Until-Green & HF Demo ---"
+OLLM_WALDO_BIN="$OUT/ollm-waldo" OLLM_UNIV_BIN="$OUT/ollm-univ" \
+OLLM_INTERCHANGE_BIN="$OUT/ollm-interchange" OLLM_BIN="$BIN" \
+  python3 -W error::ResourceWarning -m unittest discover -s "$here/tools/runtime" -p "test_*.py" -v
+WORK="$xdir/demo10s" OUT="$OUT" sh "$here/scripts/demo-10s-wow.sh" >/dev/null
+
 if [ "$OS" = Linux ] && [ "$ARCH" = aarch64 ]; then
   GSL_WORK="$xdir/gsl" sh "$here/tests/test_gpu_spec_loop.sh" build
   GSL_WORK="$xdir/gsl" sh "$here/tests/test_gpu_spec_loop.sh" host
