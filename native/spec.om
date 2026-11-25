@@ -413,7 +413,7 @@ h = osp_fnvu h get og 58
 h = osp_fnvu h get og 59
 end
 i = ulong 0
-while lt i fz bound 33554432
+while lt i fz bound 9223372036854775807
 h = osp_fnvu h bitcast ulong owg i
 i = add i 1
 end
@@ -1364,7 +1364,7 @@ note Works across DIFFERENT init basins (grow + growpro) with zero weight-averag
 
 fn osp_hsnap dst ulong src ulong n ulong to void
 i = ulong 0
-while lt i n bound 262144
+while lt i n bound 1048576
 ocsp add dst i get oa add src i
 i = add i 1
 end
@@ -1372,7 +1372,7 @@ end
 
 fn osp_hrest dst ulong src ulong n ulong to void
 i = ulong 0
-while lt i n bound 262144
+while lt i n bound 1048576
 put oa add dst i ocsg add src i
 i = add i 1
 end
