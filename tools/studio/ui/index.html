@@ -107,6 +107,14 @@
       </details>
     </div>
 
+    <div class="qt-scale-row" role="radiogroup" aria-label="Model scale and run length">
+      <span class="small muted"><b>Scale &amp; run length:</b></span>
+      <label class="qt-scale"><input type="radio" name="qtscale" value="nano" checked><span><b>Nano</b> · 40K · 12 steps (~10s CPU)</span></label>
+      <label class="qt-scale"><input type="radio" name="qtscale" value="medium"><span><b>Medium</b> · 2.6M · 1,000 steps (GB10 BF16)</span></label>
+      <label class="qt-scale"><input type="radio" name="qtscale" value="full15m"><span><b>15.8M Full</b> · Rung 10 · 10,000 steps (GB10 BF16)</span></label>
+      <label class="qt-scale"><input type="radio" name="qtscale" value="large30m"><span><b>30M Long Run</b> · 16L · 30,000 steps (GB10 BF16)</span></label>
+    </div>
+
     <div class="qt-grid" role="group" aria-label="One-click training goals">
       <button type="button" class="qt-card" data-qt="starter">
         <span class="qt-tag c1">Recommended First Run · ~10s</span>
@@ -265,6 +273,21 @@
         <div class="glass block">
           <h2>Training &amp; export</h2>
           <div class="sliders" id="train-sliders"></div>
+          <div class="form-grid two" style="margin-top:10px">
+            <div class="field"><label for="f-steps-exact">Exact steps (up to 100k+)</label><input id="f-steps-exact" type="number" min="1" max="500000" value="15"></div>
+            <div class="field"><label for="f-save-every">Checkpoint every N steps (0=auto)</label><input id="f-save-every" type="number" min="0" max="50000" value="0"></div>
+          </div>
+          <div class="chip-row small" style="margin-top:8px">
+            <button type="button" class="chip step-preset" data-steps="15">15</button>
+            <button type="button" class="chip step-preset" data-steps="1000">1,000</button>
+            <button type="button" class="chip step-preset" data-steps="10000">10,000</button>
+            <button type="button" class="chip step-preset" data-steps="30000">30,000</button>
+            <button type="button" class="chip step-preset" data-steps="60000">60,000</button>
+          </div>
+          <div class="field" style="margin-top:8px">
+            <label for="f-gpu-prec">GB10 GPU precision</label>
+            <select id="f-gpu-prec"><option value="bf16">BF16 Tensor Core (gtrainb · ~85k tok/s)</option><option value="fp32">FP32 SASS (gtrainf · ~68k tok/s)</option></select>
+          </div>
           <div class="checks">
             <label class="check"><input type="checkbox" id="f-gpu"><span>Use GB10 GPU (<code>gtrainf</code>/<code>gtrainb</code>)</span></label>
             <label class="check"><input type="checkbox" id="f-spforge"><span>Closed-Form <code>spforge</code> (one-shot Ridge/GN)</span></label>

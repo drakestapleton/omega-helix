@@ -355,6 +355,13 @@ def normalize_spec(raw: dict[str, Any]) -> dict[str, Any]:
     if flags is not None:
         flags = _as_int(flags, 0, "flags")
 
+    gpu_precision = str(raw.get("gpu_precision") or "bf16").strip().lower()
+    if gpu_precision not in ("bf16", "fp32"):
+        gpu_precision = "bf16"
+    save_every = _as_int(raw.get("save_every"), 0, "save_every")
+    if save_every < 0:
+        save_every = 0
+
     name = str(raw.get("name") or "my-helix").strip() or "my-helix"
     return {
         "name": name,
@@ -376,6 +383,8 @@ def normalize_spec(raw: dict[str, Any]) -> dict[str, Any]:
         "adapt_thresh_micro": adapt_thresh_micro,
         "msg_gain_micro": msg_gain_micro,
         "use_gpu": bool(raw.get("use_gpu", False)),
+        "gpu_precision": gpu_precision,
+        "save_every": save_every,
         "base_steps": base_steps,
         "lr_micro": lr_micro,
         "seed": seed,
@@ -695,8 +704,9 @@ def estimate_chain(raw_spec: dict[str, Any]) -> dict[str, Any]:
         if NP > 1:
             init_cmd += f" 1 {LP} {LC} {NP}"
         cmds.append(init_cmd)
-        train_op = "gtrainf" if spec["use_gpu"] else "train"
-        cmds.append(f"ollm {train_op} base.ck {'train.tok' if spec['tokenizer']=='bpe' else 'train.bin'} {spec['base_steps']} {max(1, spec['base_steps']//4)}")
+        train_op = ("gtrainb" if spec.get("gpu_precision") == "bf16" else "gtrainf") if spec["use_gpu"] else "train"
+        ev_cmd = spec["save_every"] if spec.get("save_every", 0) > 0 else max(1, spec["base_steps"] // (20 if spec["base_steps"] >= 500 else 4))
+        cmds.append(f"ollm {train_op} base.ck {'train.tok' if spec['tokenizer']=='bpe' else 'train.bin'} {spec['base_steps']} {min(spec['base_steps'], ev_cmd)}")
         for s in strands:
             pl = strand_depth.get(s["parent_id"], L) if s["parent_id"] else L
             nl = pl + s["add_layers"]
@@ -1249,7 +1259,12 @@ class ChainManager:
             run.emit("metric", stage="base_train", step=0, loss=ev_before[0], bpb=ev_before[1], tok_s=0.0)
 
         base_steps = spec["base_steps"]
-        every = max(1, min(base_steps, max(1, base_steps // 5)))
+        if spec.get("save_every", 0) > 0:
+            every = max(1, min(base_steps, int(spec["save_every"])))
+        elif base_steps >= 500:
+            every = max(50, min(base_steps, base_steps // 20))
+        else:
+            every = max(1, min(base_steps, max(1, base_steps // 5)))
         t_start = time.time()
         last_step = [0]
 
@@ -1266,7 +1281,7 @@ class ChainManager:
                 except ValueError:
                     pass
 
-        train_cmd = "gtrainf" if use_gb10 else "train"
+        train_cmd = ("gtrainb" if spec.get("gpu_precision", "bf16") == "bf16" else "gtrainf") if use_gb10 else "train"
         self._run_stream(
             run,
             [str(ollm_bin), train_cmd, str(base_ck), str(train_data), str(base_steps), str(every)],

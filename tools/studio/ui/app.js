@@ -554,12 +554,12 @@
   const GEO_SLIDERS = [
     { key: "V", label: "Vocab V", min: 256, max: 65536, step: 256 },
     { key: "T", label: "Context T", min: 16, max: 1024, step: 16 },
-    { key: "D", label: "Model Dim D", min: 16, max: 1024, step: 16 },
-    { key: "H", label: "Query Heads H", min: 2, max: 16, step: 1 },
-    { key: "H_KV", label: "KV Heads H_KV", min: 2, max: 16, step: 1 },
-    { key: "F", label: "MLP F", min: 32, max: 4096, step: 32 },
-    { key: "L", label: "Base Layers L", min: 2, max: 24, step: 1 },
-    { key: "B", label: "Batch B", min: 1, max: 16, step: 1 },
+    { key: "D", label: "Model Dim D", min: 16, max: 2048, step: 16 },
+    { key: "H", label: "Query Heads H", min: 2, max: 32, step: 1 },
+    { key: "H_KV", label: "KV Heads H_KV", min: 2, max: 32, step: 1 },
+    { key: "F", label: "MLP F", min: 32, max: 8192, step: 32 },
+    { key: "L", label: "Base Layers L", min: 2, max: 32, step: 1 },
+    { key: "B", label: "Batch B", min: 1, max: 64, step: 1 },
   ];
 
   const LOOP_SLIDERS = [
@@ -571,7 +571,7 @@
   ];
 
   const TRAIN_SLIDERS = [
-    { key: "base_steps", label: "Base Steps", min: 2, max: 200, step: 1 },
+    { key: "base_steps", label: "Base Steps", min: 2, max: 60000, step: 1 },
     { key: "lr_micro", label: "Base Learning Rate (μ)", min: 100, max: 20000, step: 100 },
   ];
 
@@ -615,6 +615,9 @@
     $("f-tokenizer").value = s.tokenizer;
     $("f-hfdtype").value = s.hf_dtype;
     $("f-gpu").checked = Boolean(s.use_gpu);
+    if ($("f-steps-exact")) $("f-steps-exact").value = String(s.base_steps || 15);
+    if ($("f-save-every")) $("f-save-every").value = String(s.save_every || 0);
+    if ($("f-gpu-prec")) $("f-gpu-prec").value = s.gpu_precision || "bf16";
     $("f-hf").checked = Boolean(s.export_hf);
     $("f-gguf").checked = Boolean(s.export_gguf);
     sliderInputs.forEach(({ inp, out }, k) => {
@@ -1112,6 +1115,9 @@
   }
 
   async function quickTrain(goal, customPath = "") {
+    const scaleEl = document.querySelector('input[name="qtscale"]:checked');
+    const scale = scaleEl ? scaleEl.value : "nano";
+    const hasGpu = !!(state.system && state.system.has_gb10);
     const baseDs = customPath
       ? { kind: "local", value: customPath, label: customPath }
       : (goal === "code"
@@ -1120,24 +1126,34 @@
           ? { kind: "preset", value: "omega-docs", label: "omega-docs (architecture docs)" }
           : { kind: "preset", value: "omega-starter", label: "omega-starter (repo corpus)" });
 
+    const scaleCfgs = {
+      nano:     { tok: "byte", V: 256,  T: 16,  D: 32,  H: 2,  H_KV: 2, F: 64,   L: 2,  B: 2,  steps: 12,    ssteps: 10,  save: 0,    gpu: false },
+      medium:   { tok: "bpe",  V: 4096, T: 128, D: 192, H: 6,  H_KV: 6, F: 768,  L: 4,  B: 32, steps: 1000,  ssteps: 200, save: 100,  gpu: hasGpu },
+      full15m:  { tok: "bpe",  V: 4096, T: 256, D: 384, H: 12, H_KV: 12, F: 1536, L: 8,  B: 64, steps: 10000, ssteps: 500, save: 500,  gpu: hasGpu },
+      large30m: { tok: "bpe",  V: 4096, T: 256, D: 384, H: 12, H_KV: 12, F: 1536, L: 16, B: 64, steps: 30000, ssteps: 1000, save: 1000, gpu: hasGpu },
+    };
+    const sc = scaleCfgs[scale] || scaleCfgs.nano;
+
     state.spec.base_dataset = baseDs;
-    state.spec.use_gpu = false;
+    state.spec.use_gpu = sc.gpu;
+    state.spec.gpu_precision = "bf16";
+    state.spec.save_every = sc.save;
+    state.spec.tokenizer = sc.tok;
+    state.spec.V = sc.V; state.spec.T = sc.T; state.spec.D = sc.D; state.spec.H = sc.H; state.spec.H_KV = sc.H_KV;
+    state.spec.F = sc.F; state.spec.L = sc.L; state.spec.B = sc.B;
+    state.spec.base_steps = sc.steps;
+
     if (goal === "qwen3") {
-      state.spec.name = "quick-qwen3";
+      state.spec.name = `qwen3-${scale}`;
       state.spec.mode = "universal";
       state.spec.arch = "qwen3";
-      state.spec.tokenizer = "byte";
-      state.spec.V = 256; state.spec.T = 16; state.spec.D = 32; state.spec.H = 2; state.spec.H_KV = 2; state.spec.F = 64; state.spec.L = 2; state.spec.B = 2;
-      state.spec.base_steps = 12;
+      state.spec.use_gpu = false;
       state.spec.export_hf = true;
       state.spec.export_gguf = true;
     } else {
-      state.spec.name = customPath ? "my-custom-helix" : `quick-${goal}`;
+      state.spec.name = customPath ? `custom-${scale}` : `${goal}-${scale}`;
       state.spec.mode = "dna";
       state.spec.arch = "custom";
-      state.spec.tokenizer = "byte";
-      state.spec.V = 256; state.spec.T = 16; state.spec.D = 32; state.spec.H = 2; state.spec.H_KV = 2; state.spec.F = 64; state.spec.L = 2; state.spec.B = 2;
-      state.spec.base_steps = 12;
       state.spec.export_hf = false;
       state.spec.export_gguf = false;
       const strandName = goal === "code" ? "OMG-Code" : goal === "docs" ? "Docs-QA" : "Code";
@@ -1146,10 +1162,10 @@
           id: "strand-a",
           name: strandName,
           color: STRAND_COLORS[0],
-          add_layers: 1,
+          add_layers: scale === "nano" ? 1 : 2,
           growth: "growpro",
           use_fcachem: true,
-          steps: 10,
+          steps: sc.ssteps,
           lr_micro: 2000,
           weight: 500,
           dataset: { ...baseDs },
@@ -1542,6 +1558,37 @@
         activateTab("tab-play", true);
       });
     }
+    if ($("f-steps-exact")) {
+      $("f-steps-exact").addEventListener("input", () => {
+        const v = Math.max(1, Number($("f-steps-exact").value) || 1);
+        state.spec.base_steps = v;
+        const sl = sliderInputs.get("base_steps");
+        if (sl) { sl.inp.value = String(Math.min(Number(sl.inp.max), v)); sl.out.textContent = fmtNum(v); }
+        scheduleEstimate();
+      });
+    }
+    if ($("f-save-every")) {
+      $("f-save-every").addEventListener("input", () => {
+        state.spec.save_every = Math.max(0, Number($("f-save-every").value) || 0);
+        scheduleEstimate();
+      });
+    }
+    if ($("f-gpu-prec")) {
+      $("f-gpu-prec").addEventListener("change", () => {
+        state.spec.gpu_precision = $("f-gpu-prec").value;
+        scheduleEstimate();
+      });
+    }
+    document.querySelectorAll(".step-preset[data-steps]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const v = Number(btn.dataset.steps);
+        state.spec.base_steps = v;
+        if ($("f-steps-exact")) $("f-steps-exact").value = String(v);
+        const sl = sliderInputs.get("base_steps");
+        if (sl) { sl.inp.value = String(Math.min(Number(sl.inp.max), v)); sl.out.textContent = fmtNum(v); }
+        scheduleEstimate();
+      });
+    });
 
     /* ---------------- Tab 5: Distillation Pipeline Network ---------------- */
     $("btn-distill-probe").addEventListener("click", probeDistillTeachers);
