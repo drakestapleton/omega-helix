@@ -90,6 +90,10 @@ end
 fn gkimadw d uint a uint imm uint c uint to void
 gkfx or or 30757 shl d 16 shl a 24 imm or 126746624 c
 end
+note Predicated IMAD.WIDE.U32 under guard predicate p (7 = PT, 1 = @P1)
+fn gkimadwp d uint a uint imm uint c uint p uint to void
+gkfx or or or 2085 shl p 12 shl d 16 shl a 24 imm or 126746624 c
+end
 note Fast independent IMAD.WIDE.U32 (stall 1, for back-to-back disjoint address pairs before a final stall-6 gkimadw)
 fn gkimadw1 d uint a uint imm uint c uint to void
 gkq or or 30757 shl d 16 shl a 24 imm or 126746624 c gkcw 1 7 7 get gkpend 0
@@ -707,6 +711,9 @@ note RAW latency) while quadrupling Tensor Core issue rate vs stall 15 + NOP.
 fn gkhmma d uint a uint b uint c uint wt uint to void
 gkq or or 29244 shl d 16 shl a 24 b or c 268288 gkcw 4 7 7 wt
 end
+fn gkhmma_s d uint a uint b uint c uint wt uint st uint to void
+gkq or or 29244 shl d 16 shl a 24 b or c 268288 gkcw st 7 7 wt
+end
 note Fast-issue HMMA (stall 2) for 128x128 BF16 Tensor Core kernels (16 independent accumulators per k16
 note step -> 95+ cycles between same-accumulator accesses, well past SM121's 22-cycle RAW latency)
 fn gkhmma2 d uint a uint b uint c uint wt uint to void
@@ -716,7 +723,7 @@ fn gknop to void
 gkq 31000 0 0 gkcw 1 7 7 0
 end
 note F2FP.BF16.F32.PACK_AB d a b: d = bf16(a) << 16 | bf16(b), round to nearest even; rz rounds toward
-note zero (mutant v only). Stall 2 as ptxas.
+note zero (mutant v only). Stall 2 as ptxas; gkf2fp6 emits stall 6 for immediate STG consumers.
 const OMUTV ulong 1
 fn gkf2fp d uint a uint b uint wt uint to void
 c = uint 4351
@@ -724,6 +731,13 @@ if eq OMUTV 0
 c = 102655
 end
 gkq or or 29246 shl d 16 shl a 24 b c or gkcw 2 7 7 wt 8192
+end
+fn gkf2fp6 d uint a uint b uint wt uint to void
+c = uint 4351
+if eq OMUTV 0
+c = 102655
+end
+gkq or or 29246 shl d 16 shl a 24 b c or gkcw 6 7 7 wt 8192
 end
 note PRMT Rd, Ra, sel_imm, Rc (byte permute for zero-F2FP packed-BF16 Mode-0 transpose, stall 2)
 fn gkprmt d uint a uint sel uint c uint wt uint to void
@@ -1566,7 +1580,7 @@ dl = add 121 ab
 st = add 123 ab
 gkimadw1 8 dl 0 ptr
 gkimadw1 10 dl 1 ptr
-gkimadw ptr st 1 ptr
+gkimadwp ptr st 1 ptr p
 gkldgq1 96 8 false p
 gkldgq 100 10 true p
 end

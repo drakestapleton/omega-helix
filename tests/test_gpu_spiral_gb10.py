@@ -157,7 +157,7 @@ class TestGpuSpiralGB10(unittest.TestCase):
         if not nvdisasm or platform.system() != "Linux" or platform.machine() != "aarch64":
             self.skipTest("requires Spark Linux aarch64 + nvdisasm -b SM121")
 
-        for shape in ("256 32 64 2 128 2", "4096 256 1536 24 4096 16", "4096 512 2048 32 8192 8"):
+        for shape in ("256 32 64 2 128 2", "4096 256 576 9 1152 4", "4096 256 1536 24 4096 16", "4096 512 2048 32 8192 8"):
             out_dir = self.tmp / f"disasm_{shape.replace(' ', '_')}"
             r = subprocess.run(
                 ["sh", str(ROOT / "tests" / "gpu-disasm.sh"), "--all"],
@@ -170,10 +170,11 @@ class TestGpuSpiralGB10(unittest.TestCase):
             self.assertIn("GPU_DISASM_OK slots=78 bad=0", r.stdout)
 
         # Verify D=2048 RMSF/RMSB/RMSF_BF16/RMSB_BF16/CE_BF16 stay inside 72 GPRs,
-        # slot 31 uses LDG/STG.E.64, and slot 84 emits SM121 OMMA.SF.16864 NVFP4.
+        # slot 31 uses LDG/STG.E.64, slot 84 emits OMMA.SF.16864 + IMAD.WIDE.U32 R14, R123, 0x20, R10,
+        # and slot 85 predicates pointer advance on @P1.
         out_dir = self.tmp / "disasm_detail"
         r_rms = subprocess.run(
-            ["sh", str(ROOT / "tests" / "gpu-disasm.sh"), "10", "11", "31", "75", "76", "84", "87"],
+            ["sh", str(ROOT / "tests" / "gpu-disasm.sh"), "10", "11", "31", "63", "75", "76", "77", "82", "84", "85", "87"],
             cwd=str(ROOT),
             env={
                 **os.environ,
@@ -194,6 +195,45 @@ class TestGpuSpiralGB10(unittest.TestCase):
         self.assertIn("LDG.E.64", r_rms.stdout)
         self.assertIn("STG.E.64", r_rms.stdout)
         self.assertIn("OMMA.SF.16864", r_rms.stdout)
+        self.assertIn("IMAD.WIDE.U32 R14, R123, 0x20, R10", r_rms.stdout)
+        self.assertIn("@P1 IMAD.WIDE.U32", r_rms.stdout)
+
+    def test_nvfp4_cli_bounds(self) -> None:
+        if platform.system() != "Linux" or platform.machine() != "aarch64":
+            self.skipTest("nvfp4 command is built on Linux aarch64 gb10 target")
+        gb10 = _resolve_gb10_bin()
+        if gb10 is None:
+            out_dir = self.tmp / "gb10_build"
+            subprocess.run(
+                ["sh", str(ROOT / "scripts" / "build.sh")],
+                cwd=str(ROOT),
+                env={**os.environ, "TARGET": "gb10", "OUT": str(out_dir)},
+                check=True,
+            )
+            gb10 = out_dir / "ollm-gb10"
+        bad_cases = [
+            ["128", "128", "64", "1000001"],
+            ["2147483648", "2147483648", "64", "1"],
+            ["128", "4294967296", "64", "1"],
+            ["128", "128", "274877906944", "1"],
+            ["65536", "65536", "64", "1"],
+            ["65664", "128", "64", "1"],
+            ["128", "65664", "64", "1"],
+            ["128", "128", "16777280", "1"],
+            ["0", "128", "64", "1"],
+            ["128", "0", "64", "1"],
+            ["128", "128", "0", "1"],
+            ["128", "128", "64", "0"],
+            ["64", "128", "64", "1"],
+            ["128", "64", "64", "1"],
+            ["128", "128", "32", "1"],
+            ["-128", "128", "64", "1"],
+            ["128", "128", "64"],
+        ]
+        for args in bad_cases:
+            with self.subTest(args=args):
+                r = subprocess.run([str(gb10), "nvfp4", *args], capture_output=True, text=True, check=False)
+                self.assertEqual(r.returncode, 2, f"args={args} rc={r.returncode} stdout={r.stdout!r} stderr={r.stderr!r}")
 
     def test_live_gb10_silicon_parity_and_gfcache(self) -> None:
         if os.environ.get("OLLM_GB10_LIVE") != "1":
@@ -202,11 +242,25 @@ class TestGpuSpiralGB10(unittest.TestCase):
         self.assertIsNotNone(gb10, "ollm-gb10 binary not found")
         assert gb10 is not None
 
-        # 1. GBFRAG exact 0-error check across all 10 64x64 + 10 128x128 BF16 HMMA kernels
+        # 1. GBFRAG exact 0-error check across all 10 64x64 + 10 128x128 BF16 HMMA kernels + slot 85 3-way GEMM
         frag_ck = self.tmp / "frag.ck"
         subprocess.run([str(gb10), "init", str(frag_ck), "4096", "256", "256", "4", "512", "2", "8", "1", "10", "3000", "1"], check=True, capture_output=True)
         r = subprocess.run([str(gb10), "gbfrag", str(frag_ck)], capture_output=True, text=True, check=True)
+        self.assertIn("GF85 128 128 128 0", r.stdout)
         self.assertIn("GBFRAG PASS", r.stdout)
+
+        # 1a. Full end-to-end ggbf_ok == true step parity (gbcmp2h) across E=64, E=32, and nh=16>8
+        for tag, dims in (
+            ("e64", ["256", "64", "256", "4", "512", "2", "2", "1", "10", "3000", "1"]),
+            ("e32", ["256", "64", "384", "12", "1536", "2", "2", "1", "10", "3000", "1"]),
+            ("nh16", ["256", "64", "1024", "16", "1024", "1", "2", "1", "10", "3000", "1"]),
+        ):
+            with self.subTest(tag=tag):
+                bfh_ck = self.tmp / f"bfh_{tag}.ck"
+                subprocess.run([str(gb10), "init", str(bfh_ck), *dims], check=True, capture_output=True)
+                rh = subprocess.run([str(gb10), "gbcmp2h", str(bfh_ck), str(self.corp), "0"], capture_output=True, text=True, check=True)
+                self.assertIn("GBH 1", rh.stdout)
+                self.assertIn("GBCMP2 PASS", rh.stdout)
 
         # 1b. GACMP AdamW parity (256-CTA 128-bit SQN + 256-thr 128-bit ADAM)
         ac_ck = self.tmp / "ac_gpu.ck"
@@ -214,10 +268,11 @@ class TestGpuSpiralGB10(unittest.TestCase):
         ra = subprocess.run([str(gb10), "gacmp", str(ac_ck), str(self.corp), "0"], capture_output=True, text=True, check=True)
         self.assertIn("GACMP PASS", ra.stdout)
 
-        # 1c. Live SM121 OMMA.SF.16864 NVFP4 Tensor Core execution
-        rnv = subprocess.run([str(gb10), "nvfp4", "4096", "4096", "8192", "5"], capture_output=True, text=True, check=True)
-        self.assertIn("NVFP4 4096 4096 8192 5 ", rnv.stdout)
-        self.assertIn(" PASS", rnv.stdout)
+        # 1c. Live SM121 OMMA.SF.16864 NVFP4 in-register instruction-rate microbenchmark (multi-lane + warp-7 + NaN sentinels)
+        for nv_args in (["4096", "4096", "8192", "5"], ["256", "256", "128", "2"]):
+            rnv = subprocess.run([str(gb10), "nvfp4", *nv_args], capture_output=True, text=True, check=True)
+            self.assertIn(f"NVFP4 {' '.join(nv_args)} ", rnv.stdout)
+            self.assertIn(" 68 0 INREG_OMMA_MICROBENCH PASS", rnv.stdout)
 
         # 2. GBCMP2 on Looped Spiral L_phys=8 x NP=4 (LV=32)
         loop_ck = self.tmp / "loop8x4_gpu.ck"

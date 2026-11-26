@@ -670,6 +670,7 @@ for q uint 4
 bad = add bad gbfl p and q 1 shr q 1
 end
 end
+bad = add bad gbf85
 r = nvstop
 oputc 71
 oputc 70
@@ -1215,4 +1216,154 @@ a = gbrv gbwv r kk 0 fa
 s = add s mul a gbrv gbwv c kk 0 fb
 end
 ret s
+end
+
+note Slot 85 (gkgemmh128_3way) exact 0-mismatch verification: M=128 N=128 K=128 across 3 passes.
+note A0..A2 spaced by s6=65536 (32 KiB NaN gaps), B0..B2 contiguous dd2=32768, NaN padding outside.
+fn gbf85_a p uint r uint k uint to long
+v = rem add add mul ulong r 3 mul ulong k 5 mul ulong p 7 7
+ret sub long v 3
+end
+
+fn gbf85_b p uint c uint k uint to long
+v = rem add add mul ulong c 5 mul ulong k 7 mul ulong p 11 7
+ret sub long v 3
+end
+
+fn gbf85_u16 v long to uint
+u = bitcast uint f32 f64 v
+ret shr u 16
+end
+
+fn gbf85_wr1 p uint r uint cc uint to void
+ba = add get gbfb 0 mul ulong p 65536
+bb = add add get gbfb 0 524288 mul ulong p 32768
+off = add mul ulong r 256 mul ulong cc 4
+k = mul cc 2
+a0 = gbf85_u16 gbf85_a p r k
+a1 = gbf85_u16 gbf85_a p r add k 1
+gbput add ba off or a0 shl a1 16
+a0 = gbf85_u16 gbf85_b p r k
+a1 = gbf85_u16 gbf85_b p r add k 1
+gbput add bb off or a0 shl a1 16
+end
+
+fn gbf85_wrp p uint to void
+for r uint 128
+for cc uint 64
+gbf85_wr1 p r cc
+end
+end
+end
+
+fn gbf85_chk1 r uint c uint to long
+s = long 0
+for p uint 3
+for k uint 128
+s = add s mul gbf85_a p r k gbf85_b p c k
+end
+end
+ret s
+end
+
+fn gbf85_chkel r uint c uint g uint to ulong
+s = gbf85_chk1 r c
+u = bitcast uint f32 f64 s
+e = shr gbbf u 16
+if ne g e
+ret 1
+end
+ret 0
+end
+
+fn gbf85_chkpair r uint cc uint to ulong
+c = mul cc 2
+o = add add get gbfb 0 1048576 add mul ulong r 256 mul ulong cc 4
+w = gbw o
+bad = gbf85_chkel r c and w 65535
+ret add bad gbf85_chkel r add c 1 shr w 16
+end
+
+fn gbf85 to ulong
+b = get gbfb 0
+for i ulong 524288
+gbput add b mul i 4 2143322048
+end
+for p uint 3
+gbf85_wrp p
+end
+put gkinv 0 1
+d = add gkbase b
+gkoph 0 d 256 2 65280 0
+gkoph 1 add d 524288 256 2 32512 0
+gkopc add d 1048576 256 2 0 0 f32 1.0f64
+ggmmh 128 128 128 1 1 8
+bad = ulong 0
+for r uint 128
+for cc uint 64
+bad = add bad gbf85_chkpair r cc
+end
+end
+for i ulong 16
+if ne gbw add add b 1081344 mul i 4 2143322048
+bad = add bad 1
+end
+end
+oputc 71
+oputc 70
+oputc 56
+oputc 53
+oputc 32
+oputu 128
+oputc 32
+oputu 128
+oputc 32
+oputu 128
+oputc 32
+oputu bad
+oputc 10
+ret bad
+end
+
+note gbcmp2h CK DATA S: full ggbf_ok == true end-to-end packed-BF16 step parity against CPU f64 K0
+note (exercises slots 67..74, 75, 76, 77..80, 82, 83, 85, 86, 87). Prints `GBH 1` + GBCMP2 verdict.
+fn gbcmp2h to void
+if ne oargc 5
+exit 2
+end
+ockloop 2
+odopen 3
+obatch oargu 4
+p = get og 8
+put gkbf 0 1
+put gkbck 0 0
+ggsnofp 1
+ggopen
+if not ggbf_ok
+ggsnofp 0
+r = nvstop
+gbvd 49 false
+end
+ggupw
+ggf2b ggp5 gga1 0 gga1 38
+t0 = monons
+lg = ggpass false
+t1 = monons
+ggdown
+ggstash p 0
+ggsnofp 0
+put og 10 0
+put ogkm 0 0
+l0 = ograd
+ggstash p p
+ggk2z
+gg2cmp p
+oputc 71
+oputc 66
+oputc 72
+oputc 32
+oputc 49
+oputc 10
+oflush
+ggc2pr lg l0 sub t1 t0
 end
