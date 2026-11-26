@@ -196,15 +196,38 @@ class TestApuWeave(unittest.TestCase):
     def test_apuweave_dir_discovery_and_multiproc_linux(self):
         if platform.system() != "Linux":
             self.skipTest("directory scan (getdnts) + multi-proc fork pool is Linux-only")
+        # Build a dir containing real .tok shards plus DRA-1023 traps:
+        # nested.tok/ subdir (DT_DIR), dotfile ._hidden.tok, FIFO pipe.tok (DT_FIFO),
+        # symlink-to-dir, symlink-to-FIFO, and a valid symlink-to-regular .tok file.
+        mix_dir = self.td / "shards_mixed"
+        mix_dir.mkdir(parents=True)
+        for p in self.shard_paths:
+            (mix_dir / p.name).write_bytes(p.read_bytes())
+        nested = mix_dir / "nested.tok"
+        nested.mkdir()
+        (nested / "inner.tok").write_bytes(self.shard_paths[0].read_bytes())
+        (mix_dir / "._appledouble.tok").write_bytes(self.shard_paths[0].read_bytes())
+        fifo = mix_dir / "pipe.tok"
+        os.mkfifo(fifo)
+        os.symlink(nested, mix_dir / "link_to_dir.tok")
+        os.symlink(fifo, mix_dir / "link_to_fifo.tok")
+        os.symlink(mix_dir / self.shard_paths[0].name, mix_dir / "s99_symlink.tok")
+
         out_dir = self.td / "out_dir_linux"
         # Do NOT pre-create out_dir to test automatic `makedir`!
-        r = run_cmd([self.bin, "apuweave", self.ck, self.shards_dir, out_dir, "24", "100", "128", "4", "4"])
+        r = run_cmd([self.bin, "apuweave", self.ck, mix_dir, out_dir, "24", "100", "128", "4", "4"])
         waves, strands, summary, _ = parse_telemetry(r.stdout)
-        self.assertEqual(summary[0], 4)
+        self.assertEqual(summary[0], 5, "4 regular .tok + 1 valid regular symlink; dirs/FIFOs/dotfiles skipped")
         self.assertEqual(summary[1], 8, "workers=4 + 2 pref + 2 verif = 8 Grace workers")
-        self.assertEqual(summary[11], 4)
-        self.assertEqual(len(strands), 4)
+        self.assertEqual(summary[11], 5)
+        self.assertEqual(len(strands), 5)
         self.assertTrue((out_dir / "s03_domain3.sp2").is_file())
+        self.assertTrue((out_dir / "s99_symlink.sp2").is_file())
+        self.assertFalse((out_dir / "nested.sp2").exists())
+        self.assertFalse((out_dir / "pipe.sp2").exists())
+        self.assertFalse((out_dir / "link_to_dir.sp2").exists())
+        self.assertFalse((out_dir / "link_to_fifo.sp2").exists())
+        self.assertFalse((out_dir / "._appledouble.sp2").exists())
 
     def test_apuweave_gb10_live_silicon(self):
         if os.environ.get("OLLM_GB10_LIVE") != "1":

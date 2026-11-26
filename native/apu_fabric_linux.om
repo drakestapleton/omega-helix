@@ -152,21 +152,27 @@ end
 ret eq get apu_pbuf sub n 1 107
 end
 
-fn apu_scan_dir_entry p ulong dn ulong to void
-q = add p 19
-nl = ulong 0
-while lt add q nl 4096 bound 256
-  if eq get apu_dirb add q nl 0
-    break
-  end
-  nl = add nl 1
+note Probe apu_pbuf[0..tot) when dirent d_type is DT_UNKNOWN (0) or DT_LNK (10):
+note reject directories (getdnts >= 0) and non-seekable special files like FIFOs/sockets (fseek < 0).
+note O_RDONLY | O_NONBLOCK = 2048 on both Linux x86_64 and aarch64 (asm-generic/fcntl.h).
+fn apu_is_reg_file tot ulong to bool
+fd = int fopen apu_pbuf 0 tot 2048 0
+if lt fd 0
+  ret false
 end
-if or eq nl 0 gt add dn add nl 2 sub APU_PATH_STRIDE 1
-  ret
+sz = fseek fd 0 2
+gd = getdnts fd apu_io 0 256
+rc = fclose fd
+if lt sz 0
+  ret false
 end
-if eq get apu_dirb q 46
-  ret
+if ge gd 0
+  ret false
 end
+ret true
+end
+
+fn apu_build_dir_path q ulong nl ulong dn ulong to ulong
 for i ulong dn bound 256
   put apu_pbuf i get oarg i
 end
@@ -178,9 +184,39 @@ end
 for j ulong nl bound 256
   put apu_pbuf add pos j get apu_dirb add q j
 end
-tot = add pos nl
+ret add pos nl
+end
+
+fn apu_scan_dir_entry p ulong dn ulong to void
+if ge add p 19 4096
+  ret
+end
+dt = ulong get apu_dirb add p 18
+if and ne dt 8 and ne dt 10 ne dt 0
+  ret
+end
+q = add p 19
+if eq get apu_dirb q 46
+  ret
+end
+nl = ulong 0
+while lt add q nl 4096 bound 256
+  if eq get apu_dirb add q nl 0
+    break
+  end
+  nl = add nl 1
+end
+if or eq nl 0 gt add dn add nl 2 sub APU_PATH_STRIDE 1
+  ret
+end
+tot = apu_build_dir_path q nl dn
 if not apu_ends_tok tot
   ret
+end
+if ne dt 8
+  if not apu_is_reg_file tot
+    ret
+  end
 end
 cnt = get apu_cfg 0
 if lt cnt APU_MAX_SHARDS
@@ -191,7 +227,7 @@ end
 
 fn apu_walk_dir_buf nr ulong pl ulong to void
 p = ulong 0
-while lt p nr bound 512
+while lt add p 19 nr bound 512
   lo = ulong get apu_dirb add p 16
   hi = ulong get apu_dirb add p 17
   recl = or lo shl hi 8
