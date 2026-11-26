@@ -57,38 +57,15 @@ host_target_hdr() {
   esac
 }
 
-find_ng() {
-  if [ -n "${NG:-}" ] && [ -x "$NG" ]; then
-    printf '%s\n' "$NG"
-    return 0
-  fi
-  for cand in \
-    "$(command -v ng 2>/dev/null || true)" \
-    "$HOME/.local/bin/ng" \
-    "$OUT/ng"
-  do
-    if [ -n "$cand" ] && [ -x "$cand" ]; then
-      printf '%s\n' "$cand"
-      return 0
-    fi
-  done
-  ng_src=""
-  for root in \
-    "${OMEGA_MV:-}" \
-    "$HOME/workspace/omega-mv-macos" \
-    "$HOME/canon/omega-mv" \
-    "$here/../omega-mv" \
-    "$here/../omega-mv-macos"
-  do
-    if [ -n "$root" ] && [ -f "$root/seed/ng/src/ir.om" ] && [ -f "$root/seed/ng/src/a64.om" ]; then
-      ng_src="$root/seed/ng/src"
-      break
-    fi
-  done
-  if [ -z "$ng_src" ]; then
-    echo "error: 'ng' compiler or omega-mv seed/ng/src not found (set NG=/path/to/ng or OMEGA_MV=/path/to/omega-mv)." >&2
-    exit 1
-  fi
+is_omega_ng() {
+  cand=$1
+  [ -n "$cand" ] && [ -x "$cand" ] || return 1
+  hdr=$(printf '@ng front-ir\nfn main to int\nret 0\nend\n' | "$cand" 2>/dev/null | dd bs=1 count=6 2>/dev/null | tr -d '\0' || true)
+  [ "$hdr" = "OSC1IR" ]
+}
+
+build_ng_from_src() {
+  ng_src=$1
   {
     host_target_hdr
     cat "$ng_src/ir.om" "$ng_src/front.om" "$ng_src/opt.om" "$ng_src/a64.om" "$ng_src/main.om"
@@ -100,6 +77,51 @@ find_ng() {
     codesign -s - -f "$OUT/ng" >/dev/null 2>&1
   fi
   printf '%s\n' "$OUT/ng"
+}
+
+find_ng() {
+  if [ -n "${NG:-}" ]; then
+    if is_omega_ng "$NG"; then
+      printf '%s\n' "$NG"
+      return 0
+    fi
+    echo "error: NG='$NG' is not an executable Omega ng compiler." >&2
+    exit 1
+  fi
+  if is_omega_ng "$OUT/ng"; then
+    printf '%s\n' "$OUT/ng"
+    return 0
+  fi
+  if [ -n "${OMEGA_MV:-}" ]; then
+    if [ -f "$OMEGA_MV/seed/ng/src/ir.om" ] && [ -f "$OMEGA_MV/seed/ng/src/a64.om" ]; then
+      build_ng_from_src "$OMEGA_MV/seed/ng/src"
+      return 0
+    fi
+    echo "error: OMEGA_MV='$OMEGA_MV' missing seed/ng/src." >&2
+    exit 1
+  fi
+  for cand in \
+    "$HOME/.local/bin/ng" \
+    "$(command -v ng 2>/dev/null || true)"
+  do
+    if is_omega_ng "$cand"; then
+      printf '%s\n' "$cand"
+      return 0
+    fi
+  done
+  for root in \
+    "$HOME/workspace/omega-mv-macos" \
+    "$HOME/canon/omega-mv" \
+    "$here/../omega-mv" \
+    "$here/../omega-mv-macos"
+  do
+    if [ -f "$root/seed/ng/src/ir.om" ] && [ -f "$root/seed/ng/src/a64.om" ]; then
+      build_ng_from_src "$root/seed/ng/src"
+      return 0
+    fi
+  done
+  echo "error: 'ng' compiler or omega-mv seed/ng/src not found (set NG=/path/to/ng or OMEGA_MV=/path/to/omega-mv)." >&2
+  exit 1
 }
 
 if [ "$TARGET" = macos-metal ]; then
