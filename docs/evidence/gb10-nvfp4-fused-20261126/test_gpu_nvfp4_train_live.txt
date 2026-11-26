@@ -1,0 +1,9 @@
+test_gnv4gemm_cli_bounds (tests.test_gpu_nvfp4_train.TestGpuNvfp4Train.test_gnv4gemm_cli_bounds) ... ok
+test_live_gb10_nvfp4_parity_and_d2048_timing (tests.test_gpu_nvfp4_train.TestGpuNvfp4Train.test_live_gb10_nvfp4_parity_and_d2048_timing) ... ok
+test_nvfp4_command_constants_and_sources (tests.test_gpu_nvfp4_train.TestGpuNvfp4Train.test_nvfp4_command_constants_and_sources) ... ok
+test_target_gb10_local_cross_compile (tests.test_gpu_nvfp4_train.TestGpuNvfp4Train.test_target_gb10_local_cross_compile) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 20.425s
+
+OK

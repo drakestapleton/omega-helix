@@ -7,11 +7,13 @@ note (V + 1), 5 CSR order (R), 6 first layer, 7 layer stride, 8 HF, 9 SF, 10 Z, 
 note 12 CE stats (R 3), 13 DH, 14 DA, 15 DQ DK DU (contiguous), 16 DO, 17 DF, 18 DP, 19 WS, 20 CS;
 note layer fields 24 + f: 0 hin 1 a 2 q 3 k 4 u 5 o 6 hm 7 bn 8 s1 9 s2 10 fp 11 rl 12 P;
 note 40 the arena device address, 47 the plan cursor. s1, s2 and SF hold 1/s (the CPU keeps s).
-global gga ulong 48
+global gga ulong 56
 global gknv4 uint 1
+global ggw4_ok ulong 1
 global ggn4p ulong 3
 global ggn4s f64 2
 global ggn4q uint 1
+global ggn4ep uint 1
 global ggenv uchar 64
 text ggnv4e "OLLM_NVFP4=1"
 global ggcn ulong 65537
@@ -146,6 +148,10 @@ put gga 41 0
 put gga 42 0
 put gga 43 0
 put gga 44 0
+put gga 48 0
+put gga 49 0
+put gga 50 0
+put gga 51 0
 ret
 end
 mx = mul 3 mul r d
@@ -171,6 +177,14 @@ ggput 41 nnv
 ggput 42 nsx
 ggput 43 nnv
 ggput 44 nsx
+wlay = add mul 4 mul d d mul 2 mul d f
+wtot = mul get og 5 wlay
+wnv = ggcd wtot 8
+wsx = ggcd wtot 64
+ggput 48 wnv
+ggput 49 wsx
+ggput 50 wnv
+ggput 51 wsx
 end
 
 note arena plan for the dims in og; returns its size in bytes
@@ -401,6 +415,16 @@ end
 ret eq rem get og 2 128 0
 end
 
+fn ggdw_nv4_ok m ulong n ulong to bool
+if not ggnv4_ok
+ret false
+end
+if not ggnv4_shape m n ggr
+ret false
+end
+ret ge mul m n 786432
+end
+
 fn ggqnv4_p ps f64 to void
 put ggn4q 0 bitcast uint f32 ps
 end
@@ -431,7 +455,7 @@ ggrun 89 10 div m 32 div k 64 1
 ret
 end
 ggu 8 mul k 2
-ggrun 88 10 m 1 1
+ggrun 88 10 div m 8 div k 64 1
 end
 
 fn ggmm4_id fl uint ep uint to uint
@@ -455,31 +479,86 @@ end
 ret 92
 end
 
-fn ggmm4_ab anv ulong asx ulong bnv ulong bsx ulong k ulong to void
+fn ggmm4_ab anv ulong asx ulong bnv ulong bsx ulong m ulong n ulong to void
 ggpt 0 anv
 ggpt 1 asx
-ggu 4 div k 2
-ggu 5 div k 16
+ggu 4 mul m 32
+ggu 5 mul m 4
 ggu 6 0
 ggu 7 0
 ggpt 4 bnv
 ggpt 5 bsx
-ggu 12 div k 2
-ggu 13 div k 16
+ggu 12 mul n 32
+ggu 13 mul n 4
 ggu 14 0
 ggu 15 0
 end
 
-fn ggmm4_lch m ulong n ulong k ulong fl uint to void
+fn gggrad_sc to f64
+s = mul 2.0f64 f64 ggr
+if lt s 4096.0f64
+ret 4096.0f64
+end
+ret s
+end
+
+fn ggw4_el lp ulong wi ulong to ulong
+d = get og 2
+f = get og 4
+dd = mul d d
+df = mul d f
+wlay = add mul 4 dd mul 2 df
+base = mul lp wlay
+if lt wi 4
+ret add base mul wi dd
+end
+if eq wi 4
+ret add base mul 4 dd
+end
+ret add base add mul 4 dd df
+end
+
+fn ggw4_dt lp ulong wi ulong tr bool to ulong
+el = ggw4_el lp wi
+if tr
+ret add gga1 48 div el 2
+end
+ret add gga1 50 div el 2
+end
+
+fn ggw4_sc lp ulong wi ulong tr bool to ulong
+el = ggw4_el lp wi
+if tr
+ret add gga1 49 div el 16
+end
+ret add gga1 51 div el 16
+end
+
+fn ggmm4_ab_z m ulong n ulong ks ulong to void
+ggpt 0 gga1 41
+ggpt 1 gga1 42
+ggu 4 mul m 32
+ggu 5 mul m 4
+ggu 6 div mul ks m 2
+ggu 7 div mul ks m 16
+ggpt 4 gga1 43
+ggpt 5 gga1 44
+ggu 12 mul n 32
+ggu 13 mul n 4
+ggu 14 div mul ks n 2
+ggu 15 div mul ks n 16
+end
+
+fn ggmm4_lch_z m ulong n ulong k ulong nz ulong fl uint to void
 ep = get gkep 0
 put gkep 0 0
 put nverr 0 0
-put gkarg 23 gkmagic 1 1
+put gkarg 23 gkmagic uint nz uint nz
 if ne get nverr 0 0
 put gkfl 0 0
 ggdie 99
 end
-put gkarg 24 neg uint 1
+put gkarg 24 neg uint nz
 put gkarg 22 uint div k 64
 put gkarg 26 0
 put gkarg 27 0
@@ -489,20 +568,89 @@ put gkps 0 uint m
 put gkps 1 uint n
 put gkps 2 uint k
 if ne ep 0
+ep_sc = get ggn4ep 0
+put ggn4ep 0 0
+put gkarg 6 gblo gga1 43
+put gkarg 7 gbhi gga1 43
+put gkarg 14 gblo gga1 44
+put gkarg 15 gbhi gga1 44
+put gkarg 26 uint m
+put gkarg 27 ep_sc
 put gkna 0 32
 else
 put gkna 0 29
 end
 id = ggmm4_id fl ep
-if not gkmmsw id uint div n 128 uint div m 128 1 2
+if not gkmmsw id uint div n 128 uint div m 128 uint nz 2
 ggdie 99
 end
+end
+
+fn ggmm4_lch m ulong n ulong k ulong fl uint to void
+ggmm4_lch_z m n k 1 fl
+end
+
+fn ggks_nv4 m ulong n ulong to ulong
+r = ggr
+b128 = mul div m 128 div n 128
+mn = mul m n
+s = ulong 1
+while lt mul b128 s 144 bound 8
+s2 = mul s 2
+if gt s2 16
+ret s
+end
+if ne rem r mul s2 64 0
+ret s
+end
+if gt mul mn s2 4194304
+ret s
+end
+s = s2
+end
+ret s
 end
 
 fn ggmm4_pt a ulong b ulong c ulong to void
 put ggn4p 0 a
 put ggn4p 1 b
 put ggn4p 2 c
+end
+
+note Cached-weight NVFP4 GEMM: ggn4p[0]=x, ggn4p[2]=c, ggn4s[0]=sa
+fn ggmm4_cwp lp ulong wi ulong tr bool n ulong k ulong fl uint to void
+sa = get ggn4s 0
+if eq sa 0.0f64
+sa = 1.0f64
+end
+put ggn4s 0 1.0f64
+ggmm4_ab gga1 41 gga1 42 ggw4_dt lp wi tr ggw4_sc lp wi tr ggr n
+al = div 1.0f64 mul sa 16.0f64
+gkopc get ggn4p 2 uint mul n 2 2 0 0 f32 al
+ggmm4_lch ggr n k fl
+end
+
+fn ggmm4_cwp2 lp ulong wi ulong tr bool n ulong k ulong fl uint to void
+sa = get ggn4s 0
+if eq sa 0.0f64
+sa = 1.0f64
+end
+put ggn4s 0 1.0f64
+ggmm4_ab gga1 43 gga1 44 ggw4_dt lp wi tr ggw4_sc lp wi tr ggr n
+al = div 1.0f64 mul sa 16.0f64
+gkopc get ggn4p 2 uint mul n 2 2 0 0 f32 al
+ggmm4_lch ggr n k fl
+end
+
+fn ggmm4_cw lp ulong wi ulong tr bool n ulong k ulong fl uint to void
+sa = get ggn4s 0
+if eq sa 0.0f64
+sa = 1.0f64
+end
+ggqnv4_p sa
+ggqnv4 get ggn4p 0 gga1 41 gga1 42 ggr k false
+ggqnv4_p 1.0f64
+ggmm4_cwp lp wi tr n k fl
 end
 
 note On-chip BF16->NVFP4 quantize (with 2-level tensor pre-scale ggn4s[0..1]) + K-looped 128x128 GEMM (slots 88/89 + 90..95)
@@ -522,7 +670,7 @@ ggqnv4 get ggn4p 0 gga1 41 gga1 42 m k ta
 ggqnv4_p sb
 ggqnv4 get ggn4p 1 gga1 43 gga1 44 n k tb
 ggqnv4_p 1.0f64
-ggmm4_ab gga1 41 gga1 42 gga1 43 gga1 44 k
+ggmm4_ab gga1 41 gga1 42 gga1 43 gga1 44 m n
 al = div 1.0f64 mul sa sb
 if ne and fl 2 0
 gkopc get ggn4p 2 uint mul n 2 2 0 0 f32 al
@@ -530,6 +678,19 @@ else
 gkopc get ggn4p 2 uint mul n 4 4 0 0 f32 al
 end
 ggmm4_lch m n k fl
+end
+
+fn ggxwh_bf x ulong w ulong c ulong n ulong k ulong bt bool to void
+fl = uint 2
+if bt
+fl = 3
+end
+k2 = uint mul k 2
+n2 = uint mul n 2
+gkoph 0 x k2 2 0 0
+gkoph 1 w 2 n2 0 0
+gkopc c n2 2 0 0 f32 1.0f64
+ggmmh ggr n k 1 1 fl
 end
 
 fn ggxwh x ulong w ulong c ulong n ulong k ulong bt bool to void
@@ -543,12 +704,7 @@ ggmm4 ggr n k fl false true
 ret
 end
 ggmm4_sc 1.0f64 1.0f64
-k2 = uint mul k 2
-n2 = uint mul n 2
-gkoph 0 x k2 2 0 0
-gkoph 1 w 2 n2 0 0
-gkopc c n2 2 0 0 f32 1.0f64
-ggmmh ggr n k 1 1 fl
+ggxwh_bf x w c n k bt
 end
 
 fn ggxwth x ulong w ulong c ulong n ulong k ulong bt bool to void
@@ -581,35 +737,6 @@ k = div ggr s
 z = mul nz s
 ggmmh m n k z s 0
 ggskr mn nz s g gz
-end
-
-fn ggwgh x ulong dy ulong g ulong kk ulong n ulong to void
-k2 = uint mul kk 2
-n2 = uint mul n 2
-n4 = uint mul n 4
-s = ggks kk n 1
-if eq s 1
-fl = uint 1
-if ggow_ok
-fl = 0
-end
-if and ggnv4_ok ggnv4_shape kk n ggr
-ggmm4_pt x dy g
-ggmm4 kk n ggr fl true true
-ret
-end
-ggmm4_sc 1.0f64 1.0f64
-gkoph 0 x 2 k2 0 0
-gkoph 1 dy 2 n2 0 0
-gkopc g n4 4 0 0 f32 1.0f64
-ggmmh kk n ggr 1 1 fl
-ret
-end
-ggmm4_sc 1.0f64 1.0f64
-sl = div ggr s
-gkoph 0 x 2 k2 0 uint mul mul sl kk 2
-gkoph 1 dy 2 n2 0 uint mul mul sl n 2
-ggskh kk n 1 s g 0
 end
 
 fn ggf2b n ulong src ulong dst ulong to void
@@ -769,7 +896,25 @@ ggpt 1 v
 ggpt 2 g
 ggpt 3 y
 ggpt 4 s
-ggrun 75 10 ggcd r 256 1 1
+ggpt 5 0
+ggpt 6 0
+ggu 14 ggr
+ggu 15 0
+ggrun 75 16 ggcd r 256 1 1
+end
+
+fn ggrmsf_h_nv4 v ulong g ulong y ulong s ulong to void
+r = mul ggr 32
+ggu 0 r
+ggpt 1 v
+ggpt 2 g
+ggpt 3 y
+ggpt 4 s
+ggpt 5 gga1 41
+ggpt 6 gga1 42
+ggu 14 ggr
+ggu 15 1
+ggrun 75 16 ggcd r 256 1 1
 end
 
 global ggdgb ulong 2
@@ -788,6 +933,73 @@ if ne get og 59 1
 ret false
 end
 ret eq ggfzn 0
+end
+
+fn ggsk_nv4 dy ulong g ulong kk ulong n ulong sb f64 sa f64 to void
+s = ggks_nv4 kk n
+ggqnv4_p sb
+ggqnv4 dy gga1 43 gga1 44 n ggr true
+ggqnv4_p 1.0f64
+al = div 1.0f64 mul sa sb
+n4 = uint mul n 4
+if eq s 1
+fl = uint 1
+if ggow_ok
+fl = 0
+end
+ggmm4_ab gga1 41 gga1 42 gga1 43 gga1 44 kk n
+gkopc g n4 4 0 0 f32 al
+ggmm4_lch kk n ggr fl
+ret
+end
+ks = div ggr s
+mn = mul kk n
+ggmm4_ab_z kk n ks
+gkopc gga1 37 n4 4 0 uint mul mn 4 f32 al
+ggmm4_lch_z kk n ks s 0
+ggskr mn 1 s g 0
+end
+
+fn ggwgh_bf x ulong dy ulong g ulong kk ulong n ulong to void
+k2 = uint mul kk 2
+n2 = uint mul n 2
+n4 = uint mul n 4
+s = ggks kk n 1
+if eq s 1
+fl = uint 1
+if ggow_ok
+fl = 0
+end
+gkoph 0 x 2 k2 0 0
+gkoph 1 dy 2 n2 0 0
+gkopc g n4 4 0 0 f32 1.0f64
+ggmmh kk n ggr 1 1 fl
+ret
+end
+sl = div ggr s
+gkoph 0 x 2 k2 0 uint mul mul sl kk 2
+gkoph 1 dy 2 n2 0 uint mul mul sl n 2
+ggskh kk n 1 s g 0
+end
+
+fn ggwgh x ulong dy ulong g ulong kk ulong n ulong to void
+sa = get ggn4s 0
+sb = get ggn4s 1
+if eq sa 0.0f64
+sa = 1.0f64
+end
+if eq sb 0.0f64
+sb = 1.0f64
+end
+put ggn4s 0 1.0f64
+put ggn4s 1 1.0f64
+if ggdw_nv4_ok kk n
+ggqnv4_p sa
+ggqnv4 x gga1 41 gga1 42 kk ggr true
+ggsk_nv4 dy g kk n sb sa
+ret
+end
+ggwgh_bf x dy g kk n
 end
 fn ggain_cnt to ulong
 if and ggbf_ok le ggrms_g 256
@@ -1041,6 +1253,15 @@ end
 
 fn ggqkv_nv4 l ulong to void
 d = get og 2
+lp = olp l
+if ne get ggw4_ok 0 0
+for p ulong 3
+ggmm4_ab gga1 41 gga1 42 ggw4_dt lp p true ggw4_sc lp p true ggr d
+gkopc add ggl l 2 mul p ulong get ggs 6 uint mul d 2 2 0 0 f32 0.0625f64
+ggmm4_lch ggr d d 2
+end
+ret
+end
 ggqnv4_p 1.0f64
 ggqnv4 ggl l 1 gga1 41 gga1 42 ggr d false
 dd2 = mul mul d d 2
@@ -1048,7 +1269,7 @@ w0 = ggwh ovwq l
 ggqnv4_p 16.0f64
 for p ulong 3
 ggqnv4 add w0 mul p dd2 gga1 43 gga1 44 d d true
-ggmm4_ab gga1 41 gga1 42 gga1 43 gga1 44 d
+ggmm4_ab gga1 41 gga1 42 gga1 43 gga1 44 ggr d
 gkopc add ggl l 2 mul p ulong get ggs 6 uint mul d 2 2 0 0 f32 0.0625f64
 ggmm4_lch ggr d d 2
 end
@@ -1163,16 +1384,38 @@ fn ggffn_h l ulong to void
 d = get og 2
 f = get og 4
 hm = ggl l 6
+lp = olp l
+cw = and ne get ggw4_ok 0 0 and ggnv4_ok and ggnv4_shape ggr d d ggnv4_shape ggr f d
 gkopfl 8 ggl l 0
-ggmm4_sc 1.0f64 16.0f64
-ggxwh ggl l 5 ggwh ovwo l hm d d true
+if and cw ge d 512
+ggmm4_pt ggl l 5 0 hm
+ggmm4_sc 1.0f64 1.0f64
+ggmm4_cw lp 3 true d d 3
+else
+ggxwh_bf ggl l 5 ggwh ovwo l hm d d true
+end
+if cw
+ggrmsf_h_nv4 hm ggw ovg2 l ggl l 7 ggl l 9
+gkope 1 ggl l 11
+put ggn4ep 0 1065353216
+ggmm4_pt ggl l 7 0 ggl l 10
+ggmm4_sc 1.0f64 1.0f64
+ggmm4_cwp lp 4 true f d 2
+else
 ggrmsf_h hm ggw ovg2 l ggl l 7 ggl l 9
 gkope 1 ggl l 11
 ggmm4_sc 1.0f64 16.0f64
 ggxwh ggl l 7 ggwh ovw1 l ggl l 10 f d false
+end
 gkopfl 8 hm
+if cw
+ggmm4_pt ggl l 11 0 ggout l
+ggmm4_sc 1.0f64 1.0f64
+ggmm4_cwp2 lp 5 true d f 3
+else
 ggmm4_sc 1.0f64 16.0f64
 ggxwh ggl l 11 ggwh ovw2 l ggout l d f true
+end
 end
 
 fn ggffn l ulong to void
@@ -1224,7 +1467,11 @@ w = ggw ovg1 l
 a = ggl l 1
 s = ggl l 8
 if ggbf_ok
+if and ne get ggw4_ok 0 0 and ggnv4_ok ggnv4_shape ggr get og 2 get og 2
+ggrmsf_h_nv4 x w a s
+else
 ggrmsf_h x w a s
+end
 else
 ggrmsf x w a s
 end
@@ -1238,6 +1485,65 @@ note (leaving final hidden state HF in gga1 8, skipping final RMS, logits and CE
 global ggnoce uint 1
 fn ggb_ok to bool
 ret and and eq get gkbck 0 0 eq get gkpf 0 0 and eq get gkbat 0 0 gt get gbpkt 0 0
+end
+
+fn ggquant_w1 lp ulong to void
+d = get og 2
+f = get og 4
+w0 = ggwh opwq lp
+dd2 = mul mul d d 2
+for p ulong 3
+w = add w0 mul p dd2
+ggqnv4 w ggw4_dt lp p true ggw4_sc lp p true d d true
+end
+if ge d 512
+wo = add w0 mul 3 dd2
+ggqnv4 wo ggw4_dt lp 3 true ggw4_sc lp 3 true d d true
+ggqnv4 wo ggw4_dt lp 3 false ggw4_sc lp 3 false d d false
+end
+w1 = ggwh opw1 lp
+ggqnv4 w1 ggw4_dt lp 4 true ggw4_sc lp 4 true f d true
+ggqnv4 w1 ggw4_dt lp 4 false ggw4_sc lp 4 false d f false
+w2 = ggwh opw2 lp
+ggqnv4 w2 ggw4_dt lp 5 true ggw4_sc lp 5 true d f true
+ggqnv4 w2 ggw4_dt lp 5 false ggw4_sc lp 5 false f d false
+end
+
+fn ggquant_w to void
+put ggw4_ok 0 0
+if not ggnv4_ok
+ret
+end
+d = get og 2
+f = get og 4
+if or not ggnv4_shape d d d not ggnv4_shape f d d
+ret
+end
+ggqnv4_p 16.0f64
+nl = get og 5
+per = ulong 7
+if ge d 512
+per = 9
+end
+if and ggb_ok le mul nl per 512
+if not gbbegin mul nl per
+ggdie 120
+end
+put gkbat 0 1
+for lp ulong nl bound 64
+ggquant_w1 lp
+end
+put gkbat 0 0
+if not gkbsub
+ggdie 121
+end
+else
+for lp ulong nl bound 64
+ggquant_w1 lp
+end
+end
+ggqnv4_p 1.0f64
+put ggw4_ok 0 1
 end
 fn ggfwd_emb to void
 d = get og 2
@@ -1334,14 +1640,23 @@ if ggnv4_ok
 d = get og 2
 f = get og 4
 r = ggr
+cw = and ne get ggw4_ok 0 0 and ggnv4_shape r d d ggnv4_shape r f d
+if cw
+note QKV: 3 GEMMs vs 1 BF16 (+2, 0 quant!); W1: 0 quant; W2: 0 quant (fused into slot 94!); O: +1 quant iff d>=512
+c = add c 2
+if ge d 512
+c = add c 1
+end
+else
 if ggnv4_shape r d d
-c = add c 8
+c = add c 6
 end
 if ggnv4_shape r f d
 c = add c 2
 end
 if ggnv4_shape r d f
 c = add c 2
+end
 end
 end
 ret c
@@ -1399,20 +1714,32 @@ end
 fn ggbffn_h l ulong to void
 d = get og 2
 f = get og 4
-dh = gga1 13
-df = gga1 17
-da = gga1 14
+lp = olp l
+gs = gggrad_sc
+cw = and ne get ggw4_ok 0 0 and ggnv4_ok and ggnv4_shape ggr f d ggnv4_shape ggr d f
 gkope 2 ggl l 11
-ggmm4_sc 4096.0f64 16.0f64
-ggxwth dh ggwh ovw2 l df f d false
-if or eq OMUTLG 1 eq olp l l
-ggmm4_sc 1.0f64 4096.0f64
-ggwgh ggl l 11 dh ggg ovw2 l f d
+if cw
+put ggn4ep 0 bitcast uint f32 gs
+ggmm4_pt gga1 13 0 gga1 17
+ggmm4_sc gs 1.0f64
+ggmm4_cw lp 5 false f d 2
+ggmm4_pt gga1 17 0 gga1 14
+ggmm4_sc gs 1.0f64
+ggmm4_cwp2 lp 4 false d f 2
+else
+ggmm4_sc gs 16.0f64
+ggxwth gga1 13 ggwh ovw2 l gga1 17 f d false
 end
-ggmm4_sc 1.0f64 4096.0f64
-ggwgh ggl l 7 df ggg ovw1 l d f
-ggmm4_sc 4096.0f64 16.0f64
-ggxwth df ggwh ovw1 l da d f false
+if or eq OMUTLG 1 eq lp l
+ggmm4_sc 1.0f64 gs
+ggwgh ggl l 11 gga1 13 ggg ovw2 l f d
+end
+ggmm4_sc 1.0f64 gs
+ggwgh ggl l 7 gga1 17 ggg ovw1 l d f
+if not cw
+ggmm4_sc gs 16.0f64
+ggxwth gga1 17 ggwh ovw1 l gga1 14 d f false
+end
 ggrmsb_gain l true
 end
 
@@ -1503,9 +1830,19 @@ e = get og 7
 dh = gga1 13
 dn = gga1 16
 if ggbf_ok
-ggmm4_sc 4096.0f64 16.0f64
-ggxwth dh ggwh ovwo l dn d d false
-ggmm4_sc 1.0f64 4096.0f64
+gs = gggrad_sc
+if and ge d 512 and ne get ggw4_ok 0 0 and ggnv4_ok ggnv4_shape ggr d d
+ggmm4_pt dh 0 dn
+ggmm4_sc gs 1.0f64
+ggmm4_cw olp l 3 false d d 2
+else
+k2 = uint mul d 2
+gkoph 0 dh k2 2 0 0
+gkoph 1 ggwh ovwo l k2 2 0 0
+gkopc dn k2 2 0 0 f32 1.0f64
+ggmmh ggr d d 1 1 2
+end
+ggmm4_sc 1.0f64 gs
 ggwgh ggl l 5 dh ggg ovwo l d d
 ggfa_bwd l
 ret
@@ -1565,6 +1902,13 @@ gkopc da d2 2 0 0 f32 1.0f64
 ggmmh ggr d d 1 1 8
 a = ggl l 1
 w = ggg ovwq l
+if ggdw_nv4_ok d d
+ggqnv4_p 1.0f64
+ggqnv4 a gga1 41 gga1 42 d ggr true
+for p ulong 3
+ggsk_nv4 add dq mul p ulong s6 add w mul p ulong s7 d d gggrad_sc 1.0f64
+end
+else
 k = ggks d d 3
 if eq k 1
 gkoph 0 a 2 d2 0 0
@@ -1576,6 +1920,7 @@ sl = uint div ggr k
 gkoph 0 a 2 d2 0 mul sl d2
 gkoph 1 dq 2 d2 s6 mul sl d2
 ggskh d d 3 k w s7
+end
 end
 ggrmsb_gain l false
 end
@@ -1644,11 +1989,9 @@ ggew 20 ggp5 gga1 1 gga1 1
 ggew 20 mul r d gga1 13 gga1 13
 end
 if ggbf_ok
-ggmm4_sc 4096.0f64 16.0f64
-ggxwh gga1 39 ggwh 0 gga1 14 d v false
+ggxwh_bf gga1 39 ggwh 0 gga1 14 d v false
 if eq ggfzn 0
-ggmm4_sc 4096.0f64 1.0f64
-ggwgh gga1 39 gga1 10 ggg 0 v d
+ggwgh_bf gga1 39 gga1 10 ggg 0 v d
 end
 owf = ulong 0
 if owdh
@@ -1708,17 +2051,7 @@ end
 if eq ggfzn 0
 c = add c add 1 ggks_ex get og 0 get og 2 1
 end
-if ggnv4_ok
-d = get og 2
-v = get og 0
-r = ggr
-if ggnv4_shape r d v
-c = add c 2
-end
-if and eq ggfzn 0 and eq ggks v d 1 1 ggnv4_shape v d r
-c = add c 2
-end
-end
+note LM-head backward stays in BF16 for NVFP4 convergence parity
 ret c
 end
 
@@ -1747,23 +2080,47 @@ end
 end
 if ggnv4_ok
 r = ggr
+cw = and ne get ggw4_ok 0 0 and ggnv4_shape r f d ggnv4_shape r d f
 if ggnv4_shape r f d
+if cw
+c = add c 1
+else
 c = add c 2
 end
-if and or eq OMUTLG 1 eq olp l l and eq ggks f d 1 1 ggnv4_shape f d r
-c = add c 2
 end
-if and eq ggks d f 1 1 ggnv4_shape d f r
+if and or eq OMUTLG 1 eq olp l l ggdw_nv4_ok f d
 c = add c 2
+if gt ggks_nv4 f d 1
+c = add c 1
+end
+c = sub c ggks_ex f d 1
+end
+if ggdw_nv4_ok d f
+c = add c 2
+if gt ggks_nv4 d f 1
+c = add c 1
+end
+c = sub c ggks_ex d f 1
 end
 if ggnv4_shape r d f
+if not cw
 c = add c 2
 end
-if ggnv4_shape r d d
-c = add c 2
 end
-if and eq ggks d d 1 1 ggnv4_shape d d r
+if and ge d 512 and ne get ggw4_ok 0 0 ggnv4_shape r d d
+c = add c 1
+end
+if ggdw_nv4_ok d d
 c = add c 2
+if gt ggks_nv4 d d 1
+c = add c 1
+end
+c = sub c ggks_ex d d 1
+q4 = ulong 6
+if gt ggks_nv4 d d 1
+q4 = 9
+end
+c = sub add c add 1 q4 add 1 ggks_ex d d 3
 end
 end
 ret c
@@ -2158,7 +2515,7 @@ end
 if gt sub get og 56 ggfzl 8
 ret false
 end
-ret le ggstep_bat_cnt 480
+ret le ggstep_bat_cnt 512
 end
 fn ggpass_bat to void
 lv = get og 56
@@ -2285,6 +2642,7 @@ ggu 12 ulong grf ib
 if ggbf_ok
 ggpt 7 add gga1 38 mul fz 2
 ggrun 81 16 ggcd n4 256 1 1
+ggquant_w
 ret
 end
 ggrun 24 13 ggcd n4 256 1 1
@@ -3114,6 +3472,7 @@ put ggnofp 0 1
 if ggbf_ok
 ggew 20 ggp5 gga1 1 gga1 1
 ggf2b ggp5 gga1 0 gga1 38
+ggquant_w
 end
 while lt get og 41 en bound 999999
 s = get og 41
@@ -3171,6 +3530,7 @@ put ggnofp 0 1
 if ggbf_ok
 ggew 20 ggp5 gga1 1 gga1 1
 ggf2b ggp5 gga1 0 gga1 38
+ggquant_w
 end
 ls = 0.0f64
 for i ulong nn
