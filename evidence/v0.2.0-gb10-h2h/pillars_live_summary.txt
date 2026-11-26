@@ -1,0 +1,604 @@
+=== W2 1. verify-om.sh ===
+=== Omega Helix Pure-Omega Zero-Python Gate (Linux aarch64) ===
+=== 1. Adam self-check (adamck) ===
+=== 2. Initialize tiny byte model (V=256, T=16, D=16, H=2, F=32, L=2, B=4) ===
+=== 3. Finite-difference gradient check (gcheck) ===
+=== 4. Eval before training ===
+=== 5. Train 20 steps on CPU ===
+=== 6. Eval after training ===
+=== 7. Sample 48 bytes ===
+=== 8. BPE fit / encode / decode byte-exact roundtrip (V=300) ===
+BPE_ROUNDTRIP_OK
+=== 9. Bit-exact KV-cache parity check (kvcmp) ===
+=== 10. DNA Merkle Specialist Chain (growpro -> trainf -> spext -> spchainsamp) ===
+DNA_SPEC_CHAIN_OK
+=== 11. Looped-Core OLLMCK03 init & train (LP=1, LC=2, NP=2) ===
+QUICKSTART_CPU_OK
+=== 9. Pure-Omega 8-Pillar + 4 Byte-Traceability Locks (zero Python) ===
+OMG_METRICS V=256 V_BASE=4096 LOGIT_REDUCTION=16x CE_TABLE_BYTES_V256=2048 CE_TABLE_BYTES_V4096=32768
+OMG_SELFTEST PASS samples=200 sem_id=50c566e6a8ae10b7 ntok=47 src_bytes=204
+ARBORIS_SELFTEST PASS
+PASS I1 3cac000000000000 0
+PASS G1 3e27231de9063d01 512
+PASS I2 3cac000000000000 0
+PASS G2 3e33bc5fdc800000 5
+PASS TR 4006ffdaa1b8a2b4 1
+PASS Q32 0 8
+PASS DETBWD 0 2064
+BTLOCK_OK
+=== 10. Unified 8-Pillar Loop (omg pack/decode/samp -> omc, arboris guide -> omc, rev train) ===
+=== 11. Spiral-2048 Pure-Omega Razor MoE (OLLMSP02 spcryst W4/f64 -> spweval -> spsamp -> 1-bit tamper rc=61) ===
+SPWEVAL 2 2 4 5522000 5518530 7961556
+SPIRAL_WEAVE_OM_PASS
+=== 12. Full-APU Simultaneous Co-Execution Fabric (apuweave -> W4 OLLMSP02 -> spweval + 1-bit tamper rc=61) ===
+APU_WAVE 1 1 6 0 1 0 0
+APU_WAVE 2 1 6 0 2 0 0
+APU_STRAND 1 128 5531849 5526338 5537074 5535158 528 6 8 0 61 819
+APU_STRAND 2 128 5531849 5527171 5537074 5535929 528 6 8 0 61 819
+APU_SUMMARY 2 4 24 13 18 83333 1291 1056 5537074 5535543 1531 2 0
+APU_OVERLAP 24 13 23 18 1500 1291
+SPWEVAL 2 2 4 5522000 5516837 7959113
+APU_WEAVE_OM_PASS
+OMEGA_HELIX_PURE_OM_PASS
+=== W2 2. verify.sh ===
+=== Omega Helix Independent Verification (Linux aarch64) ===
+--- 1. Build native CPU, universal zero-cap engine, interchange & OpenWALDO ingestor ---
+STATIC_ELF_ZERO_CUDA_OK
+--- 2. End-to-end CPU smoke suite (adamck, gcheck, train, eval, BPE, kvcmp, DNA, loop) ---
+=== 1. Adam self-check (adamck) ===
+=== 2. Initialize tiny byte model (V=256, T=16, D=16, H=2, F=32, L=2, B=4) ===
+=== 3. Finite-difference gradient check (gcheck) ===
+=== 4. Eval before training ===
+=== 5. Train 20 steps on CPU ===
+=== 6. Eval after training ===
+=== 7. Sample 48 bytes ===
+=== 8. BPE fit / encode / decode byte-exact roundtrip (V=300) ===
+BPE_ROUNDTRIP_OK
+=== 9. Bit-exact KV-cache parity check (kvcmp) ===
+=== 10. DNA Merkle Specialist Chain (growpro -> trainf -> spext -> spchainsamp) ===
+DNA_SPEC_CHAIN_OK
+=== 11. Looped-Core OLLMCK03 init & train (LP=1, LC=2, NP=2) ===
+QUICKSTART_CPU_OK
+--- 3. Python f64 referee oracle selftests & binary cross-checks ---
+PASS fnv1a64(b'') = cbf29ce484222325
+PASS fnv1a64(b'a') = af63dc4c8601ec8c
+PASS fnv1a64(b'foobar') = 85944171f73967e8
+PASS fnv1a64(b'OLLMCK01') = 29c48bb36358f164
+PASS splitmix64(0) = e220a8397b1dcdaf
+PASS splitmix64(1) = 910a2dec89025cc1
+PASS splitmix64(18446744073709551615) = e4d971771b652c20
+PASS splitmix64(42) = bdd732262feb6e95
+PASS batch offset KAT 533
+PASS init draw KAT S=42 i=5
+PASS small P = 8400
+PASS v0 P = 119104
+PASS init value i=5
+PASS checkpoint round trip
+PASS hash mismatch refused
+PASS loss finite 6.246743
+PASS grad wte    [3834] analytic -4.5680498908e-04 numeric -4.5680503824e-04 relerr 1.08e-07
+PASS grad wte    [3549] analytic -1.0531652888e-03 numeric -1.0531652883e-03 relerr 4.63e-10
+PASS grad wte    [816] analytic -2.3987618636e-03 numeric -2.3987618114e-03 relerr 2.18e-08
+PASS grad wte    [3521] analytic -4.3759780164e-02 numeric -4.3759780199e-02 relerr 8.04e-10
+PASS grad wpe    [11] analytic -5.9517326888e-03 numeric -5.9517326623e-03 relerr 4.45e-09
+PASS grad wpe    [124] analytic 1.5111830344e-01 numeric 1.5111830356e-01 relerr 7.62e-10
+PASS grad wpe    [72] analytic -3.9166849203e-02 numeric -3.9166849186e-02 relerr 4.40e-10
+PASS grad g1.0   [3] analytic -2.4856611241e-02 numeric -2.4856611258e-02 relerr 6.81e-10
+PASS grad g1.0   [4] analytic 2.5982101718e-02 numeric 2.5982101715e-02 relerr 1.15e-10
+PASS grad g1.0   [13] analytic 8.2433990622e-02 numeric 8.2433990611e-02 relerr 1.34e-10
+PASS grad wq.0   [46] analytic -2.8775402498e-03 numeric -2.8775402061e-03 relerr 1.52e-08
+PASS grad wq.0   [230] analytic 3.5250311719e-02 numeric 3.5250311647e-02 relerr 2.03e-09
+PASS grad wq.0   [26] analytic -1.1610702702e-02 numeric -1.1610702710e-02 relerr 7.20e-10
+PASS grad wk.0   [57] analytic 1.8258121047e-02 numeric 1.8258121059e-02 relerr 6.80e-10
+PASS grad wk.0   [178] analytic 1.7242380858e-02 numeric 1.7242380856e-02 relerr 9.68e-11
+PASS grad wk.0   [24] analytic -1.2878796622e-03 numeric -1.2878796696e-03 relerr 5.76e-09
+PASS grad wv.0   [88] analytic -9.1024208247e-03 numeric -9.1024208615e-03 relerr 4.04e-09
+PASS grad wv.0   [110] analytic -7.4551017814e-03 numeric -7.4551017804e-03 relerr 1.42e-10
+PASS grad wv.0   [249] analytic -7.5640888527e-02 numeric -7.5640888486e-02 relerr 5.39e-10
+PASS grad wo.0   [240] analytic -4.8012022259e-02 numeric -4.8012022225e-02 relerr 7.18e-10
+PASS grad wo.0   [137] analytic 2.7419393520e-02 numeric 2.7419393422e-02 relerr 3.57e-09
+PASS grad wo.0   [90] analytic -1.7518288124e-02 numeric -1.7518288153e-02 relerr 1.67e-09
+PASS grad g2.0   [11] analytic -7.5041881865e-02 numeric -7.5041881864e-02 relerr 8.77e-12
+PASS grad g2.0   [2] analytic -8.7323551002e-02 numeric -8.7323551012e-02 relerr 1.22e-10
+PASS grad g2.0   [13] analytic -3.2535626238e-02 numeric -3.2535626193e-02 relerr 1.39e-09
+PASS grad w1.0   [244] analytic 3.0654616630e-02 numeric 3.0654616667e-02 relerr 1.20e-09
+PASS grad w1.0   [154] analytic 6.2103706444e-02 numeric 6.2103706444e-02 relerr 8.68e-12
+PASS grad w1.0   [179] analytic -5.6123551905e-02 numeric -5.6123551895e-02 relerr 1.80e-10
+PASS grad w2.0   [265] analytic 1.5887254012e-02 numeric 1.5887254001e-02 relerr 6.76e-10
+PASS grad w2.0   [119] analytic -1.6103404825e-02 numeric -1.6103404832e-02 relerr 3.93e-10
+PASS grad w2.0   [197] analytic -9.9797253282e-03 numeric -9.9797252684e-03 relerr 5.99e-09
+PASS grad g1.1   [6] analytic -2.2299245257e-02 numeric -2.2299245206e-02 relerr 2.29e-09
+PASS grad g1.1   [13] analytic 6.1500164543e-02 numeric 6.1500164561e-02 relerr 2.92e-10
+PASS grad g1.1   [1] analytic -6.3805725486e-04 numeric -6.3805729589e-04 relerr 6.43e-08
+PASS grad wq.1   [1] analytic -3.1426986295e-03 numeric -3.1426986347e-03 relerr 1.64e-09
+PASS grad wq.1   [48] analytic 1.0763595499e-02 numeric 1.0763595482e-02 relerr 1.64e-09
+PASS grad wq.1   [249] analytic 1.9190082270e-04 numeric 1.9190085077e-04 relerr 1.46e-07
+PASS grad wk.1   [194] analytic 5.6002280324e-03 numeric 5.6002280591e-03 relerr 4.76e-09
+PASS grad wk.1   [235] analytic -7.3240813302e-03 numeric -7.3240813414e-03 relerr 1.53e-09
+PASS grad wk.1   [68] analytic -1.2312486132e-02 numeric -1.2312486142e-02 relerr 8.24e-10
+PASS grad wv.1   [198] analytic 1.0660267997e-02 numeric 1.0660268046e-02 relerr 4.60e-09
+PASS grad wv.1   [252] analytic -9.2161341405e-04 numeric -9.2161345222e-04 relerr 4.14e-08
+PASS grad wv.1   [21] analytic -5.8782375605e-04 numeric -5.8782374524e-04 relerr 1.84e-08
+PASS grad wo.1   [70] analytic 3.3198445541e-03 numeric 3.3198444882e-03 relerr 1.99e-08
+PASS grad wo.1   [203] analytic -1.1907547267e-01 numeric -1.1907547264e-01 relerr 2.43e-10
+PASS grad wo.1   [163] analytic 7.1961008081e-02 numeric 7.1961007997e-02 relerr 1.17e-09
+PASS grad g2.1   [9] analytic 7.2640284829e-03 numeric 7.2640284898e-03 relerr 9.59e-10
+PASS grad g2.1   [11] analytic -1.0227873219e-02 numeric -1.0227873215e-02 relerr 3.81e-10
+PASS grad g2.1   [6] analytic 1.5961679331e-03 numeric 1.5961679090e-03 relerr 1.52e-08
+PASS grad w1.1   [270] analytic -5.2516256471e-03 numeric -5.2516256677e-03 relerr 3.91e-09
+PASS grad w1.1   [405] analytic -8.0098371703e-04 numeric -8.0098372379e-04 relerr 8.44e-09
+PASS grad w1.1   [443] analytic -7.8077144888e-03 numeric -7.8077145638e-03 relerr 9.60e-09
+PASS grad w2.1   [64] analytic -1.6410177199e-02 numeric -1.6410177173e-02 relerr 1.61e-09
+PASS grad w2.1   [377] analytic 1.8789684527e-02 numeric 1.8789684519e-02 relerr 4.09e-10
+PASS grad w2.1   [197] analytic -9.1890026525e-03 numeric -9.1890026699e-03 relerr 1.89e-09
+PASS grad gf     [5] analytic 1.1258914229e-02 numeric 1.1258914201e-02 relerr 2.53e-09
+PASS grad gf     [1] analytic 2.3590282107e-02 numeric 2.3590282172e-02 relerr 2.75e-09
+PASS grad gf     [0] analytic 9.8240787311e-02 numeric 9.8240787239e-02 relerr 7.33e-10
+PASS adam step 0 = -lr/100 * g/(|g|+eps)
+PASS clip to norm 1
+PASS prep KAT
+PASS base direct = counted
+PASS chunk rule KAT
+PASS overlapping count (a,a)=2
+PASS tie: smallest a, then smallest b
+PASS exit 28 when pairs run out
+PASS rank-order encode = sequential merges
+PASS decode(encode(text)) == text
+PASS merges round trip, prefix use
+PASS merges hash refused 26
+PASS CK02 round trip
+PASS G=2 gradient = G=1 within rtol
+PASS rc 0
+PASS stdout
+PASS TRAIN sha256 identical
+PASS HELD sha256 identical
+PASS rc 0
+PASS stdout micro values
+PASS rc 0
+PASS stdout 'I P'
+PASS params bit-identical
+PASS m, v zero
+PASS header
+PASS lr bits = 3000/1e6
+PASS whole file sha256 identical
+PASS init: rc 0
+PASS init: loss
+PASS init: OLLMGR01 header
+PASS init: gradient (rtol 1e-09)
+PASS perturbed: rc 0
+PASS perturbed: loss
+PASS perturbed: OLLMGR01 header
+PASS perturbed: gradient (rtol 1e-09)
+PASS step0-init: covers clip=True
+PASS step0-init: rc 0
+PASS step0-init: stdout
+PASS step0-init: step
+PASS step0-init: header unchanged
+PASS step0-init: params (rtol 1e-09)
+PASS step0-init: m (rtol 1e-09)
+PASS step0-init: v (rtol 1e-09)
+PASS step1-chain: covers clip=True
+PASS step1-chain: rc 0
+PASS step1-chain: stdout
+PASS step1-chain: step
+PASS step1-chain: header unchanged
+PASS step1-chain: params (rtol 1e-09)
+PASS step1-chain: m (rtol 1e-09)
+PASS step1-chain: v (rtol 1e-09)
+PASS step2-unclipped: covers clip=False
+PASS step2-unclipped: rc 0
+PASS step2-unclipped: stdout
+PASS step2-unclipped: step
+PASS step2-unclipped: header unchanged
+PASS step2-unclipped: params (rtol 1e-09)
+PASS step2-unclipped: m (rtol 1e-09)
+PASS step2-unclipped: v (rtol 1e-09)
+PASS step150-synthetic-clip: covers clip=True
+PASS step150-synthetic-clip: rc 0
+PASS step150-synthetic-clip: stdout
+PASS step150-synthetic-clip: step
+PASS step150-synthetic-clip: header unchanged
+PASS step150-synthetic-clip: params (rtol 1e-09)
+PASS step150-synthetic-clip: m (rtol 1e-09)
+PASS step150-synthetic-clip: v (rtol 1e-09)
+PASS rc 0
+PASS stdout
+--- 3b. Universal zero-cap engine oracle (llama/qwen2/qwen3/mistral/gemma/gpt/gelu/loop/u32/caps) ---
+PASS preset=llama    init=0.00e+00 gloss=0.00e+00 grad=2.75e-13 wt=5.83e-15 m=7.25e-13 v=1.98e-14 kv=0.00e+00
+PASS preset=qwen2    init=0.00e+00 gloss=0.00e+00 grad=2.54e-13 wt=1.59e-14 m=3.01e-13 v=1.56e-14 kv=0.00e+00
+PASS preset=qwen3    init=0.00e+00 gloss=1.19e-16 grad=2.45e-13 wt=3.78e-15 m=2.43e-13 v=1.69e-14 kv=0.00e+00
+PASS preset=mistral  init=0.00e+00 gloss=0.00e+00 grad=2.35e-13 wt=4.99e-14 m=5.94e-13 v=1.28e-14 kv=0.00e+00
+PASS preset=gemma    init=0.00e+00 gloss=0.00e+00 grad=3.03e-13 wt=1.64e-14 m=3.24e-13 v=1.25e-14 kv=0.00e+00
+PASS preset=gpt      init=0.00e+00 gloss=0.00e+00 grad=2.00e-13 wt=5.50e-15 m=7.47e-13 v=1.25e-14 kv=0.00e+00
+PASS preset=gelu     init=0.00e+00 gloss=0.00e+00 grad=2.38e-13 wt=1.57e-15 m=1.48e-13 v=1.43e-14 kv=0.00e+00
+PASS looped_core(LP=1,LC=1,NP=3) init=0.00e+00 train_wt=5.51e-15 twin_loss=0.00e+00 twin_grad=9.00e-15
+PASS u32_vocab(V=70000) init=0.00e+00 gloss=1.59e-16 grad=2.36e-13 wt=8.78e-13
+PASS past_old_caps(V=8192,T=320,D=288,L=20) P=9986400 init=0.00e+00 eval_loss=9.073623
+PASS negative_controls checks=14 (corrupt_fnv1a, truncated, bad_flags, bad_magic, bad_loop, bad_tok)
+--- 3c. Safetensors / GGUF v3 / CK01-03 upgrade interchange suite ---
+test_gemma (__main__.T00OracleSelfCheck.test_gemma) ... ok
+test_llama_tied (__main__.T00OracleSelfCheck.test_llama_tied) ... ok
+test_qwen3_untied_u16 (__main__.T00OracleSelfCheck.test_qwen3_untied_u16) ... ok
+test_default_T (__main__.T10Import.test_default_T) ... ok
+test_dtypes (__main__.T10Import.test_dtypes) ... ok
+test_explicit_args (__main__.T10Import.test_explicit_args) ... ok
+test_gemma_parity (__main__.T10Import.test_gemma_parity) ... ok
+test_ignored_and_zero_bias_tensors (__main__.T10Import.test_ignored_and_zero_bias_tensors) ... ok
+test_llama_parity (__main__.T10Import.test_llama_parity) ... ok
+test_llama_untied_bf16_parity (__main__.T10Import.test_llama_untied_bf16_parity) ... ok
+test_mistral_parity (__main__.T10Import.test_mistral_parity) ... ok
+test_mixed_dtypes (__main__.T10Import.test_mixed_dtypes) ... ok
+test_optional_fields_defaults (__main__.T10Import.test_optional_fields_defaults) ... ok
+test_qwen2_parity (__main__.T10Import.test_qwen2_parity) ... ok
+test_qwen3_parity (__main__.T10Import.test_qwen3_parity) ... ok
+test_qwen3_tied_parity (__main__.T10Import.test_qwen3_tied_parity) ... ok
+test_reordered_tensors_and_no_metadata (__main__.T10Import.test_reordered_tensors_and_no_metadata) ... ok
+test_default_dtype_is_f32 (__main__.T20ExportHF.test_default_dtype_is_f32) ... ok
+test_gemma_roundtrip (__main__.T20ExportHF.test_gemma_roundtrip) ... ok
+test_helix_gelu_rope_qkn_untied (__main__.T20ExportHF.test_helix_gelu_rope_qkn_untied) ... ok
+test_helix_gpt_loop (__main__.T20ExportHF.test_helix_gpt_loop) ... ok
+test_helix_rope_relu (__main__.T20ExportHF.test_helix_rope_relu) ... ok
+test_helix_swiglu_wpe_untied (__main__.T20ExportHF.test_helix_swiglu_wpe_untied) ... ok
+test_llama_preset_with_loop_is_helix (__main__.T20ExportHF.test_llama_preset_with_loop_is_helix) ... ok
+test_llama_roundtrip (__main__.T20ExportHF.test_llama_roundtrip) ... ok
+test_qwen3_roundtrip (__main__.T20ExportHF.test_qwen3_roundtrip) ... ok
+test_tied_gemma_preset_is_helix (__main__.T20ExportHF.test_tied_gemma_preset_is_helix) ... ok
+test_univ_llama_preset_is_llama (__main__.T20ExportHF.test_univ_llama_preset_is_llama) ... ok
+test_univ_qwen3_preset_is_qwen3 (__main__.T20ExportHF.test_univ_qwen3_preset_is_qwen3) ... ok
+test_gemma (__main__.T30GGUF.test_gemma) ... ok
+test_helix_loop_wpe (__main__.T30GGUF.test_helix_loop_wpe) ... ok
+test_helix_untied_swiglu (__main__.T30GGUF.test_helix_untied_swiglu) ... ok
+test_llama_tied (__main__.T30GGUF.test_llama_tied) ... ok
+test_llama_untied_permute (__main__.T30GGUF.test_llama_untied_permute) ... ok
+test_qwen3 (__main__.T30GGUF.test_qwen3) ... ok
+test_ck01 (__main__.T40Upgrade.test_ck01) ... ok
+test_ck02 (__main__.T40Upgrade.test_ck02) ... ok
+test_ck03_loop (__main__.T40Upgrade.test_ck03_loop) ... ok
+test_continued_training_ck01 (__main__.T40Upgrade.test_continued_training_ck01) ... ok
+test_continued_training_ck03_loop (__main__.T40Upgrade.test_continued_training_ck03_loop) ... ok
+test_upgrade_refusals (__main__.T40Upgrade.test_upgrade_refusals) ... ok
+test_upgraded_trains_in_univ (__main__.T40Upgrade.test_upgraded_trains_in_univ) ... ok
+test_ck_refusals (__main__.T50Refusals.test_ck_refusals) ... ok
+test_config_81 (__main__.T50Refusals.test_config_81) ... ok
+test_geometry_88 (__main__.T50Refusals.test_geometry_88) ... ok
+test_header_83 (__main__.T50Refusals.test_header_83) ... ok
+test_helix_tie_mismatch_81 (__main__.T50Refusals.test_helix_tie_mismatch_81) ... ok
+test_io_70 (__main__.T50Refusals.test_io_70) ... ok
+test_json_80 (__main__.T50Refusals.test_json_80) ... ok
+test_nonfinite_86 (__main__.T50Refusals.test_nonfinite_86) ... ok
+test_positive_control (__main__.T50Refusals.test_positive_control) ... ok
+test_shape_85 (__main__.T50Refusals.test_shape_85) ... ok
+test_tensor_84 (__main__.T50Refusals.test_tensor_84) ... ok
+test_truncated_87 (__main__.T50Refusals.test_truncated_87) ... ok
+test_unsupported_82 (__main__.T50Refusals.test_unsupported_82) ... ok
+test_usage_2 (__main__.T50Refusals.test_usage_2) ... ok
+Ran 56 tests in 3.345s
+OK
+--- 3d. Adaptive looped core (per-token exit & inter-pass messages) suite ---
+PASS build TARGET=aarch64
+PASS build TARGET=aarch64 (serve.om with adaptive-loop fields compiles)
+PASS line count native/model.om = 2189
+PASS line count native/cli.om = 1683
+PASS line count native/serve.om = 3620
+PASS adapteval 0 0 == eval bits (lp.ck)
+PASS adapteval 0 0 == eval bits (flat.ck)
+PASS adapteval 0 0: every row runs all NP passes
+PASS pass-0 deltas measured (650454 .. 1570819 micro)
+PASS thresh 1110636: heterogeneous per-token exit depths AH [180, 76, 0]
+PASS thresh > 0 changes the loss (5502312 vs 5493495)
+PASS thresh above every delta: all rows exit after pass 1
+PASS messages deterministic (two runs byte-identical)
+PASS messages flow (norm 218 milli) and change the loss
+PASS messages leave pass 0 untouched and no row exits at thresh 0
+PASS exit+messages deterministic
+PASS adaptcmp thresh 0 gain 0: 0 logit diff, 0 telemetry diff
+PASS adaptcmp thresh 1143922 gain 0: 0 logit diff, 0 telemetry diff
+PASS adaptcmp thresh 0 gain 300000: 0 logit diff, 0 telemetry diff
+PASS adaptcmp thresh 1143922 gain 300000: 0 logit diff, 0 telemetry diff
+PASS adaptcmp crosses the context limit with mixed exit passes ['1', '2']
+PASS windowed bank layout: adapteval bits equal
+PASS windowed bank layout: adaptcmp 0 diff
+PASS mutant x caught by adaptcmp (exit 43, ['40', '12000', '40'])
+PASS mutant x at thresh 0 gain 0: logits unchanged, missing telemetry caught (['40', '0', '40'])
+PASS adaptsamp deterministic
+PASS adaptsamp 0 0 greedy tokens == kvcmp's
+PASS adapteval usage exit 2
+PASS adaptcmp usage exit 2
+PASS adaptcmp V = 256 exit 2
+PASS adaptive-loop 30 passed 0 failed
+--- 3e. 8-Pillar Post-Tensor Runtime (SM121 SASS/Megakernel, Reversible, Rings/Arboris, Evo-JIT, Closed-Form SP, OMG) ---
+PASS compile_gb10_om2_elf
+PASS compile_full_gb10_chain_with_gt
+PASS compile_host_linux_om2
+PASS gt_selftest_and_oracle_exec
+PASS gtcode_slots_len
+PASS pack_tern_2bit_parity
+PASS pack_tern_5trit_base3_parity
+PASS lut_gemm_4bit_parity
+PASS tern_gemm_unscaled_parity
+PASS tern_gemm_ue4m3_scaled_parity
+PASS warp_compaction_prefix_sum_parity
+PASS slot0_aligned_32_mult8
+PASS slot0_exit_bra_tail
+PASS slot1_aligned_32_mult8
+PASS slot1_exit_bra_tail
+PASS slot2_aligned_32_mult8
+PASS slot2_exit_bra_tail
+PASS nvdisasm_sm121_slot0
+PASS nvdisasm_gpr_headroom_slot0
+PASS nvdisasm_slot0_lut_gemm_zero_mul
+PASS nvdisasm_sm121_slot1
+PASS nvdisasm_gpr_headroom_slot1
+PASS nvdisasm_slot1_tern_gemm_zero_mul
+PASS nvdisasm_sm121_slot2
+PASS nvdisasm_gpr_headroom_slot2
+PASS nvdisasm_slot2_has_LOP3.LUT
+PASS nvdisasm_slot2_has_PRMT
+PASS nvdisasm_slot2_has_SHFL.BFLY
+PASS nvdisasm_slot2_has_SHFL.UP
+PASS nvdisasm_slot2_has_SHFL.IDX
+PASS nvdisasm_slot2_has_VOTE.ANY
+PASS nvdisasm_slot2_has_POPC
+PASS nvdisasm_slot2_has_F2FP.SATFINITE.E4M3
+PASS nvdisasm_slot2_has_F2FP.SATFINITE.E2M1
+PASS nvdisasm_slot2_has_OMMA.SF.16864
+PASS nvdisasm_slot2_has_MEMBAR.SC.SYS
+SUMMARY: passed=36 failed=0
+PASS compile_gb10_full (rc=0 bytes=1581312 )
+PASS compile_gb10_noserve (rc=0 bytes=1338532 )
+PASS compile          gb10_om2=213188B
+PASS selftest+mode0   ['gb10_om2'] passed built-in self-tests (incl. Q32 & DETBWD)
+PASS q32_lock4        fp32_dropped=True q30_inv_bits=0 model_q32_inv=0.00e+00 loss=3.4696 ck4_flags=403
+PASS gpt_relu_rev       inv=1.11e-16 py_inv=6.94e-17 grad_eq=1.94e-16 fd=5.36e-10 loss=3.3971->3.0706 act_bytes=0 ck4_flags=128
+PASS llama_rope_gqa     inv=8.33e-17 py_inv=2.78e-17 grad_eq=1.11e-16 fd=5.16e-10 loss=3.3813->3.1239 act_bytes=0 ck4_flags=147
+PASS qwen3_looped_np3   inv=1.67e-16 py_inv=2.22e-16 grad_eq=5.55e-16 fd=7.42e-10 loss=3.5878->3.1286 act_bytes=0 ck4_flags=159
+PASS gelu_rev           inv=5.55e-17 py_inv=5.55e-17 grad_eq=8.33e-17 fd=5.14e-10 loss=3.1946->2.9019 act_bytes=0 ck4_flags=160
+PASS geglu_rope_rev     inv=5.55e-17 py_inv=2.78e-17 grad_eq=1.11e-16 fd=5.12e-10 loss=3.1069->2.8750 act_bytes=0 ck4_flags=209
+ALL PILLAR 2 REVERSIBLE CHECKS PASSED
+PASS compile ring.om gb10 om2 (ELF)
+PASS compile arboris.om gb10 om2 (ELF)
+PASS compile context.om + ring.om nvalloc(..., false) gb10 om2 (ELF)
+PASS full stack + arboris.om + ring.om collision-free gb10 om2
+PASS ring header & layout valid
+PASS ring GB10 nvalloc cached=false enforced
+PASS ring total bytes page-aligned (270336)
+PASS ring head/tail 128B cacheline padded
+PASS ring GPU descriptor VA offset exact
+PASS ring GPU payload VA offset exact
+PASS ring fill 64 slots lock-free
+PASS ring full backpressure returns -1
+PASS ring 200-ticket wrap-around bit-exact
+PASS ring FNV-1a-64 negative control fails closed on 1-bit flip
+PASS Grace worker: BPE/batch packing bit-exact
+PASS Grace worker: OLLMDK01 mask & push
+PASS Grace worker: OLLMDK01 f64 & FD oracle parity (max_err=2.78e-17, fd_err=1.63e-10)
+PASS Grace worker: OLLMDK01 qsum > 1.0001 rejected fail-closed
+PASS Grace worker: f64 spot-check passes valid f32 output
+PASS Grace worker: f64 spot-check fails closed on perturbed output
+PASS Grace worker: async AdamW f64 master-weight update parity (max_err=3.47e-18)
+PASS Lock 2: grg_epoch_selftest returns 0
+PASS Lock 2: grg_epoch_init sets epoch=0, gpu_bank=0, cpu_bank=1, active=0, fault=0
+PASS Lock 2: mid-step Grace staging leaves GPU active bank bit-identical
+PASS Lock 2 negative control: mid-step active-bank mutation rejected with -8 / RING_ERR_EPOCH_VIOLATION (6)
+PASS Lock 2 negative control: mid-step commit rejected with -8 / RING_ERR_EPOCH_VIOLATION (6), epoch unchanged
+PASS Lock 2 negative control: out-of-bounds stage/guarded bank write rejected with -3
+PASS Lock 2: step-boundary commit flips epoch 0->1 and GPU reads exact staged + untouched weights
+PASS Lock 2: epoch 1->2 preserves prior epoch weights alongside newly staged deltas
+PASS Arboris associative put/probe deterministic recall
+PASS Arboris ambiguous n-gram auto-demoted (never falsely bypassed)
+PASS Arboris 1 us CPU probe speed (40.2 ns/probe <= 1000 ns)
+PASS Arboris sequence bypass exactness & contested routing
+PASS spclip JSD disagreement oracle match (om=327, ref=327)
+PASS arboris_compact_mask multi-warp ballot & dense active index list exact
+PASS arboris_compact_mask Layer 0/1/2 early-exit vs spclip-contested routing
+PASS OMG subgraph spreading-activation recall (tok=77, act=7300)
+PASS 3-layer guided decoding: OMG mask wall blocks illegal tok 99 + Arboris bias picks 77 without LTP0
+PASS 3-layer guided decoding: low activation or spclip disagreement triggers LTP0=1
+PASS Hippocampus->Cortex sleep trace export filters by utility and preserves OMG stream
+SUMMARY: 40 passed, 0 failed
+PASS compile_gb10_om2
+PASS runtime_exit_0
+PASS sha256_abc_exact
+PASS init_buf_A
+PASS tick_g6_pass
+PASS tick_g6_atomic_flip_A_to_B
+PASS g6_zero_swaps
+PASS g6_yields_tuned
+PASS g6_yield1_on_ffma_i2f_mufu
+PASS g6_preserves_i2f_stall
+PASS g6_compacts_wait_nop_stall
+PASS tick_g1_flip_B_to_A
+PASS g1_predator_safe_swaps
+PASS g1_compacts_total_stalls
+PASS tick_g2_mitosis_flip_A_to_B
+PASS g2_mitosis_yields_tuned
+PASS tick_g5_trickster_flip_B_to_A
+PASS parity_gate_catches_corrupted_buf
+PASS antibody_1_digest_spoof
+PASS antibody_2_non_bijection
+PASS antibody_3_opcode_smuggle
+PASS antibody_4_anchor_escape
+PASS antibody_5_dep_inversion
+PASS antibody_6_scoreboard_hazard
+PASS antibody_7_length_mismatch
+PASS antibody_8_p0_sig_smuggle
+PASS antibody_9_trailing_bytes
+PASS antibody_10_misaligned_qmd
+PASS antibody_11_zero_gen_cap
+PASS antibody_12_illegal_opcode
+PASS antibody_13_bb_leader_pc0
+PASS antibody_13_bb_leader_bra_target
+PASS antibody_13_bb_leader_bra_fallthrough
+PASS antibody_14_6_cycle_alu_floor_unconditional
+PASS antibody_15_i2f_fixed_latency_shave
+PASS flat_bssy_accepted
+PASS nested_bssy_rejected
+PASS gpr_ceiling_64reg_r62_rejected
+PASS gpr_ceiling_128reg_r126_rejected
+PASS gpr_ceiling_128reg_r125_accepted
+PASS egp2_structural_proof_k0
+PASS egp2_structural_proof_k1
+PASS egp2_neg_unsound_rule_99_rejected
+PASS egp2_neg_structural_spoof_rejected
+PASS lock3_pure_om_selftest
+PASS lock3_receipt_count_0_to_4
+PASS lock3_receipt_step_and_genome_log
+PASS lock3_final_words_len
+PASS lock3_receipt_sha256_matches_python
+PASS lock3_reset_for_replay_preserves_receipts
+PASS lock3_replay_steps_0_to_3_ok
+PASS lock3_replay_bit_exact_buffer_and_parity
+PASS lock3_replay_non_promotion_step_4_no_swap
+PASS lock3_1bit_sha_tamper_rejected_err_20
+PASS lock3_out_of_order_replay_rejected_err_21
+SUMMARY: passed=55 failed=0
+PASS compile_target_gb10_om2 (1581312 B)
+PASS cold_store_zero_model_and_dynamic_grow (rc=0)
+PASS cold_store_oob_read_traps_103 (rc=103)
+PASS cold_store_oob_write_traps_103 (rc=103)
+PASS ridge_primal_d_le_n (regime=0, max_err=2.776e-16)
+PASS ridge_woodbury_n_lt_d (regime=1, max_err=7.772e-16)
+PASS ridge_primal_woodbury_parity (max_err=9.659e-15)
+PASS gauss_newton_primal (regime=0, max_err=1.554e-15, ce=1.668522->0.789093)
+PASS gauss_newton_woodbury (regime=1, max_err=2.998e-15, ce=1.256943->0.041773)
+PASS spforge_fcachem_primal (N=72, regime=0, loss=5541841->5260762 unats, 74.21ms)
+PASS ollm_spapp_eval_speval_parity (base=5541557 -> spec=5310000 (speval=5310000))
+PASS spforge_vs_backprop_speed_and_loss (spforge=74.21ms (loss=5310000) vs trainfc_B12_30steps=82.22ms (loss=5225460))
+PASS spforge_fcachem_woodbury (N=18, regime=1, loss=5542131->5238096 unats)
+PASS spforge_spchainapp_multilink (L1->L2=5310000 -> L2->L3=5260214)
+PASS spforge_consolidate_traces_bit_identical (SPCONSOL 1 5542131 5238096)
+PASS neg_control_tampered_sp_rc61 (rc=61)
+PASS neg_control_truncated_sp_rc60 (rc=60)
+PASS neg_control_mismatch_base_rc62 (spapp=62, spforge=62)
+SUMMARY: 18 passed, 0 failed
+test_01_cross_target_gb10_elf_and_macos (__main__.TestOmgGraph.test_01_cross_target_gb10_elf_and_macos) ... ok
+test_02_builtin_selftest_and_metrics (__main__.TestOmgGraph.test_02_builtin_selftest_and_metrics) ... ok
+test_03_alpha_equivalence_and_semantic_id_separation (__main__.TestOmgGraph.test_03_alpha_equivalence_and_semantic_id_separation) ... ok
+test_04_roundtrip_om_omg_om_compile_and_execute_parity (__main__.TestOmgGraph.test_04_roundtrip_om_omg_om_compile_and_execute_parity) ... ok
+test_05_1000_masked_samples_and_mutant_rejection (__main__.TestOmgGraph.test_05_1000_masked_samples_and_mutant_rejection) ... ok
+test_06_macro_mask_gating_and_expansion (__main__.TestOmgGraph.test_06_macro_mask_gating_and_expansion) ... ok
+test_07_omgc_binary_corpus_and_compression_ab (__main__.TestOmgGraph.test_07_omgc_binary_corpus_and_compression_ab) ... ok
+Ran 7 tests in 0.204s
+OK
+--- 4. OpenWALDO dataset verifier, pure-Omega ingestor, multi-arch backend & BOM ---
+test_bpe_tokenizer_end_to_end (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_bpe_tokenizer_end_to_end) ... ok
+test_cli_flags_and_spec_json (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_cli_flags_and_spec_json) ... ok
+test_deterministic_retrain_same_checkpoint (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_deterministic_retrain_same_checkpoint) ... ok
+test_end_to_end_all_architectures (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_end_to_end_all_architectures) ... ok
+test_hf_import_and_export_plumbing_with_stub_interchange (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_hf_import_and_export_plumbing_with_stub_interchange) ... ok
+test_interchange_exports_and_hf_import (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_interchange_exports_and_hf_import) ... ok
+test_looped_core_and_custom_flags (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_looped_core_and_custom_flags) ... ok
+test_refuses_bad_record_hash_and_missing_export (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_refuses_bad_record_hash_and_missing_export) ... ok
+test_refuses_corpus_smaller_than_context (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_refuses_corpus_smaller_than_context) ... ok
+test_refuses_engine_geometry_refusal (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_refuses_engine_geometry_refusal) ... ok
+test_refuses_failed_prior_state_is_cleared (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_refuses_failed_prior_state_is_cleared) ... ok
+test_refuses_missing_or_bad_binaries (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_refuses_missing_or_bad_binaries) ... ok
+test_refuses_native_format_export (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_refuses_native_format_export) ... ok
+test_refuses_tampered_dataset (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_refuses_tampered_dataset) ... ok
+test_u16_widened_byte_tokens_and_u32_vocab (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_u16_widened_byte_tokens_and_u32_vocab) ... ok
+test_cli_invalid_spec_rc1 (test_openwaldo_bridge.OpenWaldoBackendSpecTests.test_cli_invalid_spec_rc1) ... ERROR[spec]: D=30 must be divisible by H=4
+test_every_preset_validates (test_openwaldo_bridge.OpenWaldoBackendSpecTests.test_every_preset_validates) ... ok
+test_refusals (test_openwaldo_bridge.OpenWaldoBackendSpecTests.test_refusals) ... ok
+test_valid_defaults (test_openwaldo_bridge.OpenWaldoBackendSpecTests.test_valid_defaults) ... ok
+test_end_to_end_pure_omega_ingestor_and_controls (test_openwaldo_bridge.OpenWaldoBridgeTests.test_end_to_end_pure_omega_ingestor_and_controls) ... M 280 19 99 567
+test_refuse_path_traversal (test_openwaldo_bridge.OpenWaldoBridgeTests.test_refuse_path_traversal) ... ok
+test_refuse_tampered_record_text_hash (test_openwaldo_bridge.OpenWaldoBridgeTests.test_refuse_tampered_record_text_hash) ... ok
+test_refuse_tampered_shard_file (test_openwaldo_bridge.OpenWaldoBridgeTests.test_refuse_tampered_shard_file) ... ok
+test_refuse_unsupported_kind (test_openwaldo_bridge.OpenWaldoBridgeTests.test_refuse_unsupported_kind) ... ok
+test_verify_valid_export (test_openwaldo_bridge.OpenWaldoBridgeTests.test_verify_valid_export) ... ok
+Ran 25 tests in 9.201s
+OK
+OPENWALDO_BACKEND_OK arch=gemma tokenizer=byte vocab=256 steps=8 held_loss_before=5.548959 held_loss_after=5.543486 ck_sha256=ac989dcc0726031f25cb563971c03adde60e6f75b4db2e2690b01f81a7c16ebf bom=/tmp/tmppyiet5_v/cli-spec/openwaldo-helix-bom.json
+OPENWALDO_PREPARE_OK bom=/tmp/tmpn50701ok/prepared/openwaldo-helix-bom.json W 10 9 1 567 86
+OPENWALDO_BIND_OK bom=/tmp/tmpn50701ok/prepared/openwaldo-helix-bom.json magic=OLLMCK02 step=2 sha256=52011b73a12d379470d52b9bc2a4ac6750881a5f8352c1ca411b07c32b07453f
+--- 4b. Omega Helix Studio, OpenWALDO catalog, installer CLI & SSE forge suite ---
+test_catalog_load_search_and_spdx_normalization (test_studio.StudioTestCase.test_catalog_load_search_and_spdx_normalization) ... ok
+test_cli_doctor_and_catalog_json (test_studio.StudioTestCase.test_cli_doctor_and_catalog_json) ... ok
+test_eight_pillar_runtime_api_and_cli (test_studio.StudioTestCase.test_eight_pillar_runtime_api_and_cli) ... ok
+test_estimate_chain_120m_multi_strand_dna_bf16 (test_studio.StudioTestCase.test_estimate_chain_120m_multi_strand_dna_bf16) ... ok
+test_estimate_chain_exact_params_and_validation (test_studio.StudioTestCase.test_estimate_chain_exact_params_and_validation) ... ok
+test_full_dna_merkle_chain_forge_and_spclip_sample (test_studio.StudioTestCase.test_full_dna_merkle_chain_forge_and_spclip_sample) ... ok
+test_full_universal_qwen3_chain_forge_and_sample (test_studio.StudioTestCase.test_full_universal_qwen3_chain_forge_and_sample) ... ok
+test_http_server_api_sse_and_sample (test_studio.StudioTestCase.test_http_server_api_sse_and_sample) ... ok
+test_materialize_waldo_without_cli_returns_guidance (test_studio.StudioTestCase.test_materialize_waldo_without_cli_returns_guidance) ... ok
+test_orca_ssh_remote_pairing_and_ui_routes (test_studio.StudioTestCase.test_orca_ssh_remote_pairing_and_ui_routes) ... ok
+test_prepare_local_dataset_preset_and_folder_verified_by_ollm_waldo (test_studio.StudioTestCase.test_prepare_local_dataset_preset_and_folder_verified_by_ollm_waldo) ... ok
+test_spiral_weave_plan_presets_pillars_and_api (test_studio.StudioTestCase.test_spiral_weave_plan_presets_pillars_and_api) ... ok
+Ran 12 tests in 3.368s
+OK
+--- 4c. Sovereign Distillation Pipeline Network (OLLMDK01, verifiers, teachers, Studio API, CLI) ---
+test_harvest_formats_dedup_and_openwaldo_export (test_distill.TestDistillationSuite.test_harvest_formats_dedup_and_openwaldo_export) ... ok
+test_ollmdk01_emit_dcheck_dtrain_and_partial_mask (test_distill.TestDistillationSuite.test_ollmdk01_emit_dcheck_dtrain_and_partial_mask) ... ok
+test_ollmdk01_negative_controls (test_distill.TestDistillationSuite.test_ollmdk01_negative_controls) ... ok
+test_pipeline_all_three_modes (test_distill.TestDistillationSuite.test_pipeline_all_three_modes) ... ok
+test_studio_distill_http_sse_and_cli (test_distill.TestDistillationSuite.test_studio_distill_http_sse_and_cli) ... ok
+test_teachers_mock_openai_router_and_probe (test_distill.TestDistillationSuite.test_teachers_mock_openai_router_and_probe) ... ok
+test_verifiers_and_real_omc_compile (test_distill.TestDistillationSuite.test_verifiers_and_real_omc_compile) ... ok
+Ran 7 tests in 1.539s
+OK
+--- 4d. Sovereign Runtime Firewalls, Grammar Decoding, Sleep Cycle, Compile-Until-Green & HF Demo ---
+test_anti_dna_spclip_and_spguard_ltp0_receipts (test_runtime.TestSovereignRuntimePhase7.test_anti_dna_spclip_and_spguard_ltp0_receipts) ... ok
+test_compile_until_green_retry_and_crystallize (test_runtime.TestSovereignRuntimePhase7.test_compile_until_green_retry_and_crystallize) ... ok
+test_grammar_constrained_gsamp_all_modes (test_runtime.TestSovereignRuntimePhase7.test_grammar_constrained_gsamp_all_modes) ... ok
+test_open_trunk_hf_to_dna_demo_http_and_cli (test_runtime.TestSovereignRuntimePhase7.test_open_trunk_hf_to_dna_demo_http_and_cli) ... ok
+test_sleep_cycle_pass_and_rollback (test_runtime.TestSovereignRuntimePhase7.test_sleep_cycle_pass_and_rollback) ... ok
+Ran 5 tests in 0.702s
+OK
+--- 4e. Sovereign Commons, Trust Audit, Memory Migration, Porting Kit, Leases & USB Bundle ---
+test_01_pkg_publish_search_install_diff_and_revoke (test_commons.SovereignCommonsTests.test_01_pkg_publish_search_install_diff_and_revoke) ... ok
+test_02_cryptographic_trust_audit (test_commons.SovereignCommonsTests.test_02_cryptographic_trust_audit) ... ok
+test_03_personal_memory_encryption_and_trunk_migration (test_commons.SovereignCommonsTests.test_03_personal_memory_encryption_and_trunk_migration) ... ok
+test_04_hardware_porting_kit_parity (test_commons.SovereignCommonsTests.test_04_hardware_porting_kit_parity) ... ok
+test_05_trustless_swarm_quorum (test_commons.SovereignCommonsTests.test_05_trustless_swarm_quorum) ... ok
+test_06_capability_lease_and_snapshot_rollback (test_commons.SovereignCommonsTests.test_06_capability_lease_and_snapshot_rollback) ... ok
+test_07_usb_bundle_cli_and_studio_endpoints (test_commons.SovereignCommonsTests.test_07_usb_bundle_cli_and_studio_endpoints) ... ok
+Ran 7 tests in 2.744s
+OK
+--- 5. Combined experiment Python controls ---
+test_disagreement (test_selection.Controls.test_disagreement) ... ok
+test_regeneration_and_abstention (test_selection.Controls.test_regeneration_and_abstention) ... ok
+test_tie_order_and_shortest (test_selection.Controls.test_tie_order_and_shortest) ... ok
+Ran 3 tests in 0.001s
+OK
+--- 6. 165-task Omega coding benchmark integrity check ---
+CHECK PASS tasks 165 inputs 122 minsep 2
+--- 7. Contrast tool build & replay ---
+contrast.om: OK
+--- 8. Controller tool build & replay ---
+controller.ck: OK
+second.ck: OK
+second-augmented.ck: OK
+PASS: controller interfaces, 160 references on three checks each, and all 560 archived returns and abstentions.
+--- 9. SM121 Blackwell SASS disassembly & GPR ceiling check (all 43 kernel slots) ---
+DUMP 70fb319934ca2357b4dc4a15703db9117494253394921df470deea1e723d08fa source_sha256 a26440223ba3c4dfea731cc5852944126a76eb263e5abaf070e706d6f0b40db9 code_sha256 80f5678d21ede54474120ad2b8de9c2eb369c57732d85e03cdc3c3507a658c19
+GPU_DISASM_OK slots=78 bad=0
+--- 10. Lean 4 proof check (tools/combined/experiment/Budget.lean) ---
+'starting_with_four' depends on axioms: [propext, Quot.sound]
+OMEGA_HELIX_VERIFY_ALL_PASS
+=== W2 3. ollm-gb10 pillar selftests ===
+GTERN_PASS
+OMG_METRICS V=256 V_BASE=4096 LOGIT_REDUCTION=16x CE_TABLE_BYTES_V256=2048 CE_TABLE_BYTES_V4096=32768
+OMG_SELFTEST PASS samples=200 sem_id=50c566e6a8ae10b7 ntok=47 src_bytes=204
+OMG_PASS
+ARBORIS_SELFTEST PASS
+ARBORIS_PASS
+PASS I1 3cac000000000000 0
+PASS G1 3e27231de9063d01 512
+PASS I2 3cac000000000000 0
+PASS G2 3e33bc5fdc800000 5
+PASS TR 4006ffdaa1b8a2b4 1
+PASS Q32 0 8
+PASS DETBWD 0 2064
+REV_PASS
+=== W2 4. Live GB10 Spiral-2048 & Full-APU apuweave ===
+test_cpu_dynamic_pool_d2048_and_loop8x4 (tests.test_gpu_spiral_gb10.TestGpuSpiralGB10.test_cpu_dynamic_pool_d2048_and_loop8x4) ... ok
+test_live_gb10_silicon_parity_and_gfcache (tests.test_gpu_spiral_gb10.TestGpuSpiralGB10.test_live_gb10_silicon_parity_and_gfcache) ... ok
+test_sm121_disasm_d2048_and_swizzle (tests.test_gpu_spiral_gb10.TestGpuSpiralGB10.test_sm121_disasm_d2048_and_swizzle) ... ok
+test_apuweave_dir_discovery_and_multiproc_linux (tests.test_apu_weave.TestApuWeave.test_apuweave_dir_discovery_and_multiproc_linux) ... ok
+test_apuweave_f64_and_three_col_list (tests.test_apu_weave.TestApuWeave.test_apuweave_f64_and_three_col_list) ... ok
+test_apuweave_gb10_live_silicon (tests.test_apu_weave.TestApuWeave.test_apuweave_gb10_live_silicon) ... ok
+test_apuweave_list_w4_interchange_and_tamper (tests.test_apu_weave.TestApuWeave.test_apuweave_list_w4_interchange_and_tamper) ... ok
+test_crystallize_w4_f64_weval_samp_and_tamper (tests.test_spiral_weave.TestSpiralWeave.test_crystallize_w4_f64_weval_samp_and_tamper) ... ok
+Ran 8 tests in 217.869s
+OK
+W2_PILLARS_ALL_PASS

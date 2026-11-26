@@ -46,9 +46,9 @@ Recorded unedited on DGX Spark GB10 (`evidence/proof-zero-cuda-gb10/{`[`transcri
 
 | Area | Status | Honest Scope, Receipts & Boundaries |
 |---|---|---|
-| **DGX Spark GB10 Silicon (`sm_121`)** | **PROVEN** | Rungs 4–10 (`85,285 tok/s` BF16 `1.204466 nats`), `Δ = 0 µnats` CPU vs. chip `geval`, 43/43 SM121 SASS disassembly guard slots (`tests/gpu-disasm.sh --all`), and raw `/dev/nvidia*` execution with empty CUDA `/proc/$PID/maps` ([`evidence/`](evidence/)). |
-| **Independent CPU & Oracle Verification** | **PROVEN** | Full `scripts/verify.sh` + zero-Python `scripts/verify-om.sh` (`adamck`, `gcheck`, `kvcmp`, `oracle.py`, `oracle_universal.py`, Safetensors/GGUF `test_interchange.py`, `test_adaptive_loop.py`, 8-pillar runtime & 4 byte-traceability locks, Studio/Distill/Runtime/Commons suites, `verify-30s.sh`) verified on Apple Silicon macOS + DGX Spark AArch64 + GitHub Actions CI (`linux-x86_64`, `linux-aarch64`, `macos-arm64`). |
-| **8-Pillar Runtime & 4 Byte-Traceability Locks** | **CPU-SIM + NVDISASM (`LIVE GPU NOT_RUN`)** | Persistent megakernel (`gm.om`), reversible Q32 core (`rev.om`), Grace/Blackwell epoch ring (`ring.om`), 1.58-bit ternary/4-bit LUT-GEMM (`gt.om`), Arboris bypass (`arboris.om`), proof-carrying Evo-JIT (`ejit.om`), closed-form `spforge` (`sp_solve.om`), and `OMG` typed program graphs (`omg.om`) pass zero-Python `scripts/verify-om.sh`, Python `f64` oracles, and `nvdisasm -b SM121` (`0` illegal insns) — see [`docs/EIGHT-PILLARS.md`](docs/EIGHT-PILLARS.md). Live GB10 hardware execution of the new GPU pillars remains `NOT_RUN`. |
+| **DGX Spark GB10 Silicon (`sm_121`)** | **PROVEN** | **`v0.2.0` (`9b66406`) Phase 1 BF16 H2H: `260,243.3 tok/s` (`62.96 ms/step`, `3.074×` over `v0.1.0`, `99.19%` of `torch.compile`), live `OMMA.SF.16864` NVFP4 (`459.09 TFLOPS`, `91.81%` peak), Full-APU `apuweave` (`gpu_mode > 0`), Spiral-2048 (`L=8×NP=4`, `D=2048`, `gfcache`), `78/78` SM121 SASS slots (`tests/gpu-disasm.sh --all`)** alongside preserved `v0.1.0` Rungs 4–10 (`85,285 tok/s` BF16 `1.204466 nats`), `Δ = 0 µnats` `geval`, and empty CUDA `/proc/$PID/maps` ([`evidence/v0.2.0-gb10-h2h/`](evidence/v0.2.0-gb10-h2h/)). |
+| **Independent CPU & Oracle Verification** | **PROVEN** | Full `scripts/verify.sh` + zero-Python `scripts/verify-om.sh` (`adamck`, `gcheck`, `kvcmp`, `oracle.py`, `oracle_universal.py`, Safetensors/GGUF `test_interchange.py`, `test_adaptive_loop.py`, 8-pillar runtime & 4 byte-traceability locks, Spiral-2048, Full-APU `apuweave`, Studio/Distill/Runtime/Commons suites, `verify-30s.sh`) verified on Apple Silicon macOS + DGX Spark AArch64 + GitHub Actions CI (`linux-x86_64`, `linux-aarch64`, `macos-arm64`). |
+| **8-Pillar Runtime & 4 Byte-Traceability Locks** | **MIXED (LIVE GB10 + CPU-SIM)** | **PROVEN LIVE ON GB10:** `OMMA.SF.16864` NVFP4 (`459.09 TFLOPS`), Full-APU `apuweave` (`gpu_mode > 0`), Spiral-2048 `gbfrag`/`gacmp`/`gbcmp2`/`gfcache` (`8/8` live tests OK), plus host/CPU pillars `rev` (Q32 `0`-bit / `DETBWD 0`), `arboris`, `spforge`, `omg`, and `gtern` (`GTERN_PASS`). **CPU-SIM + NVDISASM (`LIVE GPU NOT_RUN`):** Pillar 1 persistent megakernel (`gm.om`), Pillar 3 raw `nvalloc` GPU ring (`ring.om`), Pillar 4 ternary/4-bit LUT-GEMM launches (`gt.om`), and Pillar 6 live GPU hot-swap (`ejit.om`) — all pass `scripts/verify-om.sh` (`BTLOCK_OK`), Python `f64` oracles, and `nvdisasm -b SM121` (`0` illegal insns) — see [`docs/EIGHT-PILLARS.md`](docs/EIGHT-PILLARS.md). |
 | **QEMU-Emulated Bare-Metal Targets** | **EMULATED ONLY** | `x86efi` (QEMU + OVMF) & `a64efi` (QEMU + KVM + AAVMF) executed `.sp` DNA chains; `a64efi` also booted on physical Spark UEFI (`evidence/OMEGALLM/a64efi/dgx-spark/`). **Physical bare-metal x86 UEFI remains `NOT_RUN`.** |
 | **CPU-Only Feature Paths (`NOT_RUN` on GB10)** | **CPU ONLY (`GPU NOT_RUN`)** | Per-token adaptive loop exit & inter-pass messages (`adapteval`/`adaptsamp`/`adaptcmp`), grammar FSM `gsamp`, and `ollm spguard` JSD + anti-DNA steering run on CPU only (`docs/LOOP.md`, `docs/SOVEREIGN-RUNTIME.md`); `FREEZE_LAYERS` + fixed-`NP` looped `gtrainf`/`gtrainb` ARE proven on GB10. |
 | **Scratch 15.8M Coding-Bench Miss** | **MISSED (`0 / 159`)** | All three arms (`base`, `loop`, `deep`) trained for 6,000 steps on the small `.om` repo corpus scored **`0 of 159`** on `tools/bench/` Python/coding tasks (`docs/LOOP.md` — small scratch corpus capacity/token-budget miss). |
@@ -58,15 +58,18 @@ Recorded unedited on DGX Spark GB10 (`evidence/proof-zero-cuda-gb10/{`[`transcri
 
 ## Reproducible Head-to-Head: Omega Helix vs. PyTorch + CUDA (`15.83M` Model on DGX Spark GB10)
 
-Matched model (`V=4096, T=256, D=384, H=12, F=1536, L=8, B=64`, `15,833,472` params, RMSNorm, causal attention, ReLU MLP, tied head, BF16 + AdamW) run inside the same exclusive GB10 window ([`evidence/h2h-pytorch-gb10/README.md`](evidence/h2h-pytorch-gb10/README.md), [`tests/bench_pytorch_h2h.py`](tests/bench_pytorch_h2h.py)):
+Matched model (`V=4096, T=256, D=384, H=12, F=1536, L=8, B=64`, `15,833,472` params, RMSNorm, causal attention, ReLU MLP, tied head, BF16 + AdamW) run inside the same exclusive quiet GB10 window (`v0.2.0` Phase 1 `9b66406`: [`evidence/v0.2.0-gb10-h2h/README.md`](evidence/v0.2.0-gb10-h2h/README.md); historical `v0.1.0` ladder baseline: [`evidence/h2h-pytorch-gb10/README.md`](evidence/h2h-pytorch-gb10/README.md); harness: [`tests/bench_pytorch_h2h.py`](tests/bench_pytorch_h2h.py)):
 
-| Metric | Omega Helix (`ollm-gb10 gtrainb`) | PyTorch `2.14.0+cu130` (Eager) | PyTorch `2.14.0+cu130` (`torch.compile`) |
-|---|---:|---:|---:|
-| **Install / Binary Footprint** | **`791,988 B` (~773 KiB)** | `5,325,112,578 B` (~4.96 GiB) | `5,325,112,578 B` (~4.96 GiB) |
-| **Userspace CUDA / cuBLAS / Triton** | **0 (static ELF, `not a dynamic executable`)** | Yes (`cu130`, cuBLAS, cuDNN) | Yes (`cu130`, Triton 3.8, Inductor) |
-| **Cold Start to Step 1** | `7,258.3 ms` *(loads & saves `380 MB` `f64` ckpt)* | **`2,646.8 ms`** *(in-RAM init)* | `4,748.5 ms` *(in-RAM + compile)* |
-| **Steady-State Speed (30 steps)** | `84,646.7 tok/s` (`193.56 ms/step`) | **`130,769.2 tok/s`** (`125.29 ms`) | **`257,463.6 tok/s`** (`63.64 ms`) |
-| **Peak CUDA Alloc / Reserved** | Raw `/dev/nvidia*` UVM heaps (zero CUDA) | `2.08 GiB` / `2.21 GiB` | `1.65 GiB` / `2.21 GiB` |
+| Metric | Omega Helix `v0.1.0` (`64×64`) | Omega Helix `v0.2.0` (`9b66406` Phase 1) | PyTorch `2.14.0+cu130` (Eager) | PyTorch `2.14.0+cu130` (`torch.compile`) |
+|---|---:|---:|---:|---:|
+| **Install / Binary Footprint** | `791,988 B` (~773 KiB) | **`1,581,312 B`** (~1.51 MiB) | `5,325,112,578 B` (~4.96 GiB) | `5,325,112,578 B` (~4.96 GiB) |
+| **Userspace CUDA / cuBLAS / Triton** | **0 (static ELF)** | **0 (static ELF, `not a dynamic executable`)** | Yes (`cu130`, cuBLAS, cuDNN) | Yes (`cu130`, Triton 3.8, Inductor) |
+| **Cold Start to Step 1** | `7,258.3 ms` *(ckpt I/O)* | `7,938.7 ms` *(loads & saves `380 MB` `f64` ckpt)* | `2,030.2 ms` *(in-RAM init)* | **`1,561.1 ms`** *(in-RAM + cache)* |
+| **Steady-State Speed (30 steps)** | `84,646.7 tok/s` (`193.56 ms`) | **`260,243.3 tok/s`** (**`62.96 ms/step`**, **`3.074×` vs `v0.1.0`**) | `135,315.6 tok/s` (`121.08 ms`) | **`262,371.0 tok/s`** (`62.45 ms`) |
+| **Omega `v0.2.0` vs. Arm** | **`3.074×` faster** | `1.000×` | **`1.923×` faster** (`-58.12 ms`) | **`99.19%` parity** (`+0.51 ms`) |
+| **Peak CUDA Alloc / Reserved** | Raw `/dev/nvidia*` UVM heaps | Raw `/dev/nvidia*` UVM heaps (zero CUDA) | `2.08 GiB` / `2.21 GiB` | `1.65 GiB` / `2.21 GiB` |
+
+> **Live SM121 `OMMA.SF.16864` NVFP4 Tensor Core GEMM (`4096×4096×8192`, same Window 1):** **`459.09 TFLOPS`** (`91.81%` of GB10's 500 TF peak, 20 iters, `11.975 ms`, `PASS`) and **`455.43 TFLOPS`** (50 iters, `91.08%` peak, `PASS`), **`5.35×` faster** than PyTorch `2.14.0+cu130` cuBLAS BF16 `torch.matmul` (`85.84 TFLOPS`, `64.048 ms`). See [`evidence/v0.2.0-gb10-h2h/README.md`](evidence/v0.2.0-gb10-h2h/README.md) for the full `gprofb` launch breakdown explaining the `0.51 ms` (`0.81%`) dispatch gap vs. `torch.compile`.
 
 ---
 
@@ -99,8 +102,9 @@ Every single rung in the Omega Helix bring-up ladder — from the initial single
 | **Rung 9** | GB10 `gtrainb` (BF16 TC) | v2 `T256 D384 F1536 L8 B64` (`15.83M`) | 30,000 (491.5M) | **84,913 tok/s** | `0.19295 s` | `1.251860 nats` (`0.467002 bpb`) | [`evidence/gpu-r9/README.md`](evidence/gpu-r9/README.md) |
 | **Rung 10** | GB10 `gtrainb` (BF16 TC) | v2 `T256 D384 F1536 L8 B64` (`15.83M`) | 60,000 (983.0M) | **85,285 tok/s** | `0.19211 s` | **`1.204466 nats`** (**`0.449322 bpb`**) | [`evidence/gpu-r10/README.md`](evidence/gpu-r10/README.md) |
 | **Loop Study** | GB10 `gtrainf` (Omega src) | `base` 8L / `loop` 16-app / `deep` 16L | 6,000 (98.3M) | **66,600** / 36,300 / 35,200 tok/s | `0.246 s` (`base`) | `2.152` / `2.144` / `2.210 nats` | [`docs/LOOP.md`](docs/LOOP.md) |
+| **`v0.2.0` (`9b66406`)** | GB10 `gtrainb` (`128×128` BF16 + FA2 + `CE_BF16`) | v2 `T256 D384 F1536 L8 B64` (`15.83M`) | 30 steady (`5→35`) | **260,243 tok/s** *(3.074× vs `v0.1.0`)* | `0.06296 s` | — *(exclusive quiet H2H)* | [`evidence/v0.2.0-gb10-h2h/README.md`](evidence/v0.2.0-gb10-h2h/README.md) |
 
-*Status: EXERCISED on one NVIDIA DGX Spark (GB10, `sm_121`, non-quiet shared-machine windows). CPU f64 `eval` matches on-chip `geval` to `Δ = 0 µnats` across Rungs 6–10. Additional receipts in [`evidence/`](evidence/) cover `gpu-bf` (BF16 bring-up & fragment oracles), `v3` (16-layer / 30M bank-B host acceptance), `bf16-inference-20261113` & `bf16-combined-20261113`, `specialists` (frozen-core DNA tool-call training), `serve`, `x86`, `efi`, and bare-metal `a64efi`.*
+*Status: `v0.2.0` Phase 1 H2H (`260,243.3 tok/s` BF16 + `459.09 TFLOPS` NVFP4) and live GB10 verification (`apuweave`, Spiral-2048, `8/8` live tests) measured in exclusive `spark-window`s (`20261126T031444Z-9d174e`, `20261126T031723Z-957b70`). Historical `v0.1.0` Rungs 4–10 were EXERCISED on one NVIDIA DGX Spark (GB10, `sm_121`, non-quiet shared-machine windows); CPU f64 `eval` matches on-chip `geval` to `Δ = 0 µnats` across Rungs 6–10. Additional receipts in [`evidence/`](evidence/) cover `gpu-bf` (BF16 bring-up & fragment oracles), `v3` (16-layer / 30M bank-B host acceptance), `bf16-inference-20261113` & `bf16-combined-20261113`, `specialists` (frozen-core DNA tool-call training), `serve`, `x86`, `efi`, and bare-metal `a64efi`.*
 
 ---
 
@@ -152,7 +156,7 @@ With **`omega-helix`** installed, you can visually or via CLI:
 
 ### 1. Build Manual Targets (`scripts/build.sh`)
 ```sh
-# DGX Spark / Linux AArch64 + Blackwell GB10 GPU (85k tok/s BF16, 68k tok/s FP32)
+# DGX Spark / Linux AArch64 + Blackwell GB10 GPU (260k tok/s BF16 v0.2.0, 68k tok/s FP32)
 TARGET=gb10 sh scripts/build.sh
 
 # Linux AArch64 CPU + HTTP server
@@ -168,20 +172,20 @@ TARGET=openwaldo sh scripts/build.sh
 ```
 
 ### 2. Run the Verification Suite & CPU Smoke Test
-Verifies `adamck`, `init`, finite-difference gradient check (`gcheck`), CPU `train`, `eval`, `sample`, BPE roundtrip, bit-exact KV-cache (`kvcmp`), DNA specialist chaining (`growpro`/`trainf`/`spext`/`spchainsamp`), looped-core `OLLMCK03`, Python f64 oracle cross-checks, OpenWALDO BOM negative controls, and (on Linux AArch64) 165-task benchmark, contrast/controller replays, 43-slot SM121 SASS disassembly, and Lean 4 proofs:
+Verifies `adamck`, `init`, finite-difference gradient check (`gcheck`), CPU `train`, `eval`, `sample`, BPE roundtrip, bit-exact KV-cache (`kvcmp`), DNA specialist chaining (`growpro`/`trainf`/`spext`/`spchainsamp`), looped-core `OLLMCK03`, Python f64 oracle cross-checks, OpenWALDO BOM negative controls, and (on Linux AArch64) 165-task benchmark, contrast/controller replays, 78-slot SM121 SASS disassembly, and Lean 4 proofs:
 ```sh
 sh scripts/quickstart-cpu.sh   # 5-second CPU smoke test
 sh scripts/verify-om.sh        # pure-Omega, zero-Python gate (core + 8 pillars + 4 locks + spforge)
 sh scripts/verify.sh           # full host-verifiable gate (no GPU required)
 ```
 
-### 3. Train on DGX Spark GB10 at 85,000+ tok/s (BF16)
+### 3. Train on DGX Spark GB10 at 260,000+ tok/s (BF16)
 ```sh
 # Fit a 4096-token BPE vocabulary and encode your corpus
 ./build/ollm-gb10 bpefit corpus.txt merges4096.bin 4096
 ./build/ollm-gb10 bpeenc merges4096.bin 4096 corpus.txt train.tok
 
-# Launch 15.8M v2 BF16 training (16,384 tokens/step, ~85k tok/s on GB10)
+# Launch 15.8M v2 BF16 training (16,384 tokens/step, ~260k tok/s on GB10 in v0.2.0)
 sh scripts/train-gb10-bf16.sh train.tok held.tok merges4096.bin
 
 # Or FP32 (~68k tok/s) / Looped-Core OLLMCK03 (16 layer apps):
