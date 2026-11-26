@@ -672,6 +672,13 @@ def parse_apuweave_stdout(stdout: str) -> dict[str, Any]:
     return out
 
 
+def _apu_expected_sp2(out_dir: Path, shard_path: Path) -> Path:
+    """Match native/apu_weave.om apu_make_outpath: strip trailing .tok only, then append .sp2."""
+    name = shard_path.name
+    stem = name[:-4] if name.endswith(".tok") and len(name) > 4 else name
+    return out_dir / f"{stem}.sp2"
+
+
 def run_apuweave(
     ollm_bin: Path,
     base_ck: str,
@@ -693,19 +700,40 @@ def run_apuweave(
     out_p = Path(out_dir).expanduser().resolve()
     out_p.mkdir(parents=True, exist_ok=True)
 
+    expected_packs: list[Path] = []
     if isinstance(shards_source, list):
-        clean_paths = [str(Path(s).expanduser().resolve()) for s in shards_source if str(s).strip()]
+        clean_paths = [Path(s).expanduser().resolve() for s in shards_source if str(s).strip()]
         if not clean_paths:
             raise ValueError("shards list cannot be empty")
         list_p = out_p / "shards.list"
-        list_p.write_text("\n".join(clean_paths) + "\n", encoding="utf-8")
+        list_p.write_text("\n".join(str(p) for p in clean_paths) + "\n", encoding="utf-8")
         src_arg = list_p
+        expected_packs = [_apu_expected_sp2(out_p, p) for p in clean_paths]
     else:
         src_arg = Path(str(shards_source)).expanduser().resolve()
         if not src_arg.exists():
             raise ValueError(f"shards_source not found: {src_arg}")
+        if src_arg.is_dir():
+            tok_files = sorted(src_arg.glob("*.tok"))
+            if not tok_files:
+                raise ValueError(f"no .tok shard files found in directory: {src_arg}")
+            expected_packs = [_apu_expected_sp2(out_p, p) for p in tok_files]
+            if _plat.system() != "Linux":
+                list_p = out_p / "shards.list"
+                list_p.write_text("\n".join(str(p) for p in tok_files) + "\n", encoding="utf-8")
+                src_arg = list_p
+        else:
+            for raw_ln in src_arg.read_text(encoding="utf-8").splitlines():
+                ln = raw_ln.strip()
+                if not ln or ln.startswith("#"):
+                    continue
+                parts = ln.split()
+                if len(parts) >= 3:
+                    expected_packs.append(Path(parts[2]).expanduser().resolve())
+                else:
+                    expected_packs.append(_apu_expected_sp2(out_p, Path(parts[0])))
 
-    eff_workers = int(workers) if int(workers) > 0 else (16 if _plat.system() == "Linux" else 1)
+    eff_workers = min(16, int(workers)) if int(workers) > 0 else (16 if _plat.system() == "Linux" else 1)
     eff_q = int(quant_bits) if int(quant_bits) in (4, 64) else 4
     argv = [
         str(ollm_bin),
@@ -727,7 +755,7 @@ def run_apuweave(
         raise RuntimeError(f"apuweave exited {proc.returncode}: {detail}")
 
     tel = parse_apuweave_stdout(proc.stdout)
-    out_packs = sorted(str(p) for p in out_p.glob("*.sp2"))
+    out_packs = [str(p) for p in expected_packs if p.is_file()]
     sec_per_strand = (
         round((tel["wall_ms"] / 1000.0) / tel["n_shards"], 4)
         if tel["n_shards"] > 0 and tel["wall_ms"] > 0

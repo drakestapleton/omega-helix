@@ -451,6 +451,14 @@ class StudioHandler(BaseHTTPRequestHandler):
 
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": f"unknown endpoint: {path}"})
 
+    def _resolve_spiral_ollm(self, use_gpu: bool = True) -> Path:
+        all_bins = runner.resolve_binaries(bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
+        if use_gpu and os.path.exists("/dev/nvidiactl") and all_bins.get("ollm_gb10"):
+            ollm_bin = all_bins["ollm_gb10"]
+            assert ollm_bin is not None
+            return ollm_bin
+        return runner.ensure_binaries(["ollm"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)["ollm"]
+
     def _stream_sse(self, run: runner.ChainRun) -> None:
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -518,10 +526,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             try:
                 if not body.get("base_ck") or not body.get("domain_tok") or not body.get("out_sp2"):
                     raise ValueError("base_ck, domain_tok, and out_sp2 are required")
-                all_bins = runner.resolve_binaries(bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
-                use_gb10 = bool(body.get("use_gpu", True) and os.path.exists("/dev/nvidiactl") and all_bins.get("ollm_gb10"))
-                ollm_bin = all_bins["ollm_gb10"] if use_gb10 else runner.ensure_binaries(["ollm"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)["ollm"]
-                assert ollm_bin is not None
+                ollm_bin = self._resolve_spiral_ollm(bool(body.get("use_gpu", True)))
                 res = studio_spiral.run_spcryst(
                     ollm_bin,
                     str(body["base_ck"]),
@@ -545,10 +550,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                     strands = [s.strip() for s in strands.splitlines() if s.strip()]
                 if not body.get("base_ck") or not body.get("eval_tok") or not strands:
                     raise ValueError("base_ck, eval_tok, and strands[] are required")
-                all_bins = runner.resolve_binaries(bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
-                use_gb10 = bool(body.get("use_gpu", True) and os.path.exists("/dev/nvidiactl") and all_bins.get("ollm_gb10"))
-                ollm_bin = all_bins["ollm_gb10"] if use_gb10 else runner.ensure_binaries(["ollm"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)["ollm"]
-                assert ollm_bin is not None
+                ollm_bin = self._resolve_spiral_ollm(bool(body.get("use_gpu", True)))
                 res = studio_spiral.run_spweval(
                     ollm_bin,
                     str(body["base_ck"]),
@@ -569,10 +571,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                     strands = [s.strip() for s in strands.splitlines() if s.strip()]
                 if not body.get("base_ck") or not strands:
                     raise ValueError("base_ck and strands[] are required")
-                all_bins = runner.resolve_binaries(bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
-                use_gb10 = bool(body.get("use_gpu", True) and os.path.exists("/dev/nvidiactl") and all_bins.get("ollm_gb10"))
-                ollm_bin = all_bins["ollm_gb10"] if use_gb10 else runner.ensure_binaries(["ollm"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)["ollm"]
-                assert ollm_bin is not None
+                ollm_bin = self._resolve_spiral_ollm(bool(body.get("use_gpu", True)))
                 res = studio_spiral.run_spiral_sample(
                     ollm_bin,
                     str(body["base_ck"]),
@@ -595,10 +594,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                 out_dir = body.get("out_dir")
                 if not base_ck or not shards_src or not out_dir:
                     raise ValueError("base_ck, shards (or shards_dir/shards_list), and out_dir are required")
-                all_bins = runner.resolve_binaries(bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
-                use_gb10 = bool(body.get("use_gpu", True) and os.path.exists("/dev/nvidiactl") and all_bins.get("ollm_gb10"))
-                ollm_bin = all_bins["ollm_gb10"] if use_gb10 else runner.ensure_binaries(["ollm"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)["ollm"]
-                assert ollm_bin is not None
+                ollm_bin = self._resolve_spiral_ollm(bool(body.get("use_gpu", True)))
                 res = studio_spiral.run_apuweave(
                     ollm_bin,
                     str(base_ck),
