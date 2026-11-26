@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import struct
 import subprocess
 import time
@@ -17,6 +18,8 @@ from pathlib import Path
 from typing import Any
 
 STUDIO_DIR = Path(__file__).resolve().parent
+MAX_MANIFEST_BYTES = 1024 * 1024  # 1 MiB bounded read
+MAX_MANIFEST_ENTRIES = 2048       # matches APU_MAX_SHARDS
 
 SPIRAL_PRESETS: dict[str, dict[str, Any]] = {
     "mini64": {
@@ -679,6 +682,46 @@ def _apu_expected_sp2(out_dir: Path, shard_path: Path) -> Path:
     return out_dir / f"{stem}.sp2"
 
 
+def _read_bounded_manifest(manifest_path: Path, out_p: Path) -> list[Path]:
+    """Safely read a regular-file shard manifest with strict byte and entry-count bounds."""
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(str(manifest_path), flags)
+    except OSError as exc:
+        raise ValueError(f"cannot open shard manifest {manifest_path}: {exc}") from exc
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise ValueError(f"shard manifest must be a regular file: {manifest_path}")
+        if st.st_size > MAX_MANIFEST_BYTES:
+            raise ValueError(f"shard manifest exceeds {MAX_MANIFEST_BYTES} byte limit: {manifest_path}")
+        with os.fdopen(fd, "rb") as f:
+            fd = -1  # owned by f now
+            raw = f.read(MAX_MANIFEST_BYTES + 1)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+    if len(raw) > MAX_MANIFEST_BYTES:
+        raise ValueError(f"shard manifest exceeds {MAX_MANIFEST_BYTES} byte limit: {manifest_path}")
+
+    expected: list[Path] = []
+    for raw_ln in raw.decode("utf-8", errors="replace").splitlines():
+        ln = raw_ln.strip()
+        if not ln or ln.startswith("#"):
+            continue
+        if len(expected) >= MAX_MANIFEST_ENTRIES:
+            raise ValueError(f"shard manifest exceeds {MAX_MANIFEST_ENTRIES} entries limit: {manifest_path}")
+        parts = ln.split()
+        if len(parts) >= 3:
+            expected.append(Path(parts[2]).expanduser().resolve())
+        else:
+            expected.append(_apu_expected_sp2(out_p, Path(parts[0])))
+    if not expected:
+        raise ValueError(f"shard manifest contains no entries: {manifest_path}")
+    return expected
+
+
 def run_apuweave(
     ollm_bin: Path,
     base_ck: str,
@@ -705,6 +748,8 @@ def run_apuweave(
         clean_paths = [Path(s).expanduser().resolve() for s in shards_source if str(s).strip()]
         if not clean_paths:
             raise ValueError("shards list cannot be empty")
+        if len(clean_paths) > MAX_MANIFEST_ENTRIES:
+            raise ValueError(f"shards list exceeds {MAX_MANIFEST_ENTRIES} entries limit")
         list_p = out_p / "shards.list"
         list_p.write_text("\n".join(str(p) for p in clean_paths) + "\n", encoding="utf-8")
         src_arg = list_p
@@ -717,21 +762,15 @@ def run_apuweave(
             tok_files = sorted(src_arg.glob("*.tok"))
             if not tok_files:
                 raise ValueError(f"no .tok shard files found in directory: {src_arg}")
+            if len(tok_files) > MAX_MANIFEST_ENTRIES:
+                raise ValueError(f"shards directory exceeds {MAX_MANIFEST_ENTRIES} entries limit")
             expected_packs = [_apu_expected_sp2(out_p, p) for p in tok_files]
             if _plat.system() != "Linux":
                 list_p = out_p / "shards.list"
                 list_p.write_text("\n".join(str(p) for p in tok_files) + "\n", encoding="utf-8")
                 src_arg = list_p
         else:
-            for raw_ln in src_arg.read_text(encoding="utf-8").splitlines():
-                ln = raw_ln.strip()
-                if not ln or ln.startswith("#"):
-                    continue
-                parts = ln.split()
-                if len(parts) >= 3:
-                    expected_packs.append(Path(parts[2]).expanduser().resolve())
-                else:
-                    expected_packs.append(_apu_expected_sp2(out_p, Path(parts[0])))
+            expected_packs = _read_bounded_manifest(src_arg, out_p)
 
     eff_workers = min(16, int(workers)) if int(workers) > 0 else (16 if _plat.system() == "Linux" else 1)
     eff_q = int(quant_bits) if int(quant_bits) in (4, 64) else 4
