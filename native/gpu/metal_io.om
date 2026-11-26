@@ -12,6 +12,7 @@ text mio_s_fclose "fclose"
 text mio_s_fseeko "fseeko"
 text mio_s_ftello "ftello"
 text mio_s_fread "fread"
+text mio_s_ferror "ferror"
 text mio_s_creat "creat"
 text mio_s_pwrite "pwrite"
 text mio_s_fsync "fsync"
@@ -131,6 +132,7 @@ mio_sym_req 12 mio_s_rename
 mio_sym_req 13 mio_s_memcpy
 mio_sym_req 14 mio_s_strlen
 mio_sym_req 15 mio_s_getenv
+mio_sym_req 16 mio_s_ferror
 put mio_inited 0 1
 end
 
@@ -203,7 +205,7 @@ end
 
 fn mio_fseeko fp ulong off long wh ulong to void
 mio_p64 0 fp
-mio_p64 8 ulong off
+mio_p64 8 bitcast ulong off
 mio_p64 16 wh
 r = libcall get mio_sym 5 mio_rg 0 128
 if mio_i32neg mio_g64 0
@@ -214,11 +216,17 @@ end
 fn mio_ftello fp ulong to ulong
 mio_p64 0 fp
 r = libcall get mio_sym 6 mio_rg 0 128
-sz = long mio_g64 0
-if lt sz 0
+sz = mio_g64 0
+if ge sz 9223372036854775808
 exit 70
 end
-ret ulong sz
+ret sz
+end
+
+fn mio_ferror fp ulong to ulong
+mio_p64 0 fp
+r = libcall get mio_sym 16 mio_rg 0 128
+ret and mio_g64 0 4294967295
 end
 
 fn mio_fread fp ulong dst ulong n ulong to ulong
@@ -230,7 +238,13 @@ mio_p64 8 1
 mio_p64 16 n
 mio_p64 24 fp
 r = libcall get mio_sym 7 mio_rg 0 128
-ret mio_g64 0
+got = mio_g64 0
+if lt got n
+if ne mio_ferror fp 0
+exit 70
+end
+end
+ret got
 end
 
 fn oargc to ulong
@@ -337,11 +351,11 @@ mio_p64 8 ulong libptr ock p sub n p
 mio_p64 16 sub n p
 mio_p64 24 add pos p
 r = libcall get mio_sym 9 mio_rg 0 128
-w = long mio_g64 0
-if le w 0
+w = mio_g64 0
+if or eq w 0 ge w 9223372036854775808
 exit 70
 end
-p = add p ulong w
+p = add p w
 end
 end
 
@@ -375,9 +389,6 @@ ret sz
 end
 
 fn ocsinit to ulong
-if gt mul 3 get og 8 OCSN
-exit 70
-end
 ret OCSN
 end
 
@@ -421,7 +432,7 @@ fn odread i ulong to ulong
 fp = mio_fopen_rb i
 p = ulong 0
 dn = false
-while not dn bound 64
+while not dn bound 33554434
 got = ulong 0
 if lt p ODHALF
 want = sub ODHALF p
@@ -449,6 +460,10 @@ mio_fclose fp
 exit 21
 end
 end
+end
+if not dn
+mio_fclose fp
+exit 70
 end
 mio_fclose fp
 put odn 0 p
@@ -513,7 +528,7 @@ fn ooffrd ai ulong to void
 fp = mio_fopen_rb ai
 p = ulong 0
 dn = false
-while not dn bound 128
+while not dn bound 70000
 got = mio_fread fp ulong libptr ochk p sub 65536 p sub 65536 p
 if eq got 0
 dn = true
@@ -525,6 +540,10 @@ exit 21
 end
 end
 end
+if not dn
+mio_fclose fp
+exit 70
+end
 mio_fclose fp
 if ne p mul 8 get og 6
 exit 21
@@ -533,10 +552,14 @@ end
 
 fn oprd ai ulong pos ulong off ulong n ulong to ulong
 fp = mio_fopen_rb ai
+if ge pos 9223372036854775808
+mio_fclose fp
+exit 70
+end
 mio_fseeko fp long pos 0
 p = ulong 0
 dn = false
-while and not dn lt p n bound 64
+while and not dn lt p n bound 2097154
 want = sub n p
 got = mio_fread fp ulong libptr opw add off p want want
 if eq got 0

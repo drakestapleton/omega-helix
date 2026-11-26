@@ -13,10 +13,50 @@ OS=$(uname -s)
 ARCH=$(uname -m)
 echo "=== Omega Helix Pure-Omega Zero-Python Gate ($OS $ARCH) ==="
 
+is_omega_ng() {
+  cand=$1
+  [ -n "$cand" ] && [ -x "$cand" ] || return 1
+  hdr=$(printf '@ng front-ir\nfn main to int\nret 0\nend\n' | "$cand" 2>/dev/null | dd bs=1 count=6 2>/dev/null | tr -d '\0' || true)
+  [ "$hdr" = "OSC1IR" ]
+}
+
+has_ng_backend() {
+  if [ -n "${NG:-}" ]; then
+    if is_omega_ng "$NG"; then return 0; fi
+    return 1
+  fi
+  if is_omega_ng "$OUT/ng"; then
+    return 0
+  fi
+  if [ -n "${OMEGA_MV:-}" ]; then
+    [ -f "$OMEGA_MV/seed/ng/src/ir.om" ] && [ -f "$OMEGA_MV/seed/ng/src/a64.om" ]
+    return $?
+  fi
+  for cand in \
+    "$HOME/.local/bin/ng" \
+    "$(command -v ng 2>/dev/null || true)"
+  do
+    if is_omega_ng "$cand"; then
+      return 0
+    fi
+  done
+  for root in \
+    "$HOME/workspace/omega-mv-macos" \
+    "$HOME/canon/omega-mv" \
+    "$here/../omega-mv" \
+    "$here/../omega-mv-macos"
+  do
+    if [ -f "$root/seed/ng/src/ir.om" ] && [ -f "$root/seed/ng/src/a64.om" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 if [ "$OS" = Darwin ]; then
   OUT="$OUT" TARGET=macos sh "$here/scripts/build.sh"
   BIN="$OUT/ollm-macos"
-  if [ "$ARCH" = arm64 ] && { command -v ng >/dev/null 2>&1 || [ -x "${NG:-}" ] || [ -x "$HOME/.local/bin/ng" ] || [ -f "${OMEGA_MV:-$HOME/workspace/omega-mv-macos}/seed/ng/src/ir.om" ] || [ -f "$here/../omega-mv/seed/ng/src/ir.om" ] || [ -f "$here/../omega-mv-macos/seed/ng/src/ir.om" ]; }; then
+  if [ "$ARCH" = arm64 ] && has_ng_backend; then
     OUT="$OUT" TARGET=macos-metal sh "$here/scripts/build.sh"
     METAL_BIN="$OUT/ollm-metal"
   else

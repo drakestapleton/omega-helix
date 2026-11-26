@@ -70,8 +70,13 @@ jobs:
       - name: Fetch & SHA-256 verify ng sources for macos-metal
         if: matrix.label == 'macos-arm64'
         run: |
-          git clone --depth 1 --filter=blob:none --sparse https://interplane.io/drakestapleton/omega-mv.git "$RUNNER_TEMP/omega-mv"
+          OMEGA_MV_PIN=f9bf35bde77a831d331e38cee399a549f1e1bea9
+          mkdir -p "$RUNNER_TEMP/omega-mv"
+          git -C "$RUNNER_TEMP/omega-mv" init
+          git -C "$RUNNER_TEMP/omega-mv" remote add origin https://interplane.io/drakestapleton/omega-mv.git
           git -C "$RUNNER_TEMP/omega-mv" sparse-checkout set seed/ng/src
+          git -C "$RUNNER_TEMP/omega-mv" fetch --depth 1 origin "$OMEGA_MV_PIN"
+          git -C "$RUNNER_TEMP/omega-mv" checkout --detach FETCH_HEAD
           cd "$RUNNER_TEMP/omega-mv/seed/ng/src"
           shasum -a 256 -c - <<'EOF'
           0ab8514ff3be771c2bae73039083d73cf316fd3c0de140b8846fc84f4e7d1c77  ir.om

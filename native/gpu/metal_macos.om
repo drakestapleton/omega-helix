@@ -63,6 +63,8 @@ text mtl_kn16 "k_adam_step"
 text mtl_e_nodev "omega-metal: MetalCreateSystemDefaultDevice failed (no Metal GPU)\n"
 text mtl_e_lib "omega-metal: MSL compile error: "
 text mtl_e_cmd "omega-metal: Metal command buffer failed\n"
+text mtl_e_queue "omega-metal: Metal command queue creation failed\n"
+text mtl_e_alloc "omega-metal: Metal buffer allocation failed\n"
 
 global mtl_sym ulong 8
 global mtl_obj ulong 8
@@ -168,7 +170,7 @@ fn_s = mtl_nsstring_txt kn
 mfn = mtl_msg1 get mtl_obj 2 8 fn_s
 if eq mfn 0
 mtl_err_msg mtl_e_lib
-exit 75
+exit 85
 end
 for i ulong 8
 put mtl_err i 0
@@ -183,7 +185,7 @@ if ne ld 0
 mtl_err_cstr mtl_msg0 ld 1
 end
 end
-exit 75
+exit 85
 end
 put mtl_pso idx pso
 mtl_msg0_drop mfn
@@ -271,8 +273,8 @@ put mtl_obj 0 dev
 q = mtl_msg0 dev 4
 if eq q 0
 mtl_pool_pop pool
-mtl_err_msg mtl_e_nodev
-exit 75
+mtl_err_msg mtl_e_queue
+exit 84
 end
 put mtl_obj 1 q
 
@@ -292,7 +294,7 @@ mtl_err_cstr mtl_msg0 ld 1
 end
 end
 mtl_pool_pop pool
-exit 75
+exit 85
 end
 put mtl_obj 2 lib
 
@@ -340,11 +342,13 @@ nb = 64
 end
 b = mtl_msg2 get mtl_obj 0 5 nb 0
 if eq b 0
-exit 75
+mtl_err_msg mtl_e_alloc
+exit 86
 end
 p = mtl_msg0 b 6
 if eq p 0
-exit 75
+mtl_err_msg mtl_e_alloc
+exit 86
 end
 put mtl_buf idx b
 put mtl_ptr idx p
@@ -508,7 +512,7 @@ end
 
 fn mtl_dn_ow p ulong to void
 ptr = get mtl_ptr 0
-off = ulong 0
+off = get mtl_fz 0
 while lt off p bound 20000000
 cnt = sub p off
 if gt cnt 16384
@@ -566,7 +570,7 @@ pm = get mtl_ptr 2
 pv = get mtl_ptr 3
 mbase = get og 11
 vbase = get og 12
-off = ulong 0
+off = get mtl_fz 0
 while lt off p bound 20000000
 cnt = sub p off
 if gt cnt 16384
@@ -936,8 +940,10 @@ df_off = mtl_abyte 11
 ds_off = mtl_abyte 12
 dgp_off = mtl_abyte 13
 
+if eq get mtl_fz 0 0
 mtl_b3 6 lg_off 6 z_off 1 0
 mtl_k_gemm_go vv d rr 2 1.0f64
+end
 mtl_b3 6 lg_off 0 0 6 da_off
 mtl_k_gemm_go rr d vv 0 0.0f64
 mtl_k_zero 6 dh_off mul rr d
@@ -1086,7 +1092,8 @@ mtl_prm_u 1 fz
 mtl_prm_f 2 lrs
 mtl_prm_f 3 bc1
 mtl_prm_f 4 bc2
-mtl_bind_bytes 5 20
+mtl_prm_u 5 get mtl_mut 0
+mtl_bind_bytes 5 24
 mtl_disp_tg mtl_cd p 256 1 1 256 1 1
 end
 
@@ -1165,6 +1172,26 @@ oflush
 mtl_stop
 end
 
+global mtl_nf ulong 1
+
+fn mtl_fin x f64 to bool
+a = fabs x
+ret le a bitcast f64 ulong 9218868437227405311
+end
+
+fn mtl_clp x f64 to f64
+if mtl_fin x
+if gt x 1000000.0f64
+ret 1000000.0f64
+end
+if lt x -1000000.0f64
+ret -1000000.0f64
+end
+ret x
+end
+ret 1000000.0f64
+end
+
 fn mtl_pat_val i ulong k ulong to f64
 x = rem add mul i 17 mul k 31 97
 ret mul sub f64 x 48.0 0.02
@@ -1181,16 +1208,22 @@ it = oargu 5
 if or eq m 0 or eq n 0 or eq k 0 eq it 0
 exit 2
 end
-mtl_init
-mtl_alloc_buf 7 mul mul m k 4
-mtl_alloc_buf 8 mul mul k n 4
-mtl_alloc_buf 9 mul mul m n 4
-pa = get mtl_ptr 7
-pb = get mtl_ptr 8
-pc = get mtl_ptr 9
+if or gt m 65536 or gt n 65536 or gt k 65536 gt it 10000
+exit 2
+end
 mk = mul m k
 kn = mul k n
 mn = mul m n
+if or gt mk 33554432 or gt kn 33554432 gt mn 33554432
+exit 2
+end
+mtl_init
+mtl_alloc_buf 7 mul mk 4
+mtl_alloc_buf 8 mul kn 4
+mtl_alloc_buf 9 mul mn 4
+pa = get mtl_ptr 7
+pb = get mtl_ptr 8
+pc = get mtl_ptr 9
 for i ulong mk bound 33554432
 mtl_wr_f32 pa i mtl_pat_val i 3
 end
@@ -1212,6 +1245,7 @@ mtl_enc_commit
 ns = sub onsnow t0
 
 mx = 0.0f64
+put mtl_nf 0 0
 rm = m
 if gt rm 16
 rm = 16
@@ -1229,11 +1263,18 @@ vb = mtl_pat_val add mul kk n c 5
 s = add s mul va vb
 end
 gv = mtl_rd_f32 pc add mul r n c
+if not and mtl_fin gv mtl_fin s
+put mtl_nf 0 add get mtl_nf 0 1
+else
 dd = fabs sub gv s
 if gt dd mx
 mx = dd
 end
 end
+end
+end
+if ne get mtl_nf 0 0
+mx = 1.0e30f64
 end
 
 flops = mul mul 2.0f64 f64 mul m n mul f64 k f64 it
@@ -1249,10 +1290,10 @@ oputu it
 oputc 32
 oputl long ns
 oputc 32
-oputl rmic div mul gf 100.0f64 1000000.0f64
+oputl rmic div mul mtl_clp gf 100.0f64 1000000.0f64
 oputc 32
-oputl rmic mul mx 1000.0f64
-if lt mx 0.0001f64
+oputl rmic mul mtl_clp mx 1000.0f64
+if and eq get mtl_nf 0 0 and mtl_fin mx lt mx 0.0001f64
 mtl_puts mtl_s_pass
 oflush
 mtl_stop
@@ -1264,11 +1305,11 @@ mtl_stop
 exit 45
 end
 
-fn mtl_mops_pr tag view uchar * mx f64 tol f64 to bool
+fn mtl_mops_pr tag view uchar * mx f64 tol f64 nf ulong to bool
 mtl_puts mtl_s_mops
 mtl_puts tag
-oputl rmic mul mx 1000.0f64
-if lt mx tol
+oputl rmic mul mtl_clp mx 1000.0f64
+if and eq nf 0 and mtl_fin mx lt mx tol
 mtl_puts mtl_s_pass
 ret true
 end
@@ -1300,6 +1341,7 @@ mtl_b3 7 0 8 0 9 0
 mtl_k_gemm_go m n k mode 1.0f64
 mtl_enc_commit
 mx = 0.0f64
+put mtl_nf 0 0
 for r ulong m
 for c ulong n
 s = 0.5f64
@@ -1315,13 +1357,20 @@ end
 s = add s mul mtl_pat_val ai 7 mtl_pat_val bi 11
 end
 gv = mtl_rd_f32 pc add mul r n c
+if not and mtl_fin gv mtl_fin s
+put mtl_nf 0 add get mtl_nf 0 1
+else
 dd = fabs sub gv s
 if gt dd mx
 mx = dd
 end
 end
 end
-ret mtl_mops_pr tag mx 0.0001f64
+end
+if ne get mtl_nf 0 0
+mx = 1.0e30f64
+end
+ret mtl_mops_pr tag mx 0.0001f64 get mtl_nf 0
 end
 
 fn mtl_mops_rms to bool
@@ -1347,6 +1396,7 @@ mtl_bind_buf 3 10 0
 mtl_k_rms_fwd_go r d
 mtl_enc_commit
 mx = 0.0f64
+put mtl_nf 0 0
 for row ulong r
 ss = 0.0f64
 for j ulong d
@@ -1354,18 +1404,28 @@ v = mtl_pat_val add mul row d j 13
 ss = add ss mul v v
 end
 inv_s = div 1.0f64 fsqrt add div ss f64 d 0.00001f64
+if not and mtl_fin ss mtl_fin inv_s
+put mtl_nf 0 add get mtl_nf 0 1
+end
 for j2 ulong d
 v2 = mtl_pat_val add mul row d j2 13
 g2 = add 1.0f64 mul 0.01f64 f64 j2
 ref = mul mul v2 inv_s g2
 gv = mtl_rd_f32 py add mul row d j2
+if not and mtl_fin gv mtl_fin ref
+put mtl_nf 0 add get mtl_nf 0 1
+else
 dd = fabs sub gv ref
 if gt dd mx
 mx = dd
 end
 end
 end
-ret mtl_mops_pr mtl_s_mop_rms mx 0.0001f64
+end
+if ne get mtl_nf 0 0
+mx = 1.0e30f64
+end
+ret mtl_mops_pr mtl_s_mop_rms mx 0.0001f64 get mtl_nf 0
 end
 
 fn mtl_mops_attn to bool
@@ -1406,6 +1466,7 @@ mtl_disp_tg tt hh bb 64 1 1
 mtl_enc_commit
 
 mx = 0.0f64
+put mtl_nf 0 0
 isq = fsqrt f64 ee
 sc = new f64 8 0.0f64
 for n ulong hh
@@ -1419,6 +1480,9 @@ ki = mtl_pat_val add add mul j dd mul n ee e 3
 dot = add dot mul qi ki
 end
 sv = div dot isq
+if not mtl_fin sv
+put mtl_nf 0 add get mtl_nf 0 1
+end
 put sc j sv
 mmax = fmax mmax sv
 end
@@ -1427,6 +1491,9 @@ for j2 ulong add t 1
 ev = fexp sub get sc j2 mmax
 put sc j2 ev
 ssum = add ssum ev
+end
+if not and mtl_fin ssum gt ssum 0.0f64
+put mtl_nf 0 add get mtl_nf 0 1
 end
 for j3 ulong add t 1
 put sc j3 div get sc j3 ssum
@@ -1438,6 +1505,9 @@ vi = mtl_pat_val add add mul j4 dd mul n ee e2 5
 acc = add acc mul get sc j4 vi
 end
 gv = mtl_rd_f32 po add add mul t dd mul n ee e2
+if not and mtl_fin gv mtl_fin acc
+put mtl_nf 0 add get mtl_nf 0 1
+else
 dd2 = fabs sub gv acc
 if gt dd2 mx
 mx = dd2
@@ -1445,7 +1515,11 @@ end
 end
 end
 end
-ret mtl_mops_pr mtl_s_mop_att mx 0.0001f64
+end
+if ne get mtl_nf 0 0
+mx = 1.0e30f64
+end
+ret mtl_mops_pr mtl_s_mop_att mx 0.0001f64 get mtl_nf 0
 end
 
 fn mtl_mops_adam to bool
@@ -1479,11 +1553,13 @@ mtl_prm_u 1 0
 mtl_prm_f 2 0.001f64
 mtl_prm_f 3 0.1f64
 mtl_prm_f 4 0.01f64
-mtl_bind_bytes 5 20
+mtl_prm_u 5 get mtl_mut 0
+mtl_bind_bytes 5 24
 mtl_disp_tg 1 1 1 256 1 1
 mtl_enc_commit
 
 mx = 0.0f64
+put mtl_nf 0 0
 for i ulong n
 w0 = mtl_pat_val i 1
 gi = mul 0.5f64 mul 2.0f64 mtl_pat_val i 9
@@ -1492,12 +1568,19 @@ vi = mul 0.01f64 mul gi gi
 upd = div mul 0.001f64 div mi 0.1f64 add fsqrt div vi 0.01f64 0.00000001f64
 ref = sub w0 upd
 gv = mtl_rd_f32 pw i
+if not and mtl_fin gv mtl_fin ref
+put mtl_nf 0 add get mtl_nf 0 1
+else
 dd = fabs sub gv ref
 if gt dd mx
 mx = dd
 end
 end
-ret mtl_mops_pr mtl_s_mop_adm mx 0.0001f64
+end
+if ne get mtl_nf 0 0
+mx = 1.0e30f64
+end
+ret mtl_mops_pr mtl_s_mop_adm mx 0.0001f64 get mtl_nf 0
 end
 
 fn cmd_mops to void
@@ -1606,48 +1689,72 @@ lg = mtl_read_loss
 gpu_ns = sub onsnow tg0
 
 mxp = 0.0f64
+put mtl_nf 0 0
+if not and mtl_fin lg mtl_fin ls_c
+put mtl_nf 0 add get mtl_nf 0 1
+end
 if le vv 16384
 last_r = sub mul bb tt 1
 lg_ptr = add get mtl_ptr 6 add mtl_abyte 3 mul mul last_r vv 4
 act_m = -1.0e30f64
 for c ulong vv
 lv2 = mtl_rd_f32 lg_ptr c
+if not mtl_fin lv2
+put mtl_nf 0 add get mtl_nf 0 1
+else
 act_m = fmax act_m lv2
+end
 end
 sm = 0.0f64
 for c2 ulong vv
 lv3 = mtl_rd_f32 lg_ptr c2
+if not mtl_fin lv3
+put mtl_nf 0 add get mtl_nf 0 1
+else
 sm = add sm fexp sub lv3 act_m
+end
+end
+if not and mtl_fin sm gt sm 0.0f64
+put mtl_nf 0 add get mtl_nf 0 1
 end
 for c3 ulong vv
 lv4 = mtl_rd_f32 lg_ptr c3
 gp = div fexp sub lv4 act_m sm
-dd = fabs sub gp get cpu_p c3
+cval = get cpu_p c3
+if not and mtl_fin gp mtl_fin cval
+put mtl_nf 0 add get mtl_nf 0 1
+else
+dd = fabs sub gp cval
 if gt dd mxp
 mxp = dd
 end
 end
 end
+end
 
 dl = fabs sub lg ls_c
+if or ne get mtl_nf 0 0 not mtl_fin dl
+dl = 1.0e30f64
+mxp = 1.0e30f64
+end
 mtl_puts mtl_s_gf
 oputu get og 8
 oputc 32
 oputu mul bb tt
 oputc 32
-oputl rmic ls_c
+oputl rmic mtl_clp ls_c
 oputc 32
-oputl rmic lg
+oputl rmic mtl_clp lg
 oputc 32
-oputl rmic mul dl 1000.0f64
+oputl rmic mul mtl_clp dl 1000.0f64
 oputc 32
-oputl rmic mul mxp 1000.0f64
+oputl rmic mul mtl_clp mxp 1000.0f64
 oputc 32
 oputl long gpu_ns
 oputc 32
 oputl long cpu_ns
 oputc 10
-if and lt dl 0.0001f64 lt mxp 0.001f64
+if and eq get mtl_nf 0 0 and and mtl_fin dl lt dl 0.0001f64 and mtl_fin mxp lt mxp 0.001f64
 mtl_puts mtl_s_gfpass
 oflush
 mtl_stop
@@ -1675,6 +1782,7 @@ fn mtl_cmp_grads p ulong to void
 for k ulong 6
 put mtl_cm k 0.0f64
 end
+put mtl_nf 0 0
 mx = 0.0f64
 mr = 0.0f64
 dot = 0.0f64
@@ -1686,6 +1794,9 @@ for j ulong sub oce q p i0
 i = add i0 j
 rf = ogrg add p i
 gv = ocsg i
+if not and mtl_fin rf mtl_fin gv
+put mtl_nf 0 add get mtl_nf 0 1
+else
 dd = fabs sub gv rf
 ar = fabs rf
 if gt dd mx
@@ -1699,13 +1810,22 @@ nc = add nc mul rf rf
 ng_norm = add ng_norm mul gv gv
 end
 end
-put mtl_cm 0 mx
-put mtl_cm 1 mr
+end
+nf = get mtl_nf 0
 den = mul fsqrt nc fsqrt ng_norm
+cos = 0.0f64
+if and eq nf 0 and eq nc 0.0f64 eq ng_norm 0.0f64
 cos = 1.0f64
-if gt den 0.0f64
+end
+if and eq nf 0 and mtl_fin den gt den 0.0f64
 cos = div dot den
 end
+if or ne nf 0 not and mtl_fin mx and mtl_fin dot mtl_fin cos
+mx = 1.0e30f64
+cos = 0.0f64
+end
+put mtl_cm 0 mx
+put mtl_cm 1 mr
 put mtl_cm 2 cos
 end
 
@@ -1716,12 +1836,28 @@ end
 end
 
 fn mtl_fz_ok_gpu fz ulong to bool
-for i ulong fz bound 20000000
-if ne ocsg i 0.0f64
-ret false
-end
-end
+if eq fz 0
 ret true
+end
+nz = ulong 0
+i = ulong 0
+while lt i fz bound 20000000
+if ne ocsg i 0.0f64
+nz = add nz 1
+end
+i = add i 1
+end
+oputc 71
+oputc 67
+oputc 70
+oputc 32
+oputu get mtl_fz 1
+oputc 32
+oputu fz
+oputc 32
+oputu nz
+oputc 10
+ret eq nz 0
 end
 
 fn cmd_gcmp to void
@@ -1753,10 +1889,22 @@ cos = get mtl_cm 2
 rel = 0.0f64
 if gt mr 0.0f64
 rel = div mx mr
+else
+if gt mx 0.0f64
+rel = 1.0e30f64
 end
+end
+dl = 1.0e30f64
+if and mtl_fin lg mtl_fin lc
 dl = fabs sub lg lc
-rr = mul get og 6 get og 1
-tol = div f64 rr 16777216.0f64
+else
+put mtl_nf 0 add get mtl_nf 0 1
+end
+if or ne get mtl_nf 0 0 not mtl_fin rel
+rel = 1.0e30f64
+cos = 0.0f64
+end
+tol = div f64 mul get og 6 get og 1 16777216.0f64
 if lt tol 0.000005f64
 tol = 0.000005f64
 end
@@ -1766,26 +1914,27 @@ oputc 67
 oputc 32
 oputu p
 oputc 32
-oputl rmic mul mx 1000000.0f64
+oputl rmic mul mtl_clp mx 1000000.0f64
 oputc 32
-oputl rmic mul mr 1000000.0f64
+oputl rmic mul mtl_clp mr 1000000.0f64
 oputc 32
-oputl rmic mul rel 1000.0f64
+oputl rmic mul mtl_clp rel 1000.0f64
 oputc 32
-oputl rmic lc
+oputl rmic mtl_clp lc
 oputc 32
-oputl rmic lg
+oputl rmic mtl_clp lg
 oputc 32
 oputl long gpu_ns
 oputc 32
-oputl rmic mul tol 1000.0f64
+oputl rmic mul mtl_clp tol 1000.0f64
 oputc 32
-oputl rmic mul cos 1000.0f64
+oputl rmic mul mtl_clp cos 1000.0f64
 oputc 32
 oputl long cpu_ns
 oputc 10
 
-ok = and and lt rel tol lt dl 0.0001f64 and ge cos 0.9999f64 mtl_fz_ok_gpu get mtl_fz 0
+fz_ok = mtl_fz_ok_gpu get mtl_fz 0
+ok = and eq get mtl_nf 0 0 and and mtl_fin rel lt rel tol and and mtl_fin dl lt dl 0.0001f64 and and mtl_fin cos ge cos 0.9999f64 fz_ok
 mtl_stop
 if ok
 mtl_puts mtl_s_gcmp_p
@@ -1811,6 +1960,7 @@ fn mtl_adam_cmp p ulong to void
 put mtl_cm 0 0.0f64
 put mtl_cm 1 0.0f64
 put mtl_cm 2 0.0f64
+put mtl_nf 0 0
 ptr = get mtl_ptr 0
 off = ulong 0
 while lt off p bound 20000000
@@ -1823,8 +1973,11 @@ for j ulong cnt bound 16385
 i = add off j
 w0 = ogrg add p i
 c = owg i
-u = sub c w0
 gw = f64 bitcast f32 mtl_stg_g32 mul j 4
+if not and and mtl_fin w0 mtl_fin c mtl_fin gw
+put mtl_nf 0 add get mtl_nf 0 1
+else
+u = sub c w0
 g = sub gw f64 f32 w0
 d = fabs sub g u
 au = fabs u
@@ -1839,8 +1992,54 @@ if gt e get mtl_cm 2
 put mtl_cm 2 e
 end
 end
+end
 off = add off cnt
 end
+if ne get mtl_nf 0 0
+put mtl_cm 0 1.0e30f64
+put mtl_cm 2 1.0e30f64
+end
+end
+
+fn mtl_fz_adam_ok p ulong to bool
+fz = get mtl_fz 0
+if eq fz 0
+ret true
+end
+ptr = get mtl_ptr 0
+chg = ulong 0
+off = ulong 0
+while lt off fz bound 20000000
+cnt = sub fz off
+if gt cnt 16384
+cnt = 16384
+end
+mio_memcpy ulong libptr mtl_stg 0 65536 add ptr mul off 4 mul cnt 4
+for j ulong cnt bound 16385
+i = add off j
+w0 = ogrg add p i
+if ne bitcast ulong owg i bitcast ulong w0
+chg = add chg 1
+else
+gw = f64 bitcast f32 mtl_stg_g32 mul j 4
+if ne bitcast ulong gw bitcast ulong f64 f32 w0
+chg = add chg 1
+end
+end
+end
+off = add off cnt
+end
+oputc 71
+oputc 65
+oputc 70
+oputc 32
+oputu get mtl_fz 1
+oputc 32
+oputu fz
+oputc 32
+oputu chg
+oputc 10
+ret eq chg 0
 end
 
 fn cmd_gacmp to void
@@ -1868,14 +2067,29 @@ mtl_enc_commit
 adam_ns = sub onsnow ta0
 
 mtl_adam_cmp p
+fz_ok = mtl_fz_adam_ok p
 md = get mtl_cm 0
 mu = get mtl_cm 1
 me = get mtl_cm 2
+if not mtl_fin lg
+put mtl_nf 0 add get mtl_nf 0 1
+end
 rel = 0.0f64
 res = 0.0f64
 if gt mu 0.0f64
 rel = div md mu
 res = div me mu
+else
+if gt md 0.0f64
+rel = 1.0e30f64
+end
+if gt me 0.0f64
+res = 1.0e30f64
+end
+end
+if or ne get mtl_nf 0 0 not and mtl_fin rel mtl_fin res
+rel = 1.0e30f64
+res = 1.0e30f64
 end
 tol = div 1.0f64 65536.0f64
 
@@ -1884,23 +2098,23 @@ oputc 65
 oputc 32
 oputu p
 oputc 32
-oputl rmic mul md 1000000.0f64
+oputl rmic mul mtl_clp md 1000000.0f64
 oputc 32
-oputl rmic mul mu 1000000.0f64
+oputl rmic mul mtl_clp mu 1000000.0f64
 oputc 32
-oputl rmic mul rel 1000.0f64
+oputl rmic mul mtl_clp rel 1000.0f64
 oputc 32
-oputl rmic mul res 1000.0f64
+oputl rmic mul mtl_clp res 1000.0f64
 oputc 32
-oputl rmic mul tol 1000.0f64
+oputl rmic mul mtl_clp tol 1000.0f64
 oputc 32
 oputl long adam_ns
 oputc 32
-oputl rmic lg
+oputl rmic mtl_clp lg
 oputc 10
 
 mtl_stop
-if lt res tol
+if and eq get mtl_nf 0 0 and and mtl_fin res lt res tol fz_ok
 mtl_puts mtl_s_gacmp_p
 oflush
 ret
@@ -1965,6 +2179,10 @@ mtl_enc_commit
 put og 41 s1
 if need_l
 ls = mtl_read_loss
+if not mtl_fin ls
+mtl_stop
+exit 45
+end
 mtl_dn_ow p
 mtl_dn_mv p
 ocksave 2
@@ -2070,6 +2288,9 @@ lo = div get mtl_ev 0 f64 ww
 bp = div lo 0.6931471805599453
 if gt get og 0 256
 bp = div mul bp f64 mul ww tt f64 get mtl_evn 0
+end
+if not and mtl_fin lo mtl_fin bp
+exit 45
 end
 oputc 69
 oputc 32

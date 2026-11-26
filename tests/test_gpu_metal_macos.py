@@ -307,6 +307,298 @@ class TestGpuMetalMacOS(unittest.TestCase):
             f"SGEMM_1024={gflops:.2f} GFLOP/s"
         )
 
+    def test_live_metal_freeze_layers_and_spext(self) -> None:
+        mtl, cpu = self._require_live_metal()
+
+        base_ck = self.tmp / "base.ck"
+        spec_ck = self.tmp / "spec.ck"
+        pack_sp = self.tmp / "pack.sp"
+        app_ck = self.tmp / "app.ck"
+        subprocess.run(
+            [str(mtl), "init", str(base_ck), "256", "16", "16", "2", "32", "1", "2", "1", "10", "3000", "1"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        subprocess.run(
+            [str(mtl), "growpro", str(base_ck), str(spec_ck), "2", "10", "3000"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        rg = subprocess.run([str(mtl), "gcmp", str(spec_ck), str(self.corp), "0", "1"], capture_output=True, text=True, check=True)
+        self.assertIn("GCF 1 ", rg.stdout)
+        gcf_line = [ln for ln in rg.stdout.splitlines() if ln.startswith("GCF ")][0].split()
+        self.assertEqual(int(gcf_line[3]), 0, f"frozen gradients non-zero: {gcf_line}")
+        gc_line = [ln for ln in rg.stdout.splitlines() if ln.startswith("GC ")][0].split()
+        self.assertGreaterEqual(int(gc_line[9]), 999900000, f"frozen gcmp cos too low: {gc_line}")
+        self.assertIn("GCMP PASS", rg.stdout)
+
+        ra = subprocess.run([str(mtl), "gacmp", str(spec_ck), str(self.corp), "0", "1"], capture_output=True, text=True, check=True)
+        self.assertIn("GAF 1 ", ra.stdout)
+        gaf_line = [ln for ln in ra.stdout.splitlines() if ln.startswith("GAF ")][0].split()
+        self.assertEqual(int(gaf_line[3]), 0, f"frozen Adam weights changed: {gaf_line}")
+        self.assertIn("GACMP PASS", ra.stdout)
+
+        subprocess.run([str(mtl), "gtrain", str(spec_ck), str(self.corp), "5", "5", "1"], capture_output=True, text=True, check=True)
+        rsp = subprocess.run([str(mtl), "spext", str(base_ck), str(spec_ck), str(pack_sp)], capture_output=True, text=True, check=True)
+        self.assertIn("SPEXT 1 2 ", rsp.stdout)
+
+        subprocess.run([str(cpu), "spapp", str(base_ck), str(pack_sp), str(app_ck)], capture_output=True, text=True, check=True)
+        ev_spec = subprocess.run([str(cpu), "eval", str(spec_ck), str(self.corp), "4"], capture_output=True, text=True, check=True)
+        ev_app = subprocess.run([str(cpu), "eval", str(app_ck), str(self.corp), "4"], capture_output=True, text=True, check=True)
+        self.assertEqual(ev_spec.stdout.split()[2:], ev_app.stdout.split()[2:])
+
+    def test_live_metal_nan_fails_closed(self) -> None:
+        mtl, _ = self._require_live_metal()
+
+        ck = self.tmp / "nan_small.ck"
+        subprocess.run(
+            [str(mtl), "init", str(ck), "256", "16", "16", "2", "32", "2", "2", "1", "10", "3000", "1"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        r_mg = subprocess.run(
+            [str(mtl), "mgemm", "128", "128", "128", "1"],
+            env={**os.environ, "OLLM_METAL_MUTANT": "3"},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(r_mg.returncode, 45, f"mgemm NaN expected rc=45, got {r_mg.returncode}: {r_mg.stdout}")
+        self.assertIn(" FAIL", r_mg.stdout)
+
+        r_mo = subprocess.run(
+            [str(mtl), "mops"],
+            env={**os.environ, "OLLM_METAL_MUTANT": "3"},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(r_mo.returncode, 45, f"mops NaN gemm expected rc=45, got {r_mo.returncode}: {r_mo.stdout}")
+        self.assertIn("MOPS GEMM0 ", r_mo.stdout)
+        self.assertIn(" FAIL", r_mo.stdout)
+
+        r_gf = subprocess.run(
+            [str(mtl), "gforward", str(ck), str(self.corp), "0"],
+            env={**os.environ, "OLLM_METAL_MUTANT": "3"},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(r_gf.returncode, 45, f"gforward NaN expected rc=45, got {r_gf.returncode}: {r_gf.stdout}")
+        self.assertIn(" FAIL", r_gf.stdout)
+
+        r_gc = subprocess.run(
+            [str(mtl), "gcmp", str(ck), str(self.corp), "0"],
+            env={**os.environ, "OLLM_METAL_MUTANT": "4"},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(r_gc.returncode, 45, f"gcmp NaN grad expected rc=45, got {r_gc.returncode}: {r_gc.stdout}")
+        self.assertIn("GCMP FAIL", r_gc.stdout)
+        gc_line = [ln for ln in r_gc.stdout.splitlines() if ln.startswith("GC ")][0].split()
+        self.assertEqual(int(gc_line[9]), 0, f"expected cos_e9=0 on NaN gradient, got {gc_line}")
+        self.assertLess(abs(int(gc_line[5]) - int(gc_line[6])), 100, f"expected finite forward losses on mutant 4: {gc_line}")
+
+        r_ga = subprocess.run(
+            [str(mtl), "gacmp", str(ck), str(self.corp), "0"],
+            env={**os.environ, "OLLM_METAL_MUTANT": "5"},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(r_ga.returncode, 46, f"gacmp NaN weight expected rc=46, got {r_ga.returncode}: {r_ga.stdout}")
+        self.assertIn("GACMP FAIL", r_ga.stdout)
+
+        r_ma = subprocess.run(
+            [str(mtl), "mops"],
+            env={**os.environ, "OLLM_METAL_MUTANT": "5"},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(r_ma.returncode, 45, f"mops NaN adamw expected rc=45, got {r_ma.returncode}: {r_ma.stdout}")
+        self.assertIn("MOPS ADAMW ", r_ma.stdout)
+        self.assertIn(" FAIL", r_ma.stdout)
+
+    def test_metal_io_pool_limit_and_dir_read(self) -> None:
+        if platform.system() != "Darwin" or platform.machine() != "arm64":
+            self.skipTest("requires Darwin arm64")
+        mtl = _resolve_metal_bin()
+        if mtl is None:
+            self.skipTest("ollm-metal binary not built")
+        assert mtl is not None
+
+        big_ck = self.tmp / "big_pool.ck"
+        r_big = subprocess.run(
+            [str(mtl), "init", str(big_ck), "4096", "256", "384", "16", "1536", "8", "1", "1", "10", "3000", "1"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(r_big.returncode, 12, f"expected exit 12 when P > 8388608, got {r_big.returncode}: {r_big.stderr}")
+
+        sm_ck = self.tmp / "io_small.ck"
+        subprocess.run(
+            [str(mtl), "init", str(sm_ck), "256", "16", "16", "2", "32", "2", "2", "1", "10", "3000", "1"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        dir_in = self.tmp / "dir_input"
+        dir_in.mkdir()
+
+        r_dir_data = subprocess.run([str(mtl), "eval", str(sm_ck), str(dir_in), "1"], capture_output=True, text=True)
+        self.assertEqual(r_dir_data.returncode, 70, f"odread on directory expected exit 70, got {r_dir_data.returncode}")
+
+        r_dir_ck = subprocess.run([str(mtl), "eval", str(dir_in), str(self.corp), "1"], capture_output=True, text=True)
+        self.assertEqual(r_dir_ck.returncode, 70, f"oprd on directory expected exit 70, got {r_dir_ck.returncode}")
+
+    def test_find_ng_ignores_fake_path_ng(self) -> None:
+        omc = os.environ.get("OMC")
+        if not omc or not Path(omc).is_file():
+            for cand in (
+                shutil.which("omc"),
+                str(Path.home() / ".local" / "bin" / "omc"),
+                str(Path.home() / "canon" / "omega-mv" / "seed" / "out" / "omc"),
+                str(ROOT.parent / "omega-mv" / "seed" / "out" / "omc"),
+                str(ROOT.parent / "omega-mv-macos" / "seed" / "out" / "omc"),
+            ):
+                if cand and Path(cand).is_file() and os.access(cand, os.X_OK):
+                    omc = cand
+                    break
+        if not omc or not Path(omc).is_file():
+            self.skipTest("omc not found for find_ng test")
+
+        fake_bin = self.tmp / "fake_bin"
+        fake_bin.mkdir()
+        hit = self.tmp / "fake_ng_called"
+        fake_ng = fake_bin / "ng"
+        fake_ng.write_text(
+            f"#!/bin/sh\ntouch '{hit}'\necho 'Angular CLI: 19.0.0'\nexit 0\n",
+            encoding="utf-8",
+        )
+        fake_ng.chmod(0o755)
+
+        base_env = {k: v for k, v in os.environ.items() if k not in ("NG", "OMEGA_MV")}
+        base_env["OMC"] = omc
+        base_env["TARGET"] = "macos-metal"
+        base_env["PATH"] = f"{fake_bin}:{base_env.get('PATH', '')}"
+
+        r_bad = subprocess.run(
+            ["sh", str(ROOT / "scripts" / "build.sh")],
+            cwd=str(ROOT),
+            env={**base_env, "NG": str(fake_ng), "OUT": str(self.tmp / "out_bad_ng")},
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(r_bad.returncode, 0)
+        self.assertIn("not an executable Omega ng compiler", r_bad.stderr)
+        hit.unlink(missing_ok=True)
+
+        sibling_omv = (
+            (ROOT.parent / "omega-mv" / "seed" / "ng" / "src" / "ir.om").is_file()
+            or (ROOT.parent / "omega-mv-macos" / "seed" / "ng" / "src" / "ir.om").is_file()
+        )
+        if not sibling_omv:
+            empty_home = self.tmp / "empty_home"
+            empty_home.mkdir()
+            out_no_ng = self.tmp / "out_no_ng"
+            r_no_ng = subprocess.run(
+                ["sh", str(ROOT / "scripts" / "build.sh")],
+                cwd=str(ROOT),
+                env={**base_env, "HOME": str(empty_home), "OUT": str(out_no_ng)},
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(r_no_ng.returncode, 0, f"fake PATH ng was accepted: {r_no_ng.stdout}\n{r_no_ng.stderr}")
+            self.assertFalse((out_no_ng / "ollm-metal").exists())
+            hit.unlink(missing_ok=True)
+
+        if platform.system() != "Darwin" or platform.machine() != "arm64":
+            return
+
+        real_ng: Path | None = None
+        for cand in (ROOT / "build" / "verify-om" / "ng", ROOT / "build" / "verify" / "ng", ROOT / "build" / "ng"):
+            if cand.is_file() and os.access(cand, os.X_OK):
+                real_ng = cand
+                break
+        if real_ng is not None:
+            out_real = self.tmp / "out_real_ng"
+            out_real.mkdir()
+            shutil.copy2(real_ng, out_real / "ng")
+            subprocess.run(
+                ["sh", str(ROOT / "scripts" / "build.sh")],
+                cwd=str(ROOT),
+                env={**base_env, "OUT": str(out_real)},
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertTrue((out_real / "ollm-metal").is_file())
+            self.assertFalse(hit.exists(), "build.sh invoked fake PATH ng despite $OUT/ng")
+
+        omv_root: Path | None = None
+        for cand_str in (
+            os.environ.get("OMEGA_MV"),
+            str(Path.home() / "workspace" / "omega-mv-macos"),
+            str(Path.home() / "canon" / "omega-mv"),
+            str(ROOT.parent / "omega-mv"),
+            str(ROOT.parent / "omega-mv-macos"),
+        ):
+            if cand_str:
+                p = Path(cand_str)
+                if (p / "seed" / "ng" / "src" / "ir.om").is_file() and (p / "seed" / "ng" / "src" / "a64.om").is_file():
+                    omv_root = p
+                    break
+        if omv_root is not None:
+            out_omv = self.tmp / "out_omv"
+            subprocess.run(
+                ["sh", str(ROOT / "scripts" / "build.sh")],
+                cwd=str(ROOT),
+                env={**base_env, "OMEGA_MV": str(omv_root), "OUT": str(out_omv)},
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertTrue((out_omv / "ollm-metal").is_file())
+            self.assertFalse(hit.exists(), "build.sh invoked fake PATH ng despite OMEGA_MV")
+
+    def test_mgemm_rejects_overflow_and_oversized_dims(self) -> None:
+        if platform.system() != "Darwin" or platform.machine() != "arm64":
+            self.skipTest("requires Darwin arm64")
+        mtl = _resolve_metal_bin()
+        if mtl is None:
+            self.skipTest("ollm-metal binary not built")
+        assert mtl is not None
+
+        bad_cases = [
+            ("4294967296", "4294967296", "1", "1"),
+            ("65537", "1", "1", "1"),
+            ("16384", "16384", "1", "1"),
+            ("16", "16", "16", "10001"),
+        ]
+        for dims in bad_cases:
+            r = subprocess.run([str(mtl), "mgemm", *dims], capture_output=True, text=True)
+            self.assertEqual(
+                r.returncode,
+                2,
+                f"mgemm {' '.join(dims)} expected rc=2, got {r.returncode}: {r.stdout}\n{r.stderr}",
+            )
+
+    def test_metal_exit_codes_and_io_casts(self) -> None:
+        gpu_dir = ROOT / "native" / "gpu"
+        msl_src = (gpu_dir / "metal_msl.om").read_text(encoding="utf-8")
+        self.assertNotIn("exit 75", msl_src, "metal_msl.om must not overload exit 75")
+
+        io_src = (gpu_dir / "metal_io.om").read_text(encoding="utf-8")
+        self.assertNotIn("long mio_g64", io_src, "metal_io.om must not narrow-cast mio_g64 to long (trap 5 on -1)")
+
+        mtl_src = (gpu_dir / "metal_macos.om").read_text(encoding="utf-8")
+        for fn_name in ("fn mtl_load_pso", "fn mtl_alloc_buf"):
+            start = mtl_src.index(fn_name)
+            end = mtl_src.index("\nfn ", start + 1)
+            body = mtl_src[start:end]
+            self.assertNotIn("exit 75", body, f"{fn_name} must not overload exit 75")
+
 
 if __name__ == "__main__":
     unittest.main()

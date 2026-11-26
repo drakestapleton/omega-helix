@@ -1,7 +1,7 @@
 note SPDX-License-Identifier: AGPL-3.0-only
 note native/gpu/mpool.om: static bank-B stub for macos-metal (@ng a64 macho).
-note Keeps total static globals well under the Mach-O 1 GiB limit while all
-note CONTRACT-V2 models (P <= OWC = 15833472) run natively in Bank A.
+note Keeps total static globals well under the Mach-O 1 GiB limit while models up to
+note the metal_io.om cold-store cap (P <= 8388608, 3*P <= OCSN) run natively in Bank A.
 const OWWN ulong 1
 global oww f64 1
 const OGBN ulong 1
