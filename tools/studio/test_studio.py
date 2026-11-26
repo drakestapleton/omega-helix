@@ -356,6 +356,35 @@ class StudioTestCase(unittest.TestCase):
                 sm = json.loads(resp.read().decode("utf-8"))
             self.assertTrue(sm["ok"])
             self.assertGreater(len(sm["stdout"]), 0)
+
+            # End-to-end live Full-APU apuweave against native ollm
+            dom2 = sp_dir / "dom2.bin"
+            dom2.write_bytes((b"struct RingDesc seq ulong flags uint end\n" * 80))
+            apu_out = sp_dir / "apu_out"
+            a_req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/spiral/apuweave",
+                data=json.dumps({
+                    "base_ck": str(seed_ck),
+                    "shards": [str(dom_tok), str(dom2)],
+                    "out_dir": str(apu_out),
+                    "f_exp": 16,
+                    "lambda_milli": 100,
+                    "max_toks": 128,
+                    "quant_bits": 4,
+                    "workers": 1,
+                    "use_gpu": False,
+                }).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(a_req, timeout=20.0) as resp:
+                aw = json.loads(resp.read().decode("utf-8"))
+            self.assertTrue(aw["ok"])
+            self.assertEqual(aw["n_shards"], 2)
+            self.assertEqual(aw["tamper_ok"], 2)
+            self.assertEqual(len(aw["out_packs"]), 2)
+            self.assertGreaterEqual(aw["wall_ms"], 0)
+            self.assertGreater(aw["w4_bytes"], 160)
         finally:
             srv.shutdown()
             srv.server_close()
@@ -366,6 +395,8 @@ class StudioTestCase(unittest.TestCase):
         self.assertIn('id="spiral-pillars"', html)
         self.assertIn('id="spiral-meter-block"', html)
         self.assertIn('id="pm-spiral"', html)
+        self.assertIn('id="btn-qt-apuweave"', html)
+        self.assertIn('id="btn-sp-apuweave"', html)
 
     # ------------------------------------------------------------------ 4. Full DNA Merkle + Hybrid Forge
 

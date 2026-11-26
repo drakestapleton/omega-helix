@@ -308,8 +308,8 @@ def plan_spiral(raw: dict[str, Any]) -> dict[str, Any]:
     cmds = [
         f"ollm-gb10 init seed.ck {V} {T} {D} {H} {F} {L_phys} {B} 1 {base_steps} 1500 1 0 {L_phys} {NP}",
         f"ollm-gb10 gtrainb seed.ck seed_train.tok {base_steps} {min(base_steps, 250)}",
+        f"ollm-gb10 apuweave seed.ck shards/ strands/ {f_exp} {lambda_milli} 512 {quant_bits} 16  # Full-APU 48 SMs + 20 Grace cores",
         f"ollm-gb10 spcryst seed.ck strand_01.tok strands/s01.sp2 {f_exp} {lambda_milli} 4096 1 {quant_bits}",
-        f"# ... repeat across {n_strands} razor-strands (~{sec_per_strand:.1f}s/strand, ~{est_total_cryst_sec:.0f}s total) ...",
         f"ollm-gb10 spweval seed.ck seed_held.tok {top_k} 16 strands/s01.sp2 strands/s02.sp2 ...",
         f"ollm-gb10 spsamp seed.ck \"fn main\" 96 {top_k} 700 strands/s01.sp2 strands/s02.sp2 ...",
     ]
@@ -608,4 +608,139 @@ def run_spiral_sample(
         "text": "\n".join(text_lines).strip(),
         "routing": routing,
         "stdout": stdout_txt.strip(),
+    }
+
+
+def parse_apuweave_stdout(stdout: str) -> dict[str, Any]:
+    """Parse machine-readable APU_WAVE / APU_STRAND / APU_SUMMARY / APU_OVERLAP telemetry."""
+    waves: list[list[int]] = []
+    strands: list[list[int]] = []
+    summary_raw: list[int] | None = None
+    overlap_raw: list[int] | None = None
+    for line in stdout.splitlines():
+        parts = line.strip().split()
+        if not parts:
+            continue
+        tag = parts[0]
+        if tag in ("APU_WAVE", "APU_STRAND", "APU_SUMMARY", "APU_OVERLAP"):
+            try:
+                vals = [int(x) for x in parts[1:]]
+            except ValueError:
+                continue
+            if tag == "APU_WAVE":
+                waves.append(vals)
+            elif tag == "APU_STRAND":
+                strands.append(vals)
+            elif tag == "APU_SUMMARY":
+                summary_raw = vals
+            elif tag == "APU_OVERLAP":
+                overlap_raw = vals
+
+    out: dict[str, Any] = {
+        "waves": waves,
+        "strands": strands,
+        "summary_raw": summary_raw,
+        "overlap_raw": overlap_raw,
+        "n_shards": len(strands),
+        "tot_w": 0,
+        "wall_ms": 0,
+        "gpu_ms": 0,
+        "cpu_core_ms": 0,
+        "strands_per_sec": 0.0,
+        "overlap": 0.0,
+        "w4_bytes": 0,
+        "base_eval_loss": None,
+        "woven_eval_loss": None,
+        "held_drop": None,
+        "tamper_ok": 0,
+        "gpu_mode": 0,
+    }
+    if summary_raw and len(summary_raw) >= 13:
+        out["n_shards"] = summary_raw[0]
+        out["tot_w"] = summary_raw[1]
+        out["wall_ms"] = summary_raw[2]
+        out["gpu_ms"] = summary_raw[3]
+        out["cpu_core_ms"] = summary_raw[4]
+        out["strands_per_sec"] = round(summary_raw[5] / 1000.0, 3)
+        out["overlap"] = round(summary_raw[6] / 1000.0, 3)
+        out["w4_bytes"] = summary_raw[7]
+        out["base_eval_loss"] = round(summary_raw[8] / 1e6, 6)
+        out["woven_eval_loss"] = round(summary_raw[9] / 1e6, 6)
+        out["held_drop"] = round(summary_raw[10] / 1e6, 6)
+        out["tamper_ok"] = summary_raw[11]
+        out["gpu_mode"] = summary_raw[12]
+    return out
+
+
+def run_apuweave(
+    ollm_bin: Path,
+    base_ck: str,
+    shards_source: str | list[str],
+    out_dir: str,
+    *,
+    f_exp: int = 128,
+    lambda_milli: int = 100,
+    max_toks: int = 512,
+    quant_bits: int = 4,
+    workers: int = 0,
+) -> dict[str, Any]:
+    """Run Full-APU Simultaneous Co-Execution Fabric (`ollm[-gb10] apuweave`)."""
+    import platform as _plat
+
+    base_p = Path(base_ck).expanduser().resolve()
+    if not base_p.is_file():
+        raise ValueError(f"base_ck not found: {base_p}")
+    out_p = Path(out_dir).expanduser().resolve()
+    out_p.mkdir(parents=True, exist_ok=True)
+
+    if isinstance(shards_source, list):
+        clean_paths = [str(Path(s).expanduser().resolve()) for s in shards_source if str(s).strip()]
+        if not clean_paths:
+            raise ValueError("shards list cannot be empty")
+        list_p = out_p / "shards.list"
+        list_p.write_text("\n".join(clean_paths) + "\n", encoding="utf-8")
+        src_arg = list_p
+    else:
+        src_arg = Path(str(shards_source)).expanduser().resolve()
+        if not src_arg.exists():
+            raise ValueError(f"shards_source not found: {src_arg}")
+
+    eff_workers = int(workers) if int(workers) > 0 else (16 if _plat.system() == "Linux" else 1)
+    eff_q = int(quant_bits) if int(quant_bits) in (4, 64) else 4
+    argv = [
+        str(ollm_bin),
+        "apuweave",
+        str(base_p),
+        str(src_arg),
+        str(out_p),
+        str(int(f_exp)),
+        str(int(lambda_milli)),
+        str(int(max_toks)),
+        str(eff_q),
+        str(eff_workers),
+    ]
+    t0 = time.monotonic()
+    proc = subprocess.run(argv, capture_output=True, text=True, check=False)
+    elapsed = round(time.monotonic() - t0, 4)
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise RuntimeError(f"apuweave exited {proc.returncode}: {detail}")
+
+    tel = parse_apuweave_stdout(proc.stdout)
+    out_packs = sorted(str(p) for p in out_p.glob("*.sp2"))
+    sec_per_strand = (
+        round((tel["wall_ms"] / 1000.0) / tel["n_shards"], 4)
+        if tel["n_shards"] > 0 and tel["wall_ms"] > 0
+        else (round(elapsed / max(1, len(out_packs)), 4))
+    )
+    return {
+        "ok": True,
+        "cmd": " ".join(argv),
+        "elapsed_sec": elapsed,
+        "sec_per_strand": sec_per_strand,
+        "out_dir": str(out_p),
+        "out_packs": out_packs,
+        "workers": eff_workers,
+        **tel,
+        "stdout": proc.stdout.strip(),
     }
