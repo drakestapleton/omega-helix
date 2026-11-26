@@ -1,88 +1,33 @@
 note SPDX-License-Identifier: AGPL-3.0-only
-note omegallm serve.om (aien-train DRA-119): `ollm serve PORT CK MERGES [MAXCONN] [tplmax=N]
-note [test=1]`, an OpenAI-compatible HTTP/1.1 server for a v1 BPE checkpoint (V > 256) on
-note 127.0.0.1:PORT only. aarch64 only: build.sh composes it under one `om2` line after the
-note omega-mv e5b32567 units net/http.om, net/json.om and net/jsonw.om (vendored unmodified); the
-note other targets take noserve.om. It prints `PORT n`, then serves one request at a time, one
-note request per connection (Connection: close), with no connection limit; MAXCONN (1 or more,
-note for tests) makes it leave after that many connections.
-note A connection is served once its first bytes arrive; a silent one waits in one
-note of 8 pending slots and is closed unanswered 10 s after its accept (svwait). tplmax=N
-note (256 .. 983040, default 65536) caps the chat template in bytes; test=1 enables the test-only
-note members ollm_test_output and ollm_test_delay_ms (refused otherwise).
-note Routes: GET /health {"status":"ok","in_flight":0,"busy":false}; GET /v1/models;
-note POST /v1/chat/completions with JSON or SSE (stream true) responses; other paths 404, other
-note methods 405. in_flight counts the generating chat completions (0 or 1, one slot); busy is
-note in_flight 1. While a completion generates, the listener and pending connections are served
-note between tokens: GET /health answers {"status":"ok","in_flight":1,"busy":true}, GET
-note /v1/models the list, and every other request 503 server_busy with Retry-After: 1. A client
-note that leaves (svgone) stops its generation: nothing more is sent, logged as status 499.
-note Request: messages (non-empty array of objects with a string role of at most 32 bytes and a
-note content that is a string, null, or an array of {"type":"text","text":string} parts joined
-note with no separator; other part types are 400; content may be absent beside tool_calls),
-note optional max_tokens or max_completion_tokens (1 .. 999999), temperature (0 .. 2 without
-note exponent, used to 0.001; default 1), seed (unsigned; absent or null: a fresh seed for each
-note request, svseed), top_k (integer -1 ..
-note 999999; -1, 0 and K >= V are off), top_p (0 <= p <= 1 without exponent, used to 0.000001;
-note 0 keeps only the most probable token, 1 is off), stop (null, a string or an array of at most
-note 8 strings of 1 .. 128 bytes), tools (array of at most 128
-note {"type":"function","function":{"name":1 .. 64 bytes, ...}}), tool_choice ("none" or "auto";
-note "required" and a {"type":"function"} object are 400: nothing here can force a call), stream,
-note stream_options.include_usage and n (only 1). Members that would change the output and are
-note not implemented are 400 unless they carry their default (svscal3): response_format other
-note than {"type":"text"}, a non-empty logit_bias, logprobs true, top_logprobs, frequency_penalty
-note or presence_penalty other than 0, parallel_tool_calls false, functions and function_call.
-note Other members (model, user, ...) are ignored.
-note Interim chat template (until DRA-123 fixes one shared template): when tools is non-empty,
-note `tools: ` and the request's tools JSON text as sent, then `\n`; then `role: content\n` for
-note each message in order, an assistant's tool_calls appended to its content as
-note `<tool_call>{"name":NAME,"arguments":ARGS}</tool_call>` (NAME the JSON string as sent, ARGS
-note the decoded string or the object's JSON text as sent, {} when absent); then `assistant: `.
-note At most tplmax bytes, else 400. The context is token 0 then the template's encoding (CT0
-note tokens, reported as prompt_tokens); CT0 >= T is refused with 400 context_length_exceeded
-note stating CT0 and T. Output runs at most min(max_tokens, T - CT0) tokens, so the T-token window
-note never slides (cmdsamp's step osstep, splitmix64 seed stream; with top_k or top_p on, the
-note kept tokens are the most probable in order, ties to the lower id, up to K and until their
-note mass reaches top_p, drawn by the same uniform scaled to the kept mass); a generated token 0
-note ends it with finish_reason stop, the limit with length, the earliest stop string with stop
-note (the content cut before it; a streamed chunk never sends a byte a stop could still claim).
-note Tool calls (tools non-empty, tool_choice not "none"): when the content from the first
-note `<tool_call>` on is 1 .. 8 blocks `<tool_call>{"name":N,"arguments":A}</tool_call>` with only
-note whitespace between and after, N a declared tool name and A an object, a string or absent,
-note the answer carries tool_calls (id call_<request>_<i>, arguments the object's JSON text or the
-note string) with finish_reason tool_calls and content the text before, trailing whitespace
-note dropped, null when empty; otherwise the text is plain content. Streaming holds back a
-note possible marker and trailing whitespace, then sends the tool_calls in one delta chunk.
-note Decoded bytes are sent as UTF-8: a sequence cut by a token boundary waits for the next token,
-note an ill-formed one (or one cut by the end) becomes U+FFFD. One line per routed response (and
-note per 413 at the head, and per request answered during a generation) goes to stdout: `C status
-note prompt_tokens completion_tokens finish(0 none, 1 stop, 2 length, 3 tool_calls, 4 client left)
-note ms`. A body over 65532 JSON tokens is 413 request_too_large.
-note Exit codes: 2 usage; 27 merges (bpe.om); 71 the port cannot be bound.
+note omegallm serve.om (aien-train DRA-119 + Workstream 3 scaling):
+note `ollm serve PORT CK MERGES [MAXCONN] [tplmax=N] [test=1] [slots=N] [ctx=N] [kvcache=N] [kvblks=N] [strand=PATH ...]`
+note Production OpenAI-compatible HTTP/1.1 server on 127.0.0.1:PORT with:
+note  - Continuous-batching multi-slot concurrent scheduler (slots=1..8, default 8; true 503 only when saturated)
+note  - Paged shared-trunk KV prefix cache (SV_BLK=8) across base, single strands, and spclip S=2..4 strands
+note    with FNV-1a-64 prefix chain hashing + exact 8-token verification and bounded LRU leaf eviction
+note  - Long-context serving up to 32,768 tokens (ctx=T_ck..32768, default 8192; clean 400 over limit)
+note aarch64/gb10 only: build.sh composes it under one `om2` line after net/{http,json,jsonw}.om.
+note Wait/pending: 32 pending slots, 10 s silent timeout; head 10 s / body 60 s idle (0.5 s / 5 s when active).
+note tplmax=N (256 .. 983040, default 524288) caps the chat template in bytes; test=1 enables test-only fields
+note (ollm_test_output, ollm_test_delay_ms, ollm_test_collide).
+note Routes: GET /health, GET /v1/models, POST /v1/chat/completions, POST /v1/completions,
+note GET /v1/neuralese/info, POST /v1/neuralese/trace.
+note Exit codes: 2 usage; 27 merges (bpe.om); 60/61/62 strand pack check/tamper/mismatch; 71 port bind.
 note wb layout: raw token bytes [0, 8192), content [8192, 73728), stop strings [73728, 74752) (8 x
 note 128), markers [74752, 74784), message [81920, 82176), response id [82176, 82240), call id
 note [82240, 82432), tool names [82432, 90624) (128 x 64), template [90624, 1073664). bd holds the
 note request, then the tool calls' names and arguments [0, 131072). sv slots: 0 stream, 1 max
 note tokens, 2 TEMPMILLI, 3 seed state, 4 include_usage, 5 template bytes, 6 CT0, 7 generated, 8
 note finish, 9 request count, 10 created, 11 start ns, 12 raw bytes, 13 content bytes, 14 content
-note sent, 15 id length, 16 error code, 17 chunk end, 19 T, 21 last status, 22 test mode, 23
+note sent, 15 id length, 16 error code, 17 chunk end, 19 max_ctx, 21 last status, 22 test mode, 23
 note tplmax, 24 forced tokens, 25 forced on, 26 test output bytes, 27 delay ms, 28 top_k, 29 top_p
 note millionths, 30 tools, 31 tool detection, 32 tool calls, 33 marker position, 34 bd fill,
-note 35 stop strings, 36 listen fd.
-note Model id (svmid): read from the loaded checkpoint's header, so it names this model and this
-note checkpoint: `ollm-ck0M-vV-tT-dD-hH-lL-stepS-fnvX`, M the checkpoint magic (1 OLLMCK01,
-note 2 OLLMCK02), V T D H L its shapes, S its step field and X the FNV-1a 64 of its payload as the
-note header records it (ockload has already refused a payload that does not hash to it, exit 14).
-note The same id is `/v1/models` data[0].id (also while a completion generates) and the `model`
-note of every completion and chunk; it is kept in the global svmi, its length in svml, and
-note printed as `MODEL id` before `PORT n`.
+note 35 stop strings, 36 listen fd, 37 /v1/completions mode, 38 route (0 base, 1..4 strand k, 5 spclip),
+note 39 spclip_mode, 40 spclip_mode_set, 41 spclip_weights_set, 42 cache_on, 43 cached_tokens,
+note 44 collide_mode, 45 strand_set.
 note
-note Mutants (tests/omegallm/build.sh --mutant NAME sets one constant to 0; tests/omegallm/
-note serve-mutants.sh requires the serve gate to fail on each): OMUTMETH answers a known path's
-note other methods instead of 405, OMUTPATH answers other paths as /health instead of 404, OMUTBIG
-note drops the 413 (no head bound, an over-long body is a plain 400), OMUTJSON serves malformed JSON
-note instead of 400, OMUTLOOP binds 0.0.0.0 instead of 127.0.0.1, OMUTSEED shifts the request seed
-note by one (parity with `sample`), OMUTMID reports the old fixed id `ollm`.
+note Mutants (tests/omegallm/build.sh --mutant NAME sets one constant to 0):
+note OMUTMETH, OMUTPATH, OMUTBIG, OMUTJSON, OMUTLOOP, OMUTSEED, OMUTMID.
 const OMUTMETH ulong 1
 const OMUTPATH ulong 1
 const OMUTBIG ulong 1
@@ -90,6 +35,19 @@ const OMUTJSON ulong 1
 const OMUTLOOP ulong 1
 const OMUTSEED ulong 1
 const OMUTMID ulong 1
+
+const SV_MAX_SLOTS ulong 8
+const SV_MAX_CTX ulong 32768
+const SV_BLK ulong 8
+const SV_MAX_BLKS_SLOT ulong 4096
+const SV_MAX_STRANDS ulong 4
+const SV_MAX_BRL ulong 16
+const SV_NONE ulong 4294967295
+const SV_HT_SZ ulong 65536
+const SV_HT_MASK ulong 65535
+const SV_PREFILL_CHUNK ulong 32
+const SV_POOL_MAX_BLKS ulong 32768
+const SV_KV_MAX_F64 ulong 268435456
 
 text svtjson "application/json"
 text svtctyp "Content-Type"
@@ -171,7 +129,40 @@ text svtlist "list"
 text skdata "data"
 text skowned "owned_by"
 text svaien "aien"
-text svt503 "{\"error\":{\"message\":\"a chat completion is in flight and this server runs one at a time: retry after 1 s\",\"type\":\"server_error\",\"param\":null,\"code\":\"server_busy\"}}"
+text svt503 "{\"error\":{\"message\":\"all concurrent server slots are busy: retry after 1 s\",\"type\":\"server_error\",\"param\":null,\"code\":\"server_busy\"}}"
+text skstatus "status"
+text svoktxt "ok"
+text skinfl "in_flight"
+text skmxsl "max_slots"
+text skbusy "busy"
+text skmxctx "max_ctx"
+text skstrnd "strands"
+text skkvc "kv_cache"
+text skentr "entries"
+text skcap "capacity"
+text skhits "hits"
+text skmiss "misses"
+text sktksav "tokens_saved"
+text skcolrj "collisions_rejected"
+text skevict "evictions"
+text skptd "prompt_tokens_details"
+text skctok "cached_tokens"
+text skstrand "strand"
+text skspmod "spclip_mode"
+text skspwts "spclip_weights"
+text skcpref "cache_prefix"
+text sktcol "ollm_test_collide"
+text svbase "base"
+text svspclp "spclip"
+text svst0 "strand:0"
+text svst1 "strand:1"
+text svst2 "strand:2"
+text svst3 "strand:3"
+text svoptsl "slots="
+text svoptcx "ctx="
+text svoptkv "kvcache="
+text svoptkb "kvblks="
+text svoptst "strand="
 text svtra "Retry-After"
 text svone "1"
 text svport "PORT "
@@ -294,6 +285,11 @@ text sem26 "prompt must be a non-empty string"
 text sem27 "stream is not supported on /v1/completions: send stream false or leave it out"
 text sem28 "messages, tools and tool_choice belong to /v1/chat/completions; /v1/completions takes prompt"
 text sem29 "not supported here: response_format other than text, logit_bias, logprobs, top_logprobs, frequency_penalty, presence_penalty, parallel_tool_calls false, functions, function_call; leave them out or send their defaults"
+text sem30 "strand must be \"base\", \"spclip\", or a valid loaded strand index"
+text sem31 "spclip_mode must be 0 (prior PoE) or 1 (entropy-gated)"
+text sem32 "spclip_weights must be an array of S integers in -5000..5000 with positive weight sum"
+text sem33 "cache_prefix must be true or false"
+text sem34 "ollm_test_collide must be a boolean and needs a server started with test=1"
 text sem11a "prompt is "
 text sem11b " tokens including the start token; the context window is "
 text sem11c " tokens, so no room is left for output"
@@ -306,10 +302,10 @@ global svtnl ulong 128
 global svtcx ulong 32
 note pending connections (svwait): descriptor + 1 (0 free), accept time, record slot; pollfd records;
 note the svgone peek byte
-global svpfd ulong 8
-global svpat ulong 8
-global svpix ulong 8
-global svpl uchar 72
+global svpfd ulong 32
+global svpat ulong 32
+global svpix ulong 32
+global svpl uchar 264
 global svpk uchar 1
 global svmi uchar 192
 global svml ulong 1
@@ -322,6 +318,78 @@ global svnl_xp ulong 128
 global svnl_mn ulong 128
 global svnl_vec long 1024
 global svnl_cfg ulong 16
+
+note Continuous-batching scheduler & paged shared-trunk KV cache state
+global sv_cfg ulong 32
+global sv_kstat ulong 32
+global sv_cur_spw long 4
+global sv_base_gf f64 2048
+global sv_st_sl ulong 4
+global sv_st_wo ulong 4
+global sv_st_wn ulong 4
+global sv_st_bio ulong 4
+global sv_st_arg ulong 4
+global sv_st_skp ulong 4
+
+note Persistent per-slot request & HTTP state (up to SV_MAX_SLOTS = 8 concurrent slots)
+global svs_active ulong 8
+global svs_sv ulong 512
+global svs_cs ulong 2560
+global svs_raw uchar 65536
+global svs_cnt uchar 524288
+global svs_stp uchar 8192
+global svs_stl ulong 64
+global svs_tnm uchar 65536
+global svs_tnl ulong 1024
+global svs_id uchar 512
+global svs_ft ulong 32768
+global svs_spw f64 32
+global svs_due ulong 8
+global svs_ct ulong 8
+global svs_tpos ulong 8
+global svs_bpos ulong 8
+global svs_route ulong 8
+global svs_spmode ulong 8
+global svs_cacheon ulong 8
+global svs_cached ulong 8
+global svs_collide ulong 8
+global svs_usekv ulong 8
+global svs_lim ulong 8
+global svs_sfin ulong 8
+
+note Single-row streaming forward & spclip fusion scratch
+global sv_h f64 2048
+global sv_a f64 2048
+global sv_q f64 2048
+global sv_k f64 2048
+global sv_v f64 2048
+global sv_o f64 2048
+global sv_hm f64 2048
+global sv_z f64 2048
+global sv_fp f64 8192
+global sv_att f64 32768
+global sv_clip_lp f64 *
+global sv_clip_ent f64 4
+global sv_clip_al f64 4
+global sv_clip_dl f64 *
+
+note Paged trunk KV pool, open-chaining prefix hash table, and specialist branch KV pool
+global sv_ht ulong 65536
+global sv_tok ulong *
+global sv_sblks ulong *
+global sv_kv f64 *
+global sv_bref ulong *
+global sv_bstate ulong *
+global sv_bpar ulong *
+global sv_bpos ulong *
+global sv_bhash ulong *
+global sv_blru ulong *
+global sv_bnext ulong *
+global sv_btok ulong *
+global sv_bkv f64 *
+global sv_bkv_used uchar *
+global sv_sbblk ulong *
+global sv_shbr f64 *
 
 note ======== small byte helpers over wb
 
@@ -681,6 +749,21 @@ end
 if eq e 29
 ret svmcat wb p z sem29
 end
+if eq e 30
+ret svmcat wb p z sem30
+end
+if eq e 31
+ret svmcat wb p z sem31
+end
+if eq e 32
+ret svmcat wb p z sem32
+end
+if eq e 33
+ret svmcat wb p z sem33
+end
+if eq e 34
+ret svmcat wb p z sem34
+end
 ret p
 end
 
@@ -867,7 +950,41 @@ end
 oputc 10
 end
 
-note svmodw: the /v1/models answer, the one model this server answers with (not logged)
+note svmod_ent: append one model object with id text t (or checkpoint id when use_mid is 1)
+fn svmod_ent ob edit uchar 409600 t view uchar * use_mid ulong to void
+js_wobj ob
+svwt ob skid
+if eq use_mid 1
+svmidw ob
+else
+svwt ob t
+end
+svwt ob skobj
+svwt ob skmodel
+svwt ob skcrt
+js_wulong ob 0
+svwt ob skowned
+svwt ob svaien
+js_wobje ob
+end
+
+note svmod_str: append model entry for strand index s
+fn svmod_str ob edit uchar 409600 s ulong to void
+if eq s 0
+svmod_ent ob svst0 0
+end
+if eq s 1
+svmod_ent ob svst1 0
+end
+if eq s 2
+svmod_ent ob svst2 0
+end
+if eq s 3
+svmod_ent ob svst3 0
+end
+end
+
+note svmodw: the /v1/models answer (base model plus loaded strands and spclip when present)
 fn svmodw cs edit ulong 320 io edit uchar 131072 to long
 ob = new uchar 409600 0
 x = js_winit ob
@@ -876,16 +993,14 @@ svwt ob skobj
 svwt ob svtlist
 svwt ob skdata
 js_warr ob
-js_wobj ob
-svwt ob skid
-svmidw ob
-svwt ob skobj
-svwt ob skmodel
-svwt ob skcrt
-js_wulong ob 0
-svwt ob skowned
-svwt ob svaien
-js_wobje ob
+svmod_ent ob svollm 1
+ns = get sv_cfg 4
+for s ulong ns
+svmod_str ob s
+end
+if ge ns 2
+svmod_ent ob svspclp 0
+end
 js_warre ob
 js_wobje ob
 m = js_wdone ob
@@ -894,6 +1009,57 @@ put cs HKEEP 0
 ret hrsperr cs io 500
 end
 ret svsend cs io ob 200 ulong m
+end
+
+note svhealth: dynamic JSON /health reporting active slots, max_slots, max_ctx, strands, and kv_cache
+fn svhealth cs edit ulong 320 io edit uchar 131072 sv edit ulong 64 to long
+ob = new uchar 409600 0
+x = js_winit ob
+js_wobj ob
+svwt ob skstatus
+svwt ob svoktxt
+svwt ob skinfl
+nact = get sv_cfg 12
+js_wulong ob nact
+svwt ob skmxsl
+msl = get sv_cfg 0
+if eq msl 0
+msl = ulong 1
+end
+js_wulong ob msl
+svwt ob skbusy
+js_wbool ob ge nact msl
+svwt ob skmxctx
+js_wulong ob get sv_cfg 1
+svwt ob skstrnd
+js_wulong ob get sv_cfg 4
+svwt ob skkvc
+js_wobj ob
+svwt ob skentr
+js_wulong ob get sv_kstat 2
+svwt ob skcap
+js_wulong ob get sv_kstat 3
+svwt ob skhits
+js_wulong ob get sv_kstat 5
+svwt ob skmiss
+js_wulong ob get sv_kstat 6
+svwt ob sktksav
+js_wulong ob get sv_kstat 7
+svwt ob skcolrj
+js_wulong ob get sv_kstat 8
+svwt ob skevict
+js_wulong ob get sv_kstat 9
+js_wobje ob
+js_wobje ob
+m = js_wdone ob
+if lt m 0
+put cs HKEEP 0
+ret hrsperr cs io 500
+end
+put sv 21 200
+r = svsend cs io ob 200 ulong m
+svlog sv
+ret r
 end
 
 note svmods: GET /v1/models, logged
@@ -938,6 +1104,11 @@ svwt ob skct
 js_wulong ob get sv 7
 svwt ob sktt
 js_wulong ob add get sv 6 get sv 7
+svwt ob skptd
+js_wobj ob
+svwt ob skctok
+js_wulong ob get sv 43
+js_wobje ob
 js_wobje ob
 end
 
@@ -1801,6 +1972,171 @@ end
 ret 29
 end
 
+note svp_strand: parse "strand" value v; 0 or error code 30
+fn svp_strand bd edit uchar 983040 tp edit uint 262144 v ulong wb edit uchar 1073664 sv edit ulong 64 to ulong
+put sv 45 1
+ty = js_type tp v
+if eq ty 10
+put sv 38 0
+ret 0
+end
+if eq ty 7
+vo = js_off tp v
+if not js_isu bd vo
+ret 30
+end
+k = js_tou bd vo
+if ge k get sv_cfg 4
+ret 30
+end
+put sv 38 add k 1
+ret 0
+end
+if ne ty 6
+ret 30
+end
+ret svp_strand_s bd js_off tp v wb sv
+end
+
+fn svp_strand_s bd edit uchar 983040 o ulong wb edit uchar 1073664 sv edit ulong 64 to ulong
+ns = get sv_cfg 4
+if js_streq bd o svbase
+put sv 38 0
+ret 0
+end
+if js_streq bd o svspclp
+if lt ns 2
+ret 30
+end
+put sv 38 5
+ret 0
+end
+if js_streq bd o svst0
+if ge 0 ns
+ret 30
+end
+put sv 38 1
+ret 0
+end
+if js_streq bd o svst1
+if ge 1 ns
+ret 30
+end
+put sv 38 2
+ret 0
+end
+if js_streq bd o svst2
+if ge 2 ns
+ret 30
+end
+put sv 38 3
+ret 0
+end
+if js_streq bd o svst3
+if ge 3 ns
+ret 30
+end
+put sv 38 4
+ret 0
+end
+ml = js_sget bd o part wb 82176 8
+if eq ml 1
+c = ulong get wb 82176
+if and ge c 48 le c 51
+k = sub c 48
+if lt k ns
+put sv 38 add k 1
+ret 0
+end
+end
+end
+ret 30
+end
+
+note svp_model: optional model name routing (strand:k / spclip) when strand is not explicitly set
+fn svp_model bd edit uchar 983040 tp edit uint 262144 v ulong sv edit ulong 64 to void
+if ne get sv 45 0
+ret
+end
+if ne js_type tp v 6
+ret
+end
+o = js_off tp v
+ns = get sv_cfg 4
+if and js_streq bd o svspclp ge ns 2
+put sv 38 5
+ret
+end
+if and js_streq bd o svst0 gt ns 0
+put sv 38 1
+ret
+end
+if and js_streq bd o svst1 gt ns 1
+put sv 38 2
+ret
+end
+if and js_streq bd o svst2 gt ns 2
+put sv 38 3
+ret
+end
+if and js_streq bd o svst3 gt ns 3
+put sv 38 4
+end
+end
+
+note svp_spw_elem: read one element weight into sv_cur_spw[k]; returns positive contribution or -1 on error
+fn svp_spw_elem bd edit uchar 983040 tp edit uint 262144 e ulong k ulong to long
+if or eq e jsnone ne js_type tp e 7
+ret -1
+end
+eo = js_off tp e
+if not js_isl bd eo
+ret -1
+end
+w = js_tol bd eo
+if lt w -5000
+ret -1
+end
+if gt w 5000
+ret -1
+end
+put sv_cur_spw k w
+if gt w 0
+ret w
+end
+ret 0
+end
+
+note svp_spw: parse spclip_weights array of S ints in [-5000..5000] with positive weight sum; 0 or 32
+fn svp_spw bd edit uchar 983040 tp edit uint 262144 v ulong sv edit ulong 64 to ulong
+ty = js_type tp v
+if eq ty 10
+ret 0
+end
+ss = get sv_cfg 4
+if or ne ty 3 lt ss 2
+ret 32
+end
+if ne js_nkids tp v ss
+ret 32
+end
+sw = long 0
+e = js_first tp v
+for k ulong ss
+d = svp_spw_elem bd tp e k
+if lt d 0
+ret 32
+end
+sw = add sw d
+e = js_enext tp e
+end
+if le sw 0
+ret 32
+end
+put sv 41 1
+ret 0
+end
+
 note svtest: a test-only member (key k), refused unless the server runs with test=1
 fn svtest bd edit uchar 983040 tp edit uint 262144 k ulong wb edit uchar 1073664 sv edit ulong 64 to ulong
 if eq get sv 22 0
@@ -1835,7 +2171,7 @@ put sv 26 ulong m
 ret 0
 end
 
-note svscal2: the members stop, top_k, top_p, tool_choice and the test-only ones; 0 or a code
+note svscal2: stop, top_k, top_p, tool_choice, routing, cache_prefix, and test-only fields; 0 or a code
 fn svscal2 bd edit uchar 983040 tp edit uint 262144 k ulong wb edit uchar 1073664 sv edit ulong 64 to ulong
 o = js_off tp k
 v = add k 1
@@ -1866,6 +2202,62 @@ end
 if js_streq bd o sktchoi
 ret svtchoi bd tp v sv
 end
+if js_streq bd o skstrand
+ret svp_strand bd tp v wb sv
+end
+if js_streq bd o skspmod
+ty = js_type tp v
+if eq ty 10
+ret 0
+end
+if or ne ty 7 not js_isu bd js_off tp v
+ret 31
+end
+md = js_tou bd js_off tp v
+if gt md 1
+ret 31
+end
+put sv 39 md
+put sv 40 1
+ret 0
+end
+if js_streq bd o skspwts
+ret svp_spw bd tp v sv
+end
+if js_streq bd o skcpref
+ty = js_type tp v
+if eq ty 8
+put sv 42 1
+ret 0
+end
+if eq ty 9
+put sv 42 0
+ret 0
+end
+if eq ty 10
+ret 0
+end
+ret 33
+end
+if js_streq bd o sktcol
+if eq get sv 22 0
+ret 34
+end
+ty = js_type tp v
+if eq ty 8
+put sv 44 1
+ret 0
+end
+if or eq ty 9 eq ty 10
+put sv 44 0
+ret 0
+end
+ret 34
+end
+if js_streq bd o skmodel
+svp_model bd tp v sv
+ret 0
+end
 if or js_streq bd o sktout js_streq bd o sktdel
 ret svtest bd tp k wb sv
 end
@@ -1877,7 +2269,7 @@ note count, so two requests with the same body draw differently. A request's own
 note (svscal), and only that is reproducible.
 fn svseed sv edit ulong 64 to ulong
 t = bitcast ulong realns
-ret smx xor t mul add get sv 9 1 11400714819323198485
+ret smx xor t mul add get sv_cfg 17 1 11400714819323198485
 end
 
 note svreset: a request's options to their defaults
@@ -1893,6 +2285,17 @@ put sv add 24 i 0
 end
 put sv 29 1000000
 put sv 31 1
+put sv 38 0
+put sv 39 1
+put sv 40 0
+put sv 41 0
+put sv 42 1
+put sv 43 0
+put sv 44 0
+put sv 45 0
+for j ulong 4
+put sv_cur_spw j 1000
+end
 end
 
 note svparse: the request body bd[0, n) into sv and the template; 0 or an error code
@@ -1931,6 +2334,17 @@ if ne e 0
 ret e
 end
 k = js_mnext tp k
+end
+if and eq get sv 45 0 or ne get sv 40 0 ne get sv 41 0
+if lt get sv_cfg 4 2
+ret 30
+end
+if eq get sv 38 0
+put sv 38 5
+end
+end
+if and eq get sv 38 5 lt get sv_cfg 4 2
+ret 30
 end
 if eq get sv 37 1
 ret svcprm bd tp wb sv
@@ -1982,9 +2396,18 @@ end
 
 note ======== encoding
 
-note svemit: token t, the m-th of an encoding: md 0 onto the context, md 1 into the forced tokens
+note svemit: token t, the m-th of an encoding: md 0 into active slot's sv_tok, md 1 into svft, md 2 into obx
 fn svemit md ulong m ulong t ulong to void
 if eq md 0
+sl = get sv_cfg 10
+mc = get sv_cfg 1
+pos = add m 1
+if lt pos mc
+put sv_tok add mul sl mc pos t
+end
+ret
+end
+if eq md 2
 if lt get og 9 get og 1
 ocpush t
 end
@@ -2037,54 +2460,1451 @@ end
 ret m
 end
 
-note ======== generation
+note ======== strand loader, paged shared-trunk KV cache, and single-row streaming forward
 
-note svgen: sample up to min(sv1, T - CT0) tokens; streams chunks when sv0 is 1. 0, or negative
-note when a chunk could not be sent or the client left (svgone: finish 4, status 499). Between
-note tokens the listener and pending connections are served (svside), waiting up to
-note ollm_test_delay_ms.
-fn svgen cs edit ulong 320 io edit uchar 131072 ob edit uchar 409600 wb edit uchar 1073664 sv edit ulong 64 bd edit uchar 983040 to long
-lim = sub get sv 19 get sv 6
-if lt get sv 1 lim
-lim = get sv 1
+note sv_open_arg: open path at argv[ai][skp..n); exit 60 if invalid or unreadable
+fn sv_open_arg ai ulong skp ulong to int
+n = oargp ai
+if le n skp
+exit 60
 end
-put sv 7 0
-put sv 8 0
-put sv 12 0
-put sv 13 0
-put sv 14 0
-put sv 17 0
-tmo = long mul get sv 27 1000000
-for g ulong lim
-svside bd sv tmo
-if svgone cs
-put sv 8 4
-put sv 21 499
-ret -104
+fd = int fopen oarg skp sub n skp 0 0
+if lt fd 0
+exit 60
 end
-if not svtake wb sv
+ret fd
+end
+
+note sv_pread_fd: read exactly n bytes at pos from fd into opw[off .. off+n)
+fn sv_pread_fd fd int pos ulong off ulong n ulong to ulong
+p = ulong 0
+dn = false
+for o ulong 3
+while and not dn lt p n bound 999999
+r = pread fd opw add off p sub n p long add pos p
+if lt r 0
+exit 70
+end
+if eq r 0
+dn = true
+else
+p = add p ulong r
+end
+end
+end
+ret p
+end
+
+note sv_rdhdr_pack: verify OLLMSP01 header of strand k against (bl, bh); store sl in sv_st_sl[k],
+note ph in sv_st_wo[k], nspec in sv_st_wn[k] temporarily until pass 2 loads weights
+fn sv_rdhdr_pack k ulong bl ulong bh ulong to ulong
+fd = sv_open_arg get sv_st_arg k get sv_st_skp k
+szs = fseek fd 0 2
+if lt szs 0
+exit 60
+end
+sz = ulong szs
+if lt sz 48
+y = fclose fd
+exit 60
+end
+if ne sv_pread_fd fd 0 0 48 48
+y = fclose fd
+exit 60
+end
+y = fclose fd
+if ne opw8 0 OSPMAG
+exit 60
+end
+if ne opw8 8 bl
+exit 62
+end
+sl = opw8 16
+if or le sl bl gt sl 24
+exit 62
+end
+if ne opw8 24 bh
+exit 62
+end
+ns = opw8 32
+if ne sz add 48 mul ns 8
+exit 60
+end
+exp = add mul sub sl bl get og 32 get og 2
+if ne ns exp
+exit 62
+end
+put sv_st_sl k sl
+put sv_st_wo k opw8 40
+put sv_st_wn k ns
+ret sl
+end
+
+note sv_rdpay_chunk: store cnt unpacked f64s from opw8 into ocs starting at base
+fn sv_rdpay_chunk base ulong cnt ulong to void
+for j ulong cnt
+ocsp add base j bitcast f64 opw8 mul j 8
+end
+end
+
+note sv_rdpay_ocs: stream nspec f64s from strand k into ocs[dst .. dst+nspec); exit 61 on FNV mismatch
+fn sv_rdpay_ocs k ulong dst ulong nspec ulong want_ph ulong to void
+fd = sv_open_arg get sv_st_arg k get sv_st_skp k
+h = ulong 14695981039346656037
+pos = ulong 48
+done = ulong 0
+while lt done nspec bound 65536
+cnt = sub nspec done
+if gt cnt OCKC
+cnt = OCKC
+end
+if ne sv_pread_fd fd pos 0 mul cnt 8 mul cnt 8
+y = fclose fd
+exit 60
+end
+h = ocfnvw h mul cnt 8
+sv_rdpay_chunk add dst done cnt
+pos = add pos mul cnt 8
+done = add done cnt
+end
+y2 = fclose fd
+if ne h want_ph
+exit 61
+end
+end
+
+fn sv_init_base_gf to void
+bl = get og 5
+fz = get og 33
+d = get og 2
+put sv_cfg 5 bl
+put sv_cfg 6 osp_app bl
+put sv_cfg 7 fz
+put sv_cfg 8 osp_basehash bl fz
+put sv_cfg 9 SV_NONE
+for g ulong d
+put sv_base_gf g owg add fz g
+end
+end
+
+fn sv_scan_strands ns ulong bl ulong bh ulong to ulong
+max_l = bl
+tot_brl = ulong 0
+for k ulong ns
+sl = sv_rdhdr_pack k bl bh
+if gt sl max_l
+max_l = sl
+end
+tot_brl = add tot_brl sub sl bl
+end
+if gt tot_brl SV_MAX_BRL
+exit 12
+end
+put sv_cfg 16 max_l
+put sv_cfg 13 tot_brl
+ret max_l
+end
+
+fn sv_load_all_ocs ns ulong bl ulong to void
+c = ocsinit
+need = ulong 0
+for k2 ulong ns
+need = add need get sv_st_wn k2
+end
+if not ocsgrow need
+exit 12
+end
+off = ulong 0
+bio = ulong 0
+for k3 ulong ns
+nspec = get sv_st_wn k3
+sv_rdpay_ocs k3 off nspec get sv_st_wo k3
+put sv_st_wo k3 off
+put sv_st_wn k3 mul sub get sv_st_sl k3 bl get og 32
+put sv_st_bio k3 bio
+bio = add bio sub get sv_st_sl k3 bl
+off = add off nspec
+end
+end
+
+note sv_init_strands: validate 0..4 OLLMSP01 packs, grow og[5] to max_L, store suffix weights in ocs
+fn sv_init_strands to void
+sv_init_base_gf
+bl = get sv_cfg 5
+ns = get sv_cfg 4
+if eq ns 0
+put sv_cfg 16 bl
+put sv_cfg 13 0
+ret
+end
+max_l = sv_scan_strands ns bl get sv_cfg 8
+if gt max_l bl
+ogrowsnap get og 8
+put og 5 max_l
+if not ogeom
+exit 12
+end
+ogrowcopy get sv_cfg 7
+end
+sv_load_all_ocs ns bl
+end
+
+note sv_load_strand: copy strand k suffix weights into ow[base_fz..) when not already active
+fn sv_load_strand k ulong to void
+if eq get sv_cfg 9 k
+ret
+end
+fz = get sv_cfg 7
+wo = get sv_st_wo k
+wn = get sv_st_wn k
+for q ulong ocn wn
+i = mul q OCH
+ie = oce q wn
+while lt i ie bound 999999
+owp add fz i ocsg add wo i
+i = add i 1
+end
+end
+put og 48 get og 5
+put sv_cfg 9 k
+end
+
+note ======== paged shared-trunk KV cache & branch KV pool
+
+fn svk_pool_grow to bool
+cur = get sv_kstat 0
+mx = get sv_kstat 1
+if ge cur mx
+ret false
+end
+ncap = add cur 64
+if gt ncap mx
+ncap = mx
+end
+r = enlarge sv_kv mul ncap get sv_kstat 10
+if ne r 0
+put sv_kstat 1 cur
+ret false
+end
+r = enlarge sv_btok mul ncap SV_BLK
+if ne r 0
+put sv_kstat 1 cur
+ret false
+end
+r = enlarge sv_bref ncap
+if ne r 0
+put sv_kstat 1 cur
+ret false
+end
+r = enlarge sv_bstate ncap
+if ne r 0
+put sv_kstat 1 cur
+ret false
+end
+r = enlarge sv_bpar ncap
+if ne r 0
+put sv_kstat 1 cur
+ret false
+end
+r = enlarge sv_bpos ncap
+if ne r 0
+put sv_kstat 1 cur
+ret false
+end
+r = enlarge sv_bhash ncap
+if ne r 0
+put sv_kstat 1 cur
+ret false
+end
+r = enlarge sv_blru ncap
+if ne r 0
+put sv_kstat 1 cur
+ret false
+end
+r = enlarge sv_bnext ncap
+if ne r 0
+put sv_kstat 1 cur
+ret false
+end
+put sv_kstat 0 ncap
+ret true
+end
+
+fn svb_pool_grow to bool
+cur = get sv_cfg 14
+ncap = add cur 64
+r = enlarge sv_bkv mul ncap get sv_cfg 15
+if ne r 0
+ret false
+end
+r = enlarge sv_bkv_used ncap
+if ne r 0
+ret false
+end
+put sv_cfg 14 ncap
+ret true
+end
+
+fn svk_init to void
+d = get og 2
+tlv = get sv_cfg 6
+msl = get sv_cfg 0
+mc = get sv_cfg 1
+bstr = mul SV_BLK mul add mul 2 tlv 1 d
+put sv_kstat 10 bstr
+put sv_kstat 11 tlv
+put sv_kstat 12 mc
+put sv_kstat 13 msl
+put sv_kstat 14 get sv_cfg 4
+max_mem = div SV_KV_MAX_F64 bstr
+if gt max_mem SV_POOL_MAX_BLKS
+max_mem = SV_POOL_MAX_BLKS
+end
+if lt max_mem 64
+max_mem = 64
+end
+put sv_kstat 1 max_mem
+cmax = mul get sv_cfg 2 512
+if ne get sv_cfg 3 SV_NONE
+cmax = get sv_cfg 3
+end
+if gt cmax max_mem
+cmax = max_mem
+end
+if and gt cmax 0 gt add cmax mul msl 2 max_mem
+if gt max_mem mul msl 4
+cmax = sub max_mem mul msl 2
+else
+cmax = div max_mem 2
+end
+end
+put sv_kstat 3 cmax
+put sv_kstat 15 0
+if gt cmax 0
+put sv_kstat 15 1
+end
+r = enlarge sv_tok mul msl mc
+if ne r 0
+exit 12
+end
+r = enlarge sv_sblks mul msl SV_MAX_BLKS_SLOT
+if ne r 0
+exit 12
+end
+for h ulong SV_HT_SZ
+put sv_ht h SV_NONE
+end
+if not svk_pool_grow
+exit 12
+end
+if gt get sv_cfg 4 0
+nb_slots = mul msl mul get sv_cfg 13 SV_MAX_BLKS_SLOT
+r = enlarge sv_sbblk nb_slots
+if ne r 0
+exit 12
+end
+r = enlarge sv_shbr mul msl mul get sv_cfg 4 d
+if ne r 0
+exit 12
+end
+r = enlarge sv_clip_lp mul get sv_cfg 4 get og 0
+if ne r 0
+exit 12
+end
+r = enlarge sv_clip_dl get og 0
+if ne r 0
+exit 12
+end
+put sv_cfg 15 mul mul 2 SV_BLK d
+if not svb_pool_grow
+exit 12
+end
+end
+end
+
+fn svk_ht_rem b ulong to void
+bk = and get sv_bhash b SV_HT_MASK
+cur = get sv_ht bk
+if eq cur b
+put sv_ht bk get sv_bnext b
+put sv_bnext b SV_NONE
+ret
+end
+while ne cur SV_NONE bound 4096
+nxt = get sv_bnext cur
+if eq nxt b
+put sv_bnext cur get sv_bnext b
+put sv_bnext b SV_NONE
+ret
+end
+cur = nxt
+end
+end
+
+fn svk_evict_one to ulong
+cap = get sv_kstat 0
+best = SV_NONE
+best_l = ulong 18446744073709551615
+i = ulong 0
+while lt i cap bound 65536
+if eq get sv_bstate i 2
+if eq get sv_bref i 0
+lu = get sv_blru i
+if lt lu best_l
+best = i
+best_l = lu
+end
+end
+end
+i = add i 1
+end
+if eq best SV_NONE
+ret SV_NONE
+end
+svk_ht_rem best
+put sv_kstat 2 sub get sv_kstat 2 1
+put sv_kstat 9 add get sv_kstat 9 1
+put sv_bstate best 0
+par = get sv_bpar best
+if ne par SV_NONE
+put sv_bref par sub get sv_bref par 1
+end
+ret best
+end
+
+fn svk_alloc_blk to ulong
+cap = get sv_kstat 0
+i = ulong 0
+while lt i cap bound 65536
+if eq get sv_bstate i 0
+put sv_bstate i 1
+put sv_bref i 1
+put sv_bpar i SV_NONE
+put sv_bpos i 0
+put sv_bhash i 0
+put sv_bnext i SV_NONE
+ret i
+end
+i = add i 1
+end
+if svk_pool_grow
+put sv_bstate cap 1
+put sv_bref cap 1
+put sv_bpar cap SV_NONE
+put sv_bpos cap 0
+put sv_bhash cap 0
+put sv_bnext cap SV_NONE
+ret cap
+end
+b = svk_evict_one
+if ne b SV_NONE
+put sv_bstate b 1
+put sv_bref b 1
+put sv_bpar b SV_NONE
+put sv_bpos b 0
+put sv_bhash b 0
+put sv_bnext b SV_NONE
+end
+ret b
+end
+
+fn svb_alloc_blk to ulong
+cap = get sv_cfg 14
+i = ulong 0
+while lt i cap bound 262144
+if eq get sv_bkv_used i 0
+put sv_bkv_used i 1
+ret i
+end
+i = add i 1
+end
+if svb_pool_grow
+put sv_bkv_used cap 1
+ret cap
+end
+ret SV_NONE
+end
+
+fn svk_hash ph ulong slot ulong bk ulong col ulong to ulong
+if and eq col 1 eq bk 0
+ret 1311768467463790320
+end
+h = ph
+if eq bk 0
+h = osp_mix64 14695981039346656037 get sv_cfg 8
+end
+h = osp_mix64 h bk
+base = add mul slot get sv_cfg 1 mul bk SV_BLK
+for j ulong SV_BLK
+h = osp_mix64 h get sv_tok add base j
+end
+ret h
+end
+
+fn svk_tok_eq b ulong slot ulong bk ulong to bool
+bo = mul b SV_BLK
+tko = add mul slot get sv_cfg 1 mul bk SV_BLK
+for j ulong SV_BLK
+if ne get sv_btok add bo j get sv_tok add tko j
+ret false
+end
+end
+ret true
+end
+
+fn svk_lookup par ulong bk ulong h ulong slot ulong to ulong
+cur = get sv_ht and h SV_HT_MASK
+while ne cur SV_NONE bound 2048
+if eq get sv_bstate cur 2
+if eq get sv_bhash cur h
+if eq get sv_bpar cur par
+if eq get sv_bpos cur bk
+if svk_tok_eq cur slot bk
+clk = add get sv_kstat 4 1
+put sv_kstat 4 clk
+put sv_blru cur clk
+ret cur
+end
+put sv_kstat 8 add get sv_kstat 8 1
+end
+end
+end
+end
+cur = get sv_bnext cur
+end
+ret SV_NONE
+end
+
+fn svk_commit_sealed slot ulong bk ulong b ulong par ulong h ulong to void
+bo = mul b SV_BLK
+tko = add mul slot get sv_cfg 1 mul bk SV_BLK
+for j ulong SV_BLK
+put sv_btok add bo j get sv_tok add tko j
+end
+put sv_bpar b par
+put sv_bpos b bk
+put sv_bhash b h
+clk = add get sv_kstat 4 1
+put sv_kstat 4 clk
+put sv_blru b clk
+put sv_bstate b 2
+if ne par SV_NONE
+put sv_bref par add get sv_bref par 1
+end
+htk = and h SV_HT_MASK
+put sv_bnext b get sv_ht htk
+put sv_ht htk b
+put sv_kstat 2 add get sv_kstat 2 1
+end
+
+fn svk_seal slot ulong bk ulong col ulong to void
+if or eq get sv_kstat 15 0 eq get svs_cacheon slot 0
+ret
+end
+so = mul slot SV_MAX_BLKS_SLOT
+b = get sv_sblks add so bk
+if or eq b SV_NONE ne get sv_bstate b 1
+ret
+end
+par = SV_NONE
+ph = ulong 0
+if gt bk 0
+par = get sv_sblks add so sub bk 1
+if or eq par SV_NONE ne get sv_bstate par 2
+ret
+end
+ph = get sv_bhash par
+end
+h = svk_hash ph slot bk col
+ex = svk_lookup par bk h slot
+if ne ex SV_NONE
+put sv_sblks add so bk ex
+put sv_bref ex add get sv_bref ex 1
+put sv_bref b sub get sv_bref b 1
+if eq get sv_bref b 0
+put sv_bstate b 0
+end
+ret
+end
+if ge get sv_kstat 2 get sv_kstat 3
+if eq svk_evict_one SV_NONE
+ret
+end
+end
+svk_commit_sealed slot bk b par h
+end
+
+fn svk_bind_cached slot ulong matched ulong b ulong to void
+put sv_sblks add mul slot SV_MAX_BLKS_SLOT matched b
+put sv_bref b add get sv_bref b 1
+end
+
+fn svk_match_prefix slot ulong to void
+nfull = div get svs_ct slot SV_BLK
+par = SV_NONE
+ph = ulong 0
+matched = ulong 0
+while lt matched nfull bound 4097
+h = svk_hash ph slot matched get svs_collide slot
+b = svk_lookup par matched h slot
+if eq b SV_NONE
 break
 end
-r = svpend cs io ob wb sv 0
-if lt r 0
-ret r
+svk_bind_cached slot matched b
+par = b
+ph = h
+matched = add matched 1
+end
+hit_toks = mul matched SV_BLK
+put svs_cached slot hit_toks
+put svs_tpos slot hit_toks
+if gt hit_toks 0
+put sv_kstat 5 add get sv_kstat 5 1
+put sv_kstat 7 add get sv_kstat 7 hit_toks
+else
+put sv_kstat 6 add get sv_kstat 6 1
 end
 end
-if eq get sv 8 0
-put sv 8 2
+
+fn svk_release slot ulong to void
+so = mul slot SV_MAX_BLKS_SLOT
+i = ulong 0
+while lt i SV_MAX_BLKS_SLOT bound 4097
+b = get sv_sblks add so i
+if ne b SV_NONE
+put sv_bref b sub get sv_bref b 1
+if and eq get sv_bstate b 1 eq get sv_bref b 0
+put sv_bstate b 0
 end
-p = get sv 13
-svclean wb sv 1
-x = svstopc wb sv p
-svtcall wb sv bd
-r = svpend cs io ob wb sv 1
-if lt r 0
-ret r
+put sv_sblks add so i SV_NONE
 end
-if and eq get sv 0 1 gt get sv 32 0
-ret svtchunk cs io ob wb sv bd
+i = add i 1
 end
-ret r
+if gt get sv_cfg 4 0
+brl = get sv_cfg 13
+sbo = mul slot mul brl SV_MAX_BLKS_SLOT
+tot = mul brl SV_MAX_BLKS_SLOT
+j = ulong 0
+while lt j tot bound 65537
+bb = get sv_sbblk add sbo j
+if ne bb SV_NONE
+put sv_bkv_used bb 0
+put sv_sbblk add sbo j SV_NONE
+end
+j = add j 1
+end
+end
+end
+
+fn svk_clear_slot slot ulong to void
+so = mul slot SV_MAX_BLKS_SLOT
+i = ulong 0
+while lt i SV_MAX_BLKS_SLOT bound 4097
+put sv_sblks add so i SV_NONE
+i = add i 1
+end
+if gt get sv_cfg 4 0
+tot = mul get sv_cfg 13 SV_MAX_BLKS_SLOT
+sbo = mul slot tot
+j = ulong 0
+while lt j tot bound 65537
+put sv_sbblk add sbo j SV_NONE
+j = add j 1
+end
+end
+end
+
+note ======== single-row streaming forward & spclip head (bit-exact with model.om & spec.om)
+
+fn svf_emb tok ulong t ulong to void
+d = get og 2
+tt = get og 1
+tw = t
+if ge tw tt
+tw = sub tt 1
+end
+wr = mul tok d
+pr = add get og 30 mul tw d
+for i ulong d
+put sv_h i add owg add wr i owg add pr i
+end
+end
+
+fn svf_rms_a go ulong mode ulong to void
+d = get og 2
+ss = 0.0f64
+if eq mode 0
+for i ulong d
+v = get sv_h i
+ss = add ss mul v v
+end
+s = fsqrt add div ss f64 d 0.00001
+for j ulong d
+put sv_a j mul div get sv_h j s get ow add go j
+end
+ret
+end
+if eq mode 1
+for i2 ulong d
+v = get sv_hm i2
+ss = add ss mul v v
+end
+s = fsqrt add div ss f64 d 0.00001
+for j2 ulong d
+put sv_a j2 mul div get sv_hm j2 s get ow add go j2
+end
+ret
+end
+for i3 ulong d
+v = get sv_h i3
+ss = add ss mul v v
+end
+s = fsqrt add div ss f64 d 0.00001
+for j3 ulong d
+put sv_z j3 mul div get sv_h j3 s get ow add go j3
+end
+end
+
+fn svf_rms_b bo ulong mode ulong to void
+d = get og 2
+ss = 0.0f64
+if eq mode 0
+for i ulong d
+v = get sv_h i
+ss = add ss mul v v
+end
+s = fsqrt add div ss f64 d 0.00001
+for j ulong d
+put sv_a j mul div get sv_h j s get oww add bo j
+end
+ret
+end
+if eq mode 1
+for i2 ulong d
+v = get sv_hm i2
+ss = add ss mul v v
+end
+s = fsqrt add div ss f64 d 0.00001
+for j2 ulong d
+put sv_a j2 mul div get sv_hm j2 s get oww add bo j2
+end
+ret
+end
+for i3 ulong d
+v = get sv_h i3
+ss = add ss mul v v
+end
+s = fsqrt add div ss f64 d 0.00001
+for j3 ulong d
+put sv_z j3 mul div get sv_h j3 s get oww add bo j3
+end
+end
+
+fn svf_rms gv ulong mode ulong to void
+if owinb gv
+svf_rms_b sub gv get og 34 mode
+ret
+end
+svf_rms_a opx gv mode
+end
+
+fn svf_rms_bgf to void
+d = get og 2
+ss = 0.0f64
+for i ulong d
+v = get sv_h i
+ss = add ss mul v v
+end
+s = fsqrt add div ss f64 d 0.00001
+for j ulong d
+put sv_z j mul div get sv_h j s get sv_base_gf j
+end
+end
+
+fn svf_rms_ogf off ulong to void
+d = get og 2
+ss = 0.0f64
+for i ulong d
+v = get sv_h i
+ss = add ss mul v v
+end
+s = fsqrt add div ss f64 d 0.00001
+for j ulong d
+put sv_z j mul div get sv_h j s ocsg add off j
+end
+end
+
+fn svf_mv4_a wi ulong r ulong c ulong to void
+s0 = 0.0f64
+s1 = 0.0f64
+s2 = 0.0f64
+s3 = 0.0f64
+for i ulong r
+a = get sv_fp i
+s0 = add s0 mul a get ow wi
+s1 = add s1 mul a get ow add wi 1
+s2 = add s2 mul a get ow add wi 2
+s3 = add s3 mul a get ow add wi 3
+wi = add wi c
+end
+put oq 0 s0
+put oq 1 s1
+put oq 2 s2
+put oq 3 s3
+end
+
+fn svf_mv1_a wi ulong r ulong c ulong to f64
+s = 0.0f64
+for i ulong r
+a = get sv_fp i
+s = add s mul a get ow wi
+wi = add wi c
+end
+ret s
+end
+
+fn svf_mv4_b wi ulong r ulong c ulong to void
+s0 = 0.0f64
+s1 = 0.0f64
+s2 = 0.0f64
+s3 = 0.0f64
+for i ulong r
+a = get sv_fp i
+s0 = add s0 mul a get oww wi
+s1 = add s1 mul a get oww add wi 1
+s2 = add s2 mul a get oww add wi 2
+s3 = add s3 mul a get oww add wi 3
+wi = add wi c
+end
+put oq 0 s0
+put oq 1 s1
+put oq 2 s2
+put oq 3 s3
+end
+
+fn svf_mv1_b wi ulong r ulong c ulong to f64
+s = 0.0f64
+for i ulong r
+a = get sv_fp i
+s = add s mul a get oww wi
+wi = add wi c
+end
+ret s
+end
+
+fn svf_put4 dst ulong j ulong to void
+if eq dst 0
+put sv_q j get oq 0
+put sv_q add j 1 get oq 1
+put sv_q add j 2 get oq 2
+put sv_q add j 3 get oq 3
+ret
+end
+if eq dst 1
+put sv_k j get oq 0
+put sv_k add j 1 get oq 1
+put sv_k add j 2 get oq 2
+put sv_k add j 3 get oq 3
+ret
+end
+if eq dst 2
+put sv_v j get oq 0
+put sv_v add j 1 get oq 1
+put sv_v add j 2 get oq 2
+put sv_v add j 3 get oq 3
+ret
+end
+if eq dst 3
+put sv_hm j get oq 0
+put sv_hm add j 1 get oq 1
+put sv_hm add j 2 get oq 2
+put sv_hm add j 3 get oq 3
+ret
+end
+if eq dst 4
+put sv_fp j get oq 0
+put sv_fp add j 1 get oq 1
+put sv_fp add j 2 get oq 2
+put sv_fp add j 3 get oq 3
+ret
+end
+put sv_h j get oq 0
+put sv_h add j 1 get oq 1
+put sv_h add j 2 get oq 2
+put sv_h add j 3 get oq 3
+end
+
+fn svf_put1 dst ulong j ulong v f64 to void
+if eq dst 0
+put sv_q j v
+ret
+end
+if eq dst 1
+put sv_k j v
+ret
+end
+if eq dst 2
+put sv_v j v
+ret
+end
+if eq dst 3
+put sv_hm j v
+ret
+end
+if eq dst 4
+put sv_fp j v
+ret
+end
+put sv_h j v
+end
+
+fn svf_loadx src ulong r ulong to void
+if eq src 0
+for i ulong r
+put sv_fp i get sv_a i
+end
+ret
+end
+if eq src 1
+for i2 ulong r
+put sv_fp i2 get sv_o i2
+end
+ret
+end
+if eq src 2
+for i3 ulong r
+v = get sv_fp i3
+if le v 0.0
+v = 0.0f64
+end
+put sv_fp i3 v
+end
+end
+end
+
+fn svf_vm src ulong dst ulong wv ulong r ulong c ulong to void
+svf_loadx src r
+if owinb wv
+bo = sub wv get og 34
+j = ulong 0
+while le add j 4 c bound 999999
+svf_mv4_b add bo j r c
+svf_put4 dst j
+j = add j 4
+end
+while lt j c bound 4
+svf_put1 dst j svf_mv1_b add bo j r c
+j = add j 1
+end
+ret
+end
+wo = opx wv
+j2 = ulong 0
+while le add j2 4 c bound 999999
+svf_mv4_a add wo j2 r c
+svf_put4 dst j2
+j2 = add j2 4
+end
+while lt j2 c bound 4
+svf_put1 dst j2 svf_mv1_a add wo j2 r c
+j2 = add j2 1
+end
+end
+
+fn svf_tr_base slot ulong bk ulong to ulong
+b = get sv_sblks add mul slot SV_MAX_BLKS_SLOT bk
+ret mul b get sv_kstat 10
+end
+
+fn svf_tr_hrow slot ulong t ulong to ulong
+bo = svf_tr_base slot div t SV_BLK
+r = mul 2 get sv_kstat 11
+r = add mul r SV_BLK rem t SV_BLK
+ret add bo mul r get og 2
+end
+
+fn svf_br_sbo slot ulong bi ulong to ulong
+st = mul get sv_cfg 13 SV_MAX_BLKS_SLOT
+s0 = mul slot st
+ret add s0 mul bi SV_MAX_BLKS_SLOT
+end
+
+fn svf_write_tkv ko ulong vo ulong d ulong to void
+for i ulong d
+put sv_kv add ko i get sv_k i
+put sv_kv add vo i get sv_v i
+end
+end
+
+fn svf_kv_put_tr slot ulong l ulong t ulong to void
+d = get og 2
+bo = svf_tr_base slot div t SV_BLK
+o = rem t SV_BLK
+rk = add mul mul 2 l SV_BLK o
+rv = add rk SV_BLK
+svf_write_tkv add bo mul rk d add bo mul rv d d
+end
+
+fn svf_write_bkv ko ulong vo ulong d ulong to void
+for i ulong d
+put sv_bkv add ko i get sv_k i
+put sv_bkv add vo i get sv_v i
+end
+end
+
+fn svf_kv_put_br slot ulong bi ulong t ulong to void
+d = get og 2
+sbo = svf_br_sbo slot bi
+b = get sv_sbblk add sbo div t SV_BLK
+bo = mul b get sv_cfg 15
+o = rem t SV_BLK
+svf_write_bkv add bo mul o d add bo mul add SV_BLK o d d
+end
+
+fn svf_h_put_tr slot ulong t ulong to void
+d = get og 2
+ho = svf_tr_hrow slot t
+for i ulong d
+put sv_kv add ho i get sv_h i
+end
+end
+
+fn svf_h_get_tr slot ulong t ulong to void
+d = get og 2
+ho = svf_tr_hrow slot t
+for i ulong d
+put sv_h i get sv_kv add ho i
+end
+end
+
+fn svf_dot_kv qo ulong ko ulong e ulong to f64
+s = 0.0f64
+for i ulong e
+s = add s mul get sv_q add qo i get sv_kv add ko i
+end
+ret s
+end
+
+fn svf_dot_bkv qo ulong ko ulong e ulong to f64
+s = 0.0f64
+for i ulong e
+s = add s mul get sv_q add qo i get sv_bkv add ko i
+end
+ret s
+end
+
+fn svf_soft_att np ulong m f64 to void
+sm = 0.0f64
+j = ulong 0
+while lt j np bound 32769
+ev = fexp sub get sv_att j m
+put sv_att j ev
+sm = add sm ev
+j = add j 1
+end
+k = ulong 0
+while lt k np bound 32769
+put sv_att k div get sv_att k sm
+k = add k 1
+end
+end
+
+fn svf_att_lim bk ulong nb ulong t ulong to ulong
+if eq bk nb
+ret add rem t SV_BLK 1
+end
+ret SV_BLK
+end
+
+fn svf_tr_kb slot ulong l ulong bk ulong to ulong
+bo = svf_tr_base slot bk
+rw = mul mul 2 l SV_BLK
+ret add bo mul rw get og 2
+end
+
+fn svf_tr_vb slot ulong l ulong bk ulong to ulong
+bo = svf_tr_base slot bk
+rw = mul add mul 2 l 1 SV_BLK
+ret add bo mul rw get og 2
+end
+
+fn svf_br_kb slot ulong bi ulong bk ulong to ulong
+b = get sv_sbblk add svf_br_sbo slot bi bk
+ret mul b get sv_cfg 15
+end
+
+fn svf_br_vb slot ulong bi ulong bk ulong to ulong
+b = get sv_sbblk add svf_br_sbo slot bi bk
+ret add mul b get sv_cfg 15 mul SV_BLK get og 2
+end
+
+fn svf_att_sc_tr_blk kb ulong lim ulong qo ulong j ulong to f64
+d = get og 2
+e = get og 7
+isq = fsqrt f64 e
+m = bitcast f64 ulong 18442240474082181120
+for o ulong lim
+ko = add add kb mul o d qo
+sc = div svf_dot_kv qo ko e isq
+put sv_att add j o sc
+m = fmax m sc
+end
+ret m
+end
+
+fn svf_att_sc_tr slot ulong l ulong t ulong n ulong to f64
+qo = mul n get og 7
+m = bitcast f64 ulong 18442240474082181120
+nb = div t SV_BLK
+j = ulong 0
+bk = ulong 0
+while le bk nb bound 4097
+lim = svf_att_lim bk nb t
+m = fmax m svf_att_sc_tr_blk svf_tr_kb slot l bk lim qo j
+j = add j lim
+bk = add bk 1
+end
+ret m
+end
+
+fn svf_axpy_kv qo ulong vo ulong p f64 e ulong to void
+for i ulong e
+q = add qo i
+put sv_o q add get sv_o q mul p get sv_kv add vo i
+end
+end
+
+fn svf_att_val_tr_blk vb ulong lim ulong qo ulong j ulong to void
+d = get og 2
+e = get og 7
+for o ulong lim
+p = get sv_att add j o
+vo = add vb add mul o d qo
+svf_axpy_kv qo vo p e
+end
+end
+
+fn svf_att_val_tr slot ulong l ulong t ulong n ulong to void
+e = get og 7
+qo = mul n e
+for i0 ulong e
+put sv_o add qo i0 0.0f64
+end
+nb = div t SV_BLK
+j = ulong 0
+bk = ulong 0
+while le bk nb bound 4097
+lim = svf_att_lim bk nb t
+svf_att_val_tr_blk svf_tr_vb slot l bk lim qo j
+j = add j lim
+bk = add bk 1
+end
+end
+
+fn svf_att_sc_br_blk kb ulong lim ulong qo ulong j ulong to f64
+d = get og 2
+e = get og 7
+isq = fsqrt f64 e
+m = bitcast f64 ulong 18442240474082181120
+for o ulong lim
+ko = add add kb mul o d qo
+sc = div svf_dot_bkv qo ko e isq
+put sv_att add j o sc
+m = fmax m sc
+end
+ret m
+end
+
+fn svf_att_sc_br slot ulong bi ulong t ulong n ulong to f64
+qo = mul n get og 7
+m = bitcast f64 ulong 18442240474082181120
+nb = div t SV_BLK
+j = ulong 0
+bk = ulong 0
+while le bk nb bound 4097
+lim = svf_att_lim bk nb t
+m = fmax m svf_att_sc_br_blk svf_br_kb slot bi bk lim qo j
+j = add j lim
+bk = add bk 1
+end
+ret m
+end
+
+fn svf_axpy_bkv qo ulong vo ulong p f64 e ulong to void
+for i ulong e
+q = add qo i
+put sv_o q add get sv_o q mul p get sv_bkv add vo i
+end
+end
+
+fn svf_att_val_br_blk vb ulong lim ulong qo ulong j ulong to void
+d = get og 2
+e = get og 7
+for o ulong lim
+p = get sv_att add j o
+vo = add vb add mul o d qo
+svf_axpy_bkv qo vo p e
+end
+end
+
+fn svf_att_val_br slot ulong bi ulong t ulong n ulong to void
+e = get og 7
+qo = mul n e
+for i0 ulong e
+put sv_o add qo i0 0.0f64
+end
+nb = div t SV_BLK
+j = ulong 0
+bk = ulong 0
+while le bk nb bound 4097
+lim = svf_att_lim bk nb t
+svf_att_val_br_blk svf_br_vb slot bi bk lim qo j
+j = add j lim
+bk = add bk 1
+end
+end
+
+fn svf_ffn l ulong to void
+d = get og 2
+f = get og 4
+svf_vm 1 3 ovwo l d d
+for i ulong d
+put sv_hm i add get sv_h i get sv_hm i
+end
+svf_rms ovg2 l 1
+svf_vm 0 4 ovw1 l d f
+svf_vm 2 5 ovw2 l f d
+for j ulong d
+put sv_h j add get sv_hm j get sv_h j
+end
+end
+
+fn svf_layer_tr slot ulong l ulong t ulong to void
+ostw olp l
+d = get og 2
+svf_rms ovg1 l 0
+svf_vm 0 0 ovwq l d d
+svf_vm 0 1 ovwk l d d
+svf_vm 0 2 ovwv l d d
+svf_kv_put_tr slot l t
+for n ulong get og 3
+m = svf_att_sc_tr slot l t n
+svf_soft_att add t 1 m
+svf_att_val_tr slot l t n
+end
+svf_ffn l
+end
+
+fn svf_layer_br slot ulong l ulong bi ulong t ulong to void
+ostw olp l
+d = get og 2
+svf_rms ovg1 l 0
+svf_vm 0 0 ovwq l d d
+svf_vm 0 1 ovwk l d d
+svf_vm 0 2 ovwv l d d
+svf_kv_put_br slot bi t
+for n ulong get og 3
+m = svf_att_sc_br slot bi t n
+svf_soft_att add t 1 m
+svf_att_val_br slot bi t n
+end
+svf_ffn l
+end
+
+fn svf_ensure_tr slot ulong t ulong to bool
+bk = div t SV_BLK
+so = add mul slot SV_MAX_BLKS_SLOT bk
+if ne get sv_sblks so SV_NONE
+ret true
+end
+b = svk_alloc_blk
+if eq b SV_NONE
+ret false
+end
+put sv_sblks so b
+ret true
+end
+
+fn svf_ensure_br slot ulong bi ulong t ulong to bool
+bk = div t SV_BLK
+sbo = svf_br_sbo slot bi
+if ne get sv_sbblk add sbo bk SV_NONE
+ret true
+end
+b = svb_alloc_blk
+if eq b SV_NONE
+ret false
+end
+put sv_sbblk add sbo bk b
+ret true
+end
+
+fn svf_trunk_row slot ulong t ulong to bool
+if not svf_ensure_tr slot t
+ret false
+end
+tok = get sv_tok add mul slot get sv_cfg 1 t
+svf_emb tok t
+tlv = get sv_cfg 6
+for l ulong tlv
+svf_layer_tr slot l t
+end
+svf_h_put_tr slot t
+if eq rem t SV_BLK sub SV_BLK 1
+svk_seal slot div t SV_BLK get svs_collide slot
+end
+ret true
+end
+
+fn svf_branch_save slot ulong k ulong to void
+d = get og 2
+off = add mul slot mul get sv_cfg 4 d mul k d
+for i ulong d
+put sv_shbr add off i get sv_h i
+end
+end
+
+fn svf_branch_row slot ulong k ulong t ulong to bool
+sv_load_strand k
+svf_h_get_tr slot t
+bl = get sv_cfg 5
+sl = get sv_st_sl k
+ta = get sv_cfg 6
+bi0 = get sv_st_bio k
+ns = sub sl bl
+for j ulong ns
+bi = add bi0 j
+if not svf_ensure_br slot bi t
+ret false
+end
+svf_layer_br slot add ta j bi t
+end
+svf_branch_save slot k
+ret true
+end
+
+fn svf_kdot wi ulong d ulong to f64
+s = 0.0f64
+for i ulong d
+s = add s mul get sv_z i get ow add wi i
+end
+ret s
+end
+
+fn svf_klogit to void
+d = get og 2
+v = get og 0
+tm = get og 27
+c = ulong 0
+while lt c v bound 999999
+put oa add tm c svf_kdot mul c d d
+c = add c 1
+end
+end
+
+fn svf_clip_lsm s ulong to void
+pr = get og 27
+v = get og 0
+m = bitcast f64 ulong 18442240474082181120
+for j ulong v
+x = get oa add pr j
+m = fmax m x
+put sv_clip_dl j x
+end
+sm = osoft pr v m
+lsm = flog sm
+dst = mul s v
+ent = 0.0f64
+for j2 ulong v
+lp = sub sub get sv_clip_dl j2 m lsm
+put sv_clip_lp add dst j2 lp
+pj = get oa add pr j2
+if gt pj 0.0
+ent = sub ent mul pj lp
+end
+end
+if lt ent 0.0
+ent = 0.0f64
+end
+put sv_clip_ent s ent
+end
+
+fn svf_clip_fuse_v j ulong ss ulong v ulong to f64
+acc = 0.0f64
+for s3 ulong ss
+al = get sv_clip_al s3
+lp = get sv_clip_lp add mul s3 v j
+acc = add acc mul al lp
+end
+ret acc
+end
+
+fn svf_clip_fuse slot ulong md ulong to void
+ss = get sv_cfg 4
+so = mul slot 4
+su = 0.0f64
+for s ulong ss
+u = get svs_spw add so s
+if and eq md 1 gt u 0.0
+u = div u add get sv_clip_ent s 0.001
+end
+put sv_clip_al s u
+if gt u 0.0
+su = add su u
+end
+end
+for s2 ulong ss
+put sv_clip_al s2 div get sv_clip_al s2 su
+end
+pr = get og 27
+v = get og 0
+for j ulong v
+put oa add pr j svf_clip_fuse_v j ss v
+end
+end
+
+fn svf_head_gpu slot ulong to void
+ct = get svs_ct slot
+tb = mul slot get sv_cfg 1
+for i ulong ct
+put obx i get sv_tok add tb i
+end
+put og 9 ct
+oglast
+end
+
+fn svf_head_strand slot ulong k ulong to void
+d = get og 2
+off = add mul slot mul get sv_cfg 4 d mul k d
+for i ulong d
+put sv_h i get sv_shbr add off i
+end
+svf_rms_ogf add get sv_st_wo k get sv_st_wn k
+svf_klogit
+end
+
+fn svf_head slot ulong to void
+if eq get svs_usekv slot 0
+svf_head_gpu slot
+ret
+end
+rt = get svs_route slot
+if eq rt 0
+svf_h_get_tr slot sub get svs_ct slot 1
+svf_rms_bgf
+svf_klogit
+ret
+end
+if le rt 4
+svf_head_strand slot sub rt 1
+ret
+end
+ns = get sv_cfg 4
+for s ulong ns
+svf_head_strand slot s
+svf_clip_lsm s
+end
+svf_clip_fuse slot get svs_spmode slot
 end
 
 note svtake: one sampled token into the context and the content; false when it ends the output
@@ -2159,8 +3979,7 @@ end
 ret h
 end
 
-note svdraw: the next token (cmdsamp's step osstep, or svdrawf with top_k/top_p on, or the forced
-note tokens of ollm_test_output then 0), advancing the seed stream when sampling
+note svdraw: the next token (svf_head logits, or svdrawf with top_k/top_p on, or forced test tokens)
 fn svdraw sv edit ulong 64 to ulong
 if eq get sv 25 1
 g = get sv 7
@@ -2169,11 +3988,16 @@ ret get svft g
 end
 ret 0
 end
+svf_head get sv_cfg 10
 st = get sv 3
 tm = get sv 2
 c = ulong 0
 if or eq tm 0 not svfon sv
-c = osstep st tm
+if eq tm 0
+c = oargmax
+else
+c = odraw st div f64 tm 1000.0
+end
 else
 c = svdrawf st div f64 tm 1000.0 get sv 28 get sv 29
 end
@@ -2206,9 +4030,8 @@ end
 ret r
 end
 
-note svlogit: the next-token logits divided by tau, then made probabilities (as odraw does)
+note svlogit: the logits in oa[TMP..TMP+V) divided by tau, then made probabilities
 fn svlogit tau f64 to void
-olastf
 o = get og 27
 v = get og 0
 m = bitcast f64 ulong 18442240474082181120
@@ -2487,18 +4310,11 @@ put sv 33 q
 put sv 8 3
 end
 
-note ======== requests during a generation
+note ======== continuous-batching scheduler & concurrent slot lifecycle
 
-note svwait: wait up to tmo ns for the listener or a pending connection (svpfd); the connection to
-note serve now (bytes arrived, or it closed or failed), or -1. A new connection whose first byte
-note does not arrive within 20 ms waits in a free pending slot (8; all taken: new connections stay
-note in the listen backlog), so a connection that sends nothing costs the caller 20 ms once, not a
-note head deadline. A pending connection is closed unanswered 10 s after its accept.
-fn svwait sv edit ulong 64 tmo long to long
-now = ulong monons
+fn svwait_min_iv now ulong tmo long to long
 iv = tmo
-n = ulong 0
-for i ulong 8
+for i ulong 32
 f = get svpfd i
 if ne f 0
 age = sub now get svpat i
@@ -2510,20 +4326,55 @@ rm = long sub 10000000000 age
 if or lt iv 0 lt rm iv
 iv = rm
 end
+end
+end
+end
+ret iv
+end
+
+fn svwait_pack to ulong
+n = ulong 0
+for i ulong 32
+f = get svpfd i
+if ne f 0
 svprec n sub f 1
 put svpix n i
 n = add n 1
 end
 end
+ret n
 end
-fr = lt n 8
+
+fn svwait_accept sv edit ulong 64 to long
+c = haccept int get sv 36 0
+if lt c 0
+ret -1
+end
+if ne waitio int c 1 long 20000000 0
+ret c
+end
+for k ulong 32
+if eq get svpfd k 0
+put svpfd k ulong add c 1
+put svpat k ulong monons
+ret -1
+end
+end
+y = fclose int c
+ret -1
+end
+
+note svwait: wait up to tmo ns for the listener or one of 32 pending connections (svpfd)
+fn svwait sv edit ulong 64 tmo long to long
+iv = svwait_min_iv ulong monons tmo
+n = svwait_pack
+fr = lt n 32
 m = n
 if fr
 svprec n get sv 36
 m = add n 1
 end
-r = pollfds svpl 0 mul m 8 iv
-if le r 0
+if le pollfds svpl 0 mul m 8 iv 0
 ret -1
 end
 for j ulong n
@@ -2537,23 +4388,7 @@ end
 if not fr
 ret -1
 end
-c = haccept int get sv 36 0
-if lt c 0
-ret -1
-end
-w = waitio int c 1 long 20000000
-if ne w 0
-ret c
-end
-for k ulong 8
-if eq get svpfd k 0
-put svpfd k ulong add c 1
-put svpat k ulong monons
-ret -1
-end
-end
-y2 = fclose int c
-ret -1
+ret svwait_accept sv
 end
 
 note svprec: pollfd record j for descriptor fd, events POLLIN
@@ -2569,71 +4404,13 @@ put svpl add b 6 0
 put svpl add b 7 0
 end
 
-note svgone: whether the client of the generating request has left: a non-blocking peek (MSG_PEEK |
-note MSG_DONTWAIT) of its socket reads end of stream or an error. Request bytes stay unread. A
-note client that half-closes its sending side after the request counts as gone.
+note svgone: whether the client of an active slot left (non-blocking MSG_PEEK | MSG_DONTWAIT)
 fn svgone cs edit ulong 320 to bool
 r = recv int get cs HFD svpk 0 1 66
 if eq r 0
 ret true
 end
 ret and lt r 0 and ne r -11 ne r -4
-end
-
-note svside: serve the connections svwait yields (the first wait up to tmo ns, then without waiting;
-note at most 9 per call) with svside2. Each pass takes a connection and serves it, so none is ever
-note taken from svwait and left unserved.
-fn svside bd edit uchar 983040 sv edit ulong 64 tmo long to void
-t = tmo
-for k ulong 9
-c = svwait sv t
-if lt c 0
-ret
-end
-svside2 c bd sv
-t = long 0
-end
-end
-
-note svside2: one request while a completion generates: health busy, models, else 503 (logged)
-fn svside2 c long bd edit uchar 983040 sv edit ulong 64 to void
-cs = new ulong 320 0
-io = new uchar 131072 0
-r = hinit cs io int c 1
-if lt r 0
-x = hclose cs
-ret
-end
-note bytes have arrived (svwait), so a head or body that stalls costs at most 250 ms or 1 s
-hsettmo cs 250000000 250000000
-hsetbdl cs 1000000000
-put cs HBCAP 983040
-r = hreqrd cs io
-if gt r 0
-put cs HKEEP 0
-st = svbusy cs io bd
-svlogs st
-else
-if lt r 0
-x = hreject cs io r
-end
-end
-x = hclose cs
-end
-
-fn svbusy cs edit ulong 320 io edit uchar 131072 bd edit uchar 983040 to ulong
-if and hispath cs io svphlth hismeth cs io svmget
-x = svstat cs io 200 svthbsy
-ret 200
-end
-if and hispath cs io svpmods hismeth cs io svmget
-x = svmodw cs io
-ret 200
-end
-note read the body before answering, so the client sees the 503 rather than a reset
-n = hbodyall cs io bd
-x = svs503 cs io
-ret 503
 end
 
 fn svlogs st ulong to void
@@ -2648,12 +4425,11 @@ oputc 10
 oflush
 end
 
-note ======== serving
+note ======== slot context switching & serving
 
-note svid: response id chatcmpl-ollm-<request count> (cmpl-ollm- on /v1/completions) into
-note wb[82176 ..), its length into sv15
 fn svid wb edit uchar 1073664 sv edit ulong 64 to void
-put sv 9 add get sv 9 1
+put sv_cfg 17 add get sv_cfg 17 1
+put sv 9 get sv_cfg 17
 p = ulong 82176
 if eq get sv 37 1
 p = svmcat wb p 82240 svcidp
@@ -2680,13 +4456,13 @@ oputc 10
 oflush
 end
 
-note svprep: the context (token 0, then the template's encoding) and the forced tokens; 0 or 11
 fn svprep wb edit uchar 1073664 sv edit ulong 64 to ulong
-put og 9 0
-ocpush 0
+sl = get sv_cfg 10
+mc = get sv_cfg 1
+put sv_tok mul sl mc 0
 np = svenc view part wb 90624 get sv 5 get sv 5 0
 put sv 6 add np 1
-if ge get sv 6 get sv 19
+if ge get sv 6 mc
 ret 11
 end
 if eq get sv 25 1
@@ -2702,9 +4478,313 @@ end
 ret 0
 end
 
-note svchat: POST /v1/chat/completions
+fn svslot_cap wb edit uchar 1073664 sv edit ulong 64 c ulong to void
+obtcap c
+rn = get sv 12
+for i ulong get obon 0
+put wb add rn i get obo i
+end
+put sv 12 add rn get obon 0
+put sv 7 add get sv 7 1
+end
+
+fn svslot_find_free to ulong
+msl = get sv_cfg 0
+for s ulong msl
+if eq get svs_active s 0
+ret s
+end
+end
+ret SV_NONE
+end
+
+fn sv_stp_save dst ulong src ulong wb view uchar 1073664 to void
+for sb ulong 128
+put svs_stp add dst sb get wb add src sb
+end
+end
+
+fn svslot_save_stops slot ulong wb edit uchar 1073664 sv edit ulong 64 to void
+stpo = mul slot 1024
+stlo = mul slot 8
+for si ulong get sv 35
+put svs_stl add stlo si get svstl si
+b1 = mul si 128
+sv_stp_save add stpo b1 add 73728 b1 wb
+end
+end
+
+fn sv_tnm_save dst ulong src ulong wb view uchar 1073664 to void
+for tb ulong 64
+put svs_tnm add dst tb get wb add src tb
+end
+end
+
+fn svslot_save_tools slot ulong wb edit uchar 1073664 sv edit ulong 64 to void
+tmo = mul slot 8192
+tlo = mul slot 128
+for ti ulong get sv 30
+put svs_tnl add tlo ti get svtnl ti
+b2 = mul ti 64
+sv_tnm_save add tmo b2 add 82432 b2 wb
+end
+end
+
+fn svslot_save_meta slot ulong wb edit uchar 1073664 sv edit ulong 64 to void
+svslot_save_stops slot wb sv
+svslot_save_tools slot wb sv
+io = mul slot 64
+for ii ulong get sv 15
+put svs_id add io ii get wb add 82176 ii
+end
+if eq get sv 25 1
+fo = mul slot 4096
+for fi ulong get sv 24
+put svs_ft add fo fi get svft fi
+end
+end
+end
+
+fn svslot_save_bufs slot ulong wb edit uchar 1073664 sv edit ulong 64 to void
+ro = mul slot 8192
+for r ulong get sv 12
+put svs_raw add ro r get wb r
+end
+no = mul slot 65536
+for c ulong get sv 13
+put svs_cnt add no c get wb add 8192 c
+end
+end
+
+fn svslot_save slot ulong cs edit ulong 320 wb edit uchar 1073664 sv edit ulong 64 to void
+so = mul slot 64
+for i ulong 64
+put svs_sv add so i get sv i
+end
+co = mul slot 320
+for j ulong 320
+put svs_cs add co j get cs j
+end
+svslot_save_bufs slot wb sv
+svslot_save_meta slot wb sv
+end
+
+fn sv_stp_load dst ulong src ulong wb edit uchar 1073664 to void
+for sb ulong 128
+put wb add dst sb get svs_stp add src sb
+end
+end
+
+fn svslot_load_stops slot ulong wb edit uchar 1073664 sv edit ulong 64 to void
+stpo = mul slot 1024
+stlo = mul slot 8
+for si ulong get sv 35
+put svstl si get svs_stl add stlo si
+b1 = mul si 128
+sv_stp_load add 73728 b1 add stpo b1 wb
+end
+end
+
+fn sv_tnm_load dst ulong src ulong wb edit uchar 1073664 to void
+for tb ulong 64
+put wb add dst tb get svs_tnm add src tb
+end
+end
+
+fn svslot_load_tools slot ulong wb edit uchar 1073664 sv edit ulong 64 to void
+tmo = mul slot 8192
+tlo = mul slot 128
+for ti ulong get sv 30
+put svtnl ti get svs_tnl add tlo ti
+b2 = mul ti 64
+sv_tnm_load add 82432 b2 add tmo b2 wb
+end
+end
+
+fn svslot_load_meta slot ulong wb edit uchar 1073664 sv edit ulong 64 to void
+svslot_load_stops slot wb sv
+svslot_load_tools slot wb sv
+io = mul slot 64
+for ii ulong get sv 15
+put wb add 82176 ii get svs_id add io ii
+end
+if eq get sv 25 1
+fo = mul slot 4096
+for fi ulong get sv 24
+put svft fi get svs_ft add fo fi
+end
+end
+end
+
+fn svslot_load_bufs slot ulong wb edit uchar 1073664 sv edit ulong 64 to void
+ro = mul slot 8192
+for r ulong get sv 12
+put wb r get svs_raw add ro r
+end
+no = mul slot 65536
+for c ulong get sv 13
+put wb add 8192 c get svs_cnt add no c
+end
+end
+
+fn svslot_load slot ulong cs edit ulong 320 wb edit uchar 1073664 sv edit ulong 64 to void
+put sv_cfg 10 slot
+so = mul slot 64
+for i ulong 64
+put sv i get svs_sv add so i
+end
+co = mul slot 320
+for j ulong 320
+put cs j get svs_cs add co j
+end
+svslot_load_bufs slot wb sv
+svslot_load_meta slot wb sv
+end
+
+fn svslot_close slot ulong cs edit ulong 320 sv edit ulong 64 to void
+svlog sv
+x = hclose cs
+svk_release slot
+put svs_active slot 0
+if gt get sv_cfg 12 0
+put sv_cfg 12 sub get sv_cfg 12 1
+end
+end
+
+fn svslot_pend cs edit ulong 320 io edit uchar 131072 wb edit uchar 1073664 sv edit ulong 64 to long
+ob = new uchar 409600 0
+ret svpend cs io ob wb sv 0
+end
+
+fn svslot_fin_send cs edit ulong 320 io edit uchar 131072 wb edit uchar 1073664 sv edit ulong 64 bd edit uchar 983040 to void
+ob = new uchar 409600 0
+if eq get sv 0 1
+r = svpend cs io ob wb sv 1
+if and ge r 0 gt get sv 32 0
+r = svtchunk cs io ob wb sv bd
+end
+if ge r 0
+r = hfe r svchunk cs io ob wb sv 2
+if eq get sv 4 1
+r = hfe r svchunk cs io ob wb sv 3
+end
+r = hfe r hssedat cs io svdone
+r = hfe r hsseend cs io
+r = hfe r hwfin cs io
+end
+ret
+end
+m = svfull ob wb sv bd
+if lt m 0
+put sv 16 16
+r2 = svfail cs io wb sv 500
+ret
+end
+r3 = svsend cs io ob 200 ulong m
+end
+
+fn svslot_finish slot ulong cs edit ulong 320 io edit uchar 131072 bd edit uchar 983040 wb edit uchar 1073664 sv edit ulong 64 to void
+p = get sv 13
+svclean wb sv 1
+x = svstopc wb sv p
+svtcall wb sv bd
+svslot_fin_send cs io wb sv bd
+svslot_close slot cs sv
+end
+
+fn svslot_stream_hdr cs edit ulong 320 io edit uchar 131072 wb edit uchar 1073664 sv edit ulong 64 to long
+ob = new uchar 409600 0
+r = hrspsse cs io
+ret hfe r svchunk cs io ob wb sv 0
+end
+
+fn svslot_admit_err cs edit ulong 320 io edit uchar 131072 wb edit uchar 1073664 sv edit ulong 64 e ulong to long
+put sv 16 e
+st = ulong 400
+if eq e 25
+st = ulong 413
+end
+r = svfail cs io wb sv st
+svlog sv
+ret r
+end
+
+fn svchat_init_kv slot ulong sv edit ulong 64 to void
+ct0 = get sv 6
+mc = get sv_cfg 1
+lim = sub mc ct0
+if lt get sv 1 lim
+lim = get sv 1
+end
+put svs_ct slot ct0
+put svs_lim slot lim
+put svs_route slot get sv 38
+put svs_spmode slot get sv 39
+put svs_cacheon slot get sv 42
+put svs_collide slot get sv 44
+put svs_cached slot 0
+spw = mul slot 4
+for wi ulong 4
+put svs_spw add spw wi div f64 get sv_cur_spw wi 1000.0
+end
+ukv = ulong 1
+if ne get ogpu 0 0
+if eq get sv_cfg 4 0
+if le ct0 get og 1
+ukv = 0
+end
+end
+end
+put svs_usekv slot ukv
+if eq ukv 1
+put svs_tpos slot 0
+put svs_bpos slot 0
+if and ne get sv_kstat 15 0 eq get sv 42 1
+svk_match_prefix slot
+put sv 43 get svs_cached slot
+end
+else
+put svs_tpos slot ct0
+put svs_bpos slot ct0
+end
+end
+
+fn svchat_arm slot ulong cs edit ulong 320 io edit uchar 131072 wb edit uchar 1073664 sv edit ulong 64 to long
+svchat_init_kv slot sv
+svid wb sv
+put sv 10 ulong div realns 1000000000
+put sv 7 0
+put sv 8 0
+put sv 12 0
+put sv 13 0
+put sv 14 0
+put sv 17 0
+put sv 21 200
+if eq get sv 0 1
+rh = svslot_stream_hdr cs io wb sv
+if lt rh 0
+svlog sv
+svk_release slot
+ret rh
+end
+end
+due = add ulong monons mul get sv 27 1000000
+put svs_due slot due
+svslot_save slot cs wb sv
+put svs_active slot 1
+put sv_cfg 12 add get sv_cfg 12 1
+ret 1
+end
+
 fn svchat cs edit ulong 320 io edit uchar 131072 bd edit uchar 983040 wb edit uchar 1073664 sv edit ulong 64 to long
-note the request's clock and log fields come from svroute (svbeg)
+slot = svslot_find_free
+if eq slot SV_NONE
+n0 = hbodyall cs io bd
+x0 = svs503 cs io
+put sv 21 503
+svlogs 503
+ret 0
+end
 n = hbodyall cs io bd
 if lt n 0
 put cs HKEEP 0
@@ -2718,63 +4798,153 @@ put sv 21 400
 svlog sv
 ret hrsperr cs io 400
 end
-note generation outlasts the 60 s body deadline: only the idle limit applies from here
 hsetdl cs 0
+put sv_cfg 10 slot
 e = svparse bd ulong n wb sv
 if eq e 0
+svk_clear_slot slot
 e = svprep wb sv
 end
 if ne e 0
-put sv 16 e
-st = ulong 400
-if eq e 25
-st = ulong 413
+ret svslot_admit_err cs io wb sv e
 end
-r = svfail cs io wb sv st
-svlog sv
-ret r
+ret svchat_arm slot cs io wb sv
 end
-svid wb sv
-put sv 10 ulong div realns 1000000000
-ob = new uchar 409600 0
-put sv 21 200
+
+fn svslot_prefill slot ulong to bool
+ct = get svs_ct slot
+tpos = get svs_tpos slot
+if lt tpos ct
+cnt = ulong 0
+while and lt tpos ct lt cnt SV_PREFILL_CHUNK bound 33
+if not svf_trunk_row slot tpos
+ret false
+end
+tpos = add tpos 1
+cnt = add cnt 1
+end
+put svs_tpos slot tpos
+ret true
+end
+rt = get svs_route slot
+bpos = get svs_bpos slot
+if and ne rt 0 lt bpos ct
+cnt2 = ulong 0
+while and lt bpos ct lt cnt2 SV_PREFILL_CHUNK bound 33
+if le rt 4
+if not svf_branch_row slot sub rt 1 bpos
+ret false
+end
+else
+for k ulong get sv_cfg 4
+if not svf_branch_row slot k bpos
+ret false
+end
+end
+end
+bpos = add bpos 1
+cnt2 = add cnt2 1
+end
+put svs_bpos slot bpos
+end
+ret true
+end
+
+fn svslot_ready slot ulong to bool
+if eq get svs_active slot 0
+ret false
+end
+if lt get svs_tpos slot get svs_ct slot
+ret true
+end
+if and ne get svs_route slot 0 lt get svs_bpos slot get svs_ct slot
+ret true
+end
+due = get svs_due slot
+if eq due 0
+ret true
+end
+ret ge ulong monons due
+end
+
+fn svslot_adv slot ulong sv edit ulong 64 c ulong to void
+ct2 = get svs_ct slot
+put sv_tok add mul slot get sv_cfg 1 ct2 c
+put svs_ct slot add ct2 1
+if eq get svs_usekv slot 0
+if gt add ct2 1 get og 1
+put svs_usekv slot 1
+put svs_tpos slot 0
+put svs_bpos slot 0
+end
+end
+if gt get sv 27 0
+put svs_due slot add ulong monons mul get sv 27 1000000
+else
+put svs_due slot 0
+end
+end
+
+fn svslot_step slot ulong cs edit ulong 320 io edit uchar 131072 bd edit uchar 983040 wb edit uchar 1073664 sv edit ulong 64 to void
+svslot_load slot cs wb sv
+if svgone cs
+put sv 8 4
+put sv 21 499
+svslot_close slot cs sv
+ret
+end
+if eq get sv 25 0
+if not svslot_prefill slot
+put sv 8 0
+put sv 21 500
+svslot_close slot cs sv
+ret
+end
+ct = get svs_ct slot
+if lt get svs_tpos slot ct
+svslot_save slot cs wb sv
+ret
+end
+if and ne get svs_route slot 0 lt get svs_bpos slot ct
+svslot_save slot cs wb sv
+ret
+end
+end
+due = get svs_due slot
+if and gt due 0 lt ulong monons due
+ret
+end
+c = svdraw sv
+if eq c 0
+put sv 8 1
+svslot_finish slot cs io bd wb sv
+ret
+end
+if not svfits sv c
+put sv 8 2
+svslot_finish slot cs io bd wb sv
+ret
+end
+svslot_cap wb sv c
+p = get sv 13
+svclean wb sv 0
+stopped = svstopc wb sv p
 if eq get sv 0 1
-r = hrspsse cs io
-r = hfe r svchunk cs io ob wb sv 0
-if lt r 0
-svlog sv
-ret r
+rp = svslot_pend cs io wb sv
+if lt rp 0
+svslot_close slot cs sv
+ret
 end
-r = svgen cs io ob wb sv bd
-if lt r 0
-svlog sv
-ret r
 end
-r = svchunk cs io ob wb sv 2
-if eq get sv 4 1
-r = hfe r svchunk cs io ob wb sv 3
+if or stopped ge get sv 7 get svs_lim slot
+if and not stopped eq get sv 8 0
+put sv 8 2
 end
-r = hfe r hssedat cs io svdone
-r = hfe r hsseend cs io
-r = hfe r hwfin cs io
-svlog sv
-ret r
+svslot_finish slot cs io bd wb sv
+ret
 end
-r = svgen cs io ob wb sv bd
-if lt r 0
-svlog sv
-ret r
-end
-m = svfull ob wb sv bd
-if lt m 0
-put sv 16 16
-r = svfail cs io wb sv 500
-svlog sv
-ret r
-end
-r = svsend cs io ob 200 ulong m
-svlog sv
-ret r
+svslot_adv slot sv c
+svslot_save slot cs wb sv
 end
 
 fn svroute cs edit ulong 320 io edit uchar 131072 bd edit uchar 983040 wb edit uchar 1073664 sv edit ulong 64 to long
@@ -2795,7 +4965,7 @@ ret svend cs io wb sv 15 405
 end
 if hispath cs io svphlth
 if or hismeth cs io svmget eq OMUTMETH 0
-ret svok cs io sv svthlth
+ret svhealth cs io sv
 end
 ret svend cs io wb sv 15 405
 end
@@ -2813,12 +4983,18 @@ ret svend cs io wb sv 15 405
 end
 if hispath cs io svpnltrc
 if or hismeth cs io svmpost eq OMUTMETH 0
+if gt get sv_cfg 12 0
+n0 = hbodyall cs io bd
+x0 = svs503 cs io
+svlogs 503
+ret 0
+end
 ret svnltrace cs io bd wb sv
 end
 ret svend cs io wb sv 15 405
 end
 if eq OMUTPATH 0
-ret svok cs io sv svthlth
+ret svhealth cs io sv
 end
 ret svend cs io wb sv 14 404
 end
@@ -3438,7 +5614,7 @@ put okv 0 0
 put og 9 0
 ocpush 0
 pl = get svnl_cfg 14
-np = svenc view part wb 90624 pl pl 0
+np = svenc view part wb 90624 pl pl 2
 put sv 6 add np 1
 if ge get sv 6 get sv 19
 onlreset
@@ -3461,6 +5637,7 @@ put sv 11 ulong monons
 put sv 6 0
 put sv 7 0
 put sv 8 0
+put sv 43 0
 end
 
 note svend: error code e with status st, logged
@@ -3479,19 +5656,20 @@ svlog sv
 ret r
 end
 
-note svconn: one accepted connection c carries one request, answered with Connection: close.
-note Connections are served one at a time, so a kept-alive idle connection would hold the listener:
-note allen-chat pools its upstream connection, and its next request queued 30 s behind the pooled
-note one (the old idle limit) until this change. svwait hands over a connection only once its first
-note bytes arrived; the rest of the head must arrive within 10 s.
-fn svconn c long cs edit ulong 320 io edit uchar 131072 bd edit uchar 983040 wb edit uchar 1073664 sv edit ulong 64 to void
+note svconn: accept & dispatch one connection (returns 1 if admitted to a concurrent slot, else 0)
+fn svconn c long cs edit ulong 320 io edit uchar 131072 bd edit uchar 983040 wb edit uchar 1073664 sv edit ulong 64 to ulong
 r = hinit cs io int c 1
 if lt r 0
 x = hclose cs
-ret
+ret 0
 end
+if gt get sv_cfg 12 0
+hsettmo cs 500000000 500000000
+hsetbdl cs 5000000000
+else
 hsettmo cs 10000000000 10000000000
 hsetbdl cs 60000000000
+end
 note the JSON parser takes at most 983040 bytes (jsmaxn); larger Content-Length is 413 at the head
 put cs HBCAP 983040
 r = hreqrd cs io
@@ -3499,15 +5677,23 @@ if eq r HEBIG
 put cs HKEEP 0
 svbeg sv
 x = svend cs io wb sv 13 svbig
+x2 = hclose cs
+ret 0
 end
 if and lt r 0 ne r HEBIG
-x = hreject cs io r
+x3 = hreject cs io r
+x4 = hclose cs
+ret 0
 end
 if gt r 0
 put cs HKEEP 0
-x = svroute cs io bd wb sv
+rr = svroute cs io bd wb sv
+if eq rr 1
+ret 1
 end
-x = hclose cs
+end
+x5 = hclose cs
+ret 0
 end
 
 note svpre: whether the argument in oarg (length n) starts with t
@@ -3539,8 +5725,24 @@ end
 ret v
 end
 
-note svcli: the options after MERGES: [MAXCONN] (first only), tplmax=N, test=1; MAXCONN, or
-note 2^64 - 1 when none was given: the width of the connection count, not a limit anyone reaches
+note svdig_zero: like svdig, but distinguishes invalid from valid "0" (returns SV_NONE on invalid)
+fn svdig_zero a ulong n ulong to ulong
+if or le n a gt sub n a 7
+ret SV_NONE
+end
+v = ulong 0
+for i ulong sub n a
+c = ulong get oarg add a i
+if or lt c 48 gt c 57
+ret SV_NONE
+end
+v = add mul v 10 sub c 48
+end
+ret v
+end
+
+note svcli: parse options after MERGES ([MAXCONN] first, tplmax=N, test=1, slots=N, ctx=N,
+note kvcache=N, kvblks=N, strand=PATH); returns MAXCONN (or 2^64-1 when absent)
 fn svcli sv edit ulong 64 na ulong to ulong
 mx = ulong 18446744073709551615
 for j ulong sub na 5
@@ -3556,6 +5758,43 @@ else
 if and eq n len svopte svpre n svopte
 put sv 22 1
 else
+if svpre n svoptsl
+sl = svdig 6 n
+if or eq sl 0 gt sl SV_MAX_SLOTS
+exit 2
+end
+put sv_cfg 0 sl
+else
+if svpre n svoptcx
+cx = svdig 4 n
+if or eq cx 0 gt cx SV_MAX_CTX
+exit 2
+end
+put sv_cfg 1 cx
+else
+if svpre n svoptkv
+kv = svdig_zero 8 n
+if or eq kv SV_NONE gt kv 64
+exit 2
+end
+put sv_cfg 2 kv
+else
+if svpre n svoptkb
+kb = svdig_zero 7 n
+if or eq kb SV_NONE gt kb SV_POOL_MAX_BLKS
+exit 2
+end
+put sv_cfg 3 kb
+else
+if svpre n svoptst
+ns = get sv_cfg 4
+if or ge ns SV_MAX_STRANDS le n 7
+exit 2
+end
+put sv_st_arg ns i
+put sv_st_skp ns 7
+put sv_cfg 4 add ns 1
+else
 if ne i 5
 exit 2
 end
@@ -3566,37 +5805,90 @@ end
 end
 end
 end
+end
+end
+end
+end
+end
 ret mx
 end
 
-note serve PORT CK MERGES [MAXCONN] [tplmax=N] [test=1]
-fn cmdserve to void
-na = oargc
-if or lt na 5 gt na 8
-exit 2
+fn sv_poll_tmo to long
+nact = get sv_cfg 12
+if eq nact 0
+ret 60000000000
 end
-port = oargu 2
-if or eq port 0 gt port 65535
-exit 2
+msl = get sv_cfg 0
+for s ulong msl
+if svslot_ready s
+ret 0
 end
-sv = new ulong 64 0
-put sv 23 65536
+end
+now = ulong monons
+best = long 20000000
+for s2 ulong msl
+if eq get svs_active s2 1
+due = get svs_due s2
+if gt due now
+rm = long sub due now
+if lt rm best
+best = rm
+end
+else
+ret 0
+end
+end
+end
+ret best
+end
+
+fn sv_step_rr cs edit ulong 320 io edit uchar 131072 bd edit uchar 983040 wb edit uchar 1073664 sv edit ulong 64 to void
+msl = get sv_cfg 0
+rr = get sv_cfg 11
+for k ulong msl
+s = rem add rr k msl
+if eq get svs_active s 1
+svslot_step s cs io bd wb sv
+end
+end
+put sv_cfg 11 rem add rr 1 msl
+end
+
+fn svserve_init sv edit ulong 64 na ulong port ulong wb edit uchar 1073664 to ulong
+put sv 23 524288
+put sv_cfg 0 SV_MAX_SLOTS
+put sv_cfg 1 0
+put sv_cfg 2 8
+put sv_cfg 3 SV_NONE
+put sv_cfg 4 0
 mx = svcli sv na
 ockloop 3
-v = get og 0
-obload 4 v
+obload 4 get og 0
+tck = get og 1
+mc = get sv_cfg 1
+if eq mc 0
+mc = ulong 8192
+if gt tck mc
+mc = tck
+end
+put sv_cfg 1 mc
+else
+if lt mc tck
+exit 2
+end
+end
+sv_init_strands
+if and ne get ogpu 0 0 eq get sv_cfg 4 0
 ochipup
-cs = new ulong 320 0
-io = new uchar 131072 0
-bd = new uchar 983040 0
-wb = new uchar 1073664 0
-a = new uchar 16 0
-put sv 19 get og 1
+end
+svk_init
+put sv 19 get sv_cfg 1
 x = svmcat wb 74752 74763 svtco
 x = svmcat wb 74763 74775 svtcc
 svmid
+a = new uchar 16 0
 r = haddr4 a uint mul 2130706433 OMUTLOOP port
-lf = hlisten a 16
+lf = hlisten a 64
 if lt lf 0
 exit 71
 end
@@ -3607,14 +5899,47 @@ end
 oputu port
 oputc 10
 oflush
-note nc counts served connections; it reaches mx only when MAXCONN was given
+ret mx
+end
+
+fn svserve_loop cs edit ulong 320 io edit uchar 131072 bd edit uchar 983040 wb edit uchar 1073664 sv edit ulong 64 mx ulong to void
 nc = ulong 0
-while lt nc mx bound 9223372036854775807
-c = svwait sv 60000000000
-if ge c 0
-svconn c cs io bd wb sv
+while or lt nc mx gt get sv_cfg 12 0 bound 9223372036854775807
+t = sv_poll_tmo
+for k ulong 16
+if ge nc mx
+break
+end
+c = svwait sv t
+if lt c 0
+break
+end
+adm = svconn c cs io bd wb sv
 nc = add nc 1
+t = long 0
+end
+if gt get sv_cfg 12 0
+sv_step_rr cs io bd wb sv
 end
 end
-y = fclose int lf
+end
+
+note serve PORT CK MERGES [MAXCONN] [tplmax=N] [test=1] [slots=N] [ctx=N] [kvcache=N] [kvblks=N] [strand=PATH ...]
+fn cmdserve to void
+na = oargc
+if or lt na 5 gt na 24
+exit 2
+end
+port = oargu 2
+if or eq port 0 gt port 65535
+exit 2
+end
+sv = new ulong 64 0
+wb = new uchar 1073664 0
+mx = svserve_init sv na port wb
+cs = new ulong 320 0
+io = new uchar 131072 0
+bd = new uchar 983040 0
+svserve_loop cs io bd wb sv mx
+y = fclose int get sv 36
 end

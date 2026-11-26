@@ -115,6 +115,9 @@ OLLM_BIN="$BIN" python3 -W error::ResourceWarning "$here/tests/test_spiral_weave
 OLLM_BIN="$BIN" OLLM_GB10_LIVE=0 python3 -W error::ResourceWarning "$here/tests/test_apu_weave.py" -v
 OLLM_BIN="$BIN" OLLM_GB10_LIVE=0 python3 -W error::ResourceWarning "$here/tests/test_gpu_spiral_gb10.py" -v
 
+echo "--- 3g. Serve continuous batching, shared-trunk KV prefix cache, 8K-32K context ---"
+OLLM_GB10_LIVE=0 python3 -W error::ResourceWarning "$here/tests/test_serve_scaling.py"
+
 echo "--- 4. OpenWALDO dataset verifier, pure-Omega ingestor, multi-arch backend & BOM ---"
 OLLM_WALDO_BIN="$OUT/ollm-waldo" OLLM_UNIV_BIN="$OUT/ollm-univ" \
 OLLM_INTERCHANGE_BIN="$OUT/ollm-interchange" OLLM_BIN="$BIN" \

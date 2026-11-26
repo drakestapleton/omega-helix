@@ -162,10 +162,14 @@ defaults. The exit codes are listed in CONTRACT §7.
 ## Serve (DRA-119)
 
 ```sh
-ollm serve PORT CK MERGES [MAXCONN] [tplmax=N] [test=1]    # AArch64 Linux; prints "MODEL id", then "PORT n" once listening
-ollm-gb10 gserve PORT CK MERGES [MAXCONN] [tplmax=N] [test=1]   # the same server, logits from the GB10
-ollm-gb10 gserveb PORT CK MERGES [MAXCONN] [tplmax=N] [test=1]  # mixed BF16, see CONTRACT-BF16.md
+ollm serve PORT CK MERGES [MAXCONN] [tplmax=N] [test=1] [slots=N] [ctx=N] [kvcache=N] [kvblks=N] [strand=PATH ...]
+ollm-gb10 gserve PORT CK MERGES [MAXCONN] [tplmax=N] [test=1] [slots=N] [ctx=N] [kvcache=N] [kvblks=N] [strand=PATH ...]
+ollm-gb10 gserveb PORT CK MERGES [MAXCONN] [tplmax=N] [test=1] [slots=N] [ctx=N] [kvcache=N] [kvblks=N] [strand=PATH ...]  # mixed BF16, see CONTRACT-BF16.md
 ```
+
+- **Concurrent slots (`slots=1..8`, default `8`)**: continuous-batching scheduler (`pollfds` + round-robin chunked prefill & decode across active connections); returns `503 server_busy` (`Retry-After: 1`) only when all active slots are saturated.
+- **Long context (`ctx=T_ck..32768`, default `8192`)**: supports 8K–32K context windows with dynamic KV pools, default output limits matching available context (`>= 4096`), and explicit `400 context_length_exceeded` refusal above `ctx`.
+- **Shared-trunk KV prefix cache (`kvcache=0..64` MiB-scale budget default `8`, `kvblks=0..32768`, `strand=PATH` up to 4 `OLLMSP01` packs)**: paged 8-token trunk KV blocks keyed by FNV-1a-64 prefix chain + exact 8-token collision verification and LRU leaf eviction; shared across `"base"`, `"strand:0..3"`, and `"spclip"` (`strand`, `spclip_mode`, `spclip_weights`, `cache_prefix` request fields), reporting `usage.prompt_tokens_details.cached_tokens` and live telemetry on `GET /health`.
 
 The server has no connection limit. MAXCONN, when given, makes it leave after that many
 connections; the checks use it to end a server.
