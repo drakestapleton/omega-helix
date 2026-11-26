@@ -14,6 +14,7 @@
 #   TARGET=openwaldo   sh scripts/build.sh  # Pure-Omega OpenWALDO JSONL ingestor (ollm-waldo)
 #   TARGET=univ        sh scripts/build.sh  # Pure-Omega Universal zero-cap LLM engine (ollm-univ)
 #   TARGET=interchange sh scripts/build.sh  # Pure-Omega Safetensors/HF/GGUF converter (ollm-interchange)
+#   TARGET=aien-m16    sh scripts/build.sh  # Pure-Omega /dev/aien-gpu M16 hardware gate (aien-m16-om)
 #
 # Env:
 #   OMC   Path to seeded omc compiler (auto-detected if unset)
@@ -233,6 +234,15 @@ if [ "$TARGET" = interchange ]; then
   fi
   printf 'built %s (%s bytes, target=%s, omc=%s)\n' \
     "$OUT/ollm-interchange" "$(wc -c < "$OUT/ollm-interchange" | tr -d ' ')" "$TARGET" "$OMC"
+  exit 0
+fi
+
+if [ "$TARGET" = aien-m16 ]; then
+  "$OMC" < "$src/gpu/aien_m16.om" > "$OUT/aien-m16-om.tmp"
+  chmod +x "$OUT/aien-m16-om.tmp"
+  mv -f "$OUT/aien-m16-om.tmp" "$OUT/aien-m16-om"
+  printf 'built %s (%s bytes, target=%s, omc=%s)\n' \
+    "$OUT/aien-m16-om" "$(wc -c < "$OUT/aien-m16-om" | tr -d ' ')" "$TARGET" "$OMC"
   exit 0
 fi
 
