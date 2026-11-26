@@ -211,13 +211,14 @@ class TestApuWeave(unittest.TestCase):
         os.mkfifo(fifo)
         os.symlink(nested, mix_dir / "link_to_dir.tok")
         os.symlink(fifo, mix_dir / "link_to_fifo.tok")
+        os.symlink("/dev/null", mix_dir / "link_to_devnull.tok")
         os.symlink(mix_dir / self.shard_paths[0].name, mix_dir / "s99_symlink.tok")
 
         out_dir = self.td / "out_dir_linux"
         # Do NOT pre-create out_dir to test automatic `makedir`!
         r = run_cmd([self.bin, "apuweave", self.ck, mix_dir, out_dir, "24", "100", "128", "4", "4"])
         waves, strands, summary, _ = parse_telemetry(r.stdout)
-        self.assertEqual(summary[0], 5, "4 regular .tok + 1 valid regular symlink; dirs/FIFOs/dotfiles skipped")
+        self.assertEqual(summary[0], 5, "4 regular .tok + 1 valid regular symlink; dirs/FIFOs/devices/dotfiles skipped")
         self.assertEqual(summary[1], 8, "workers=4 + 2 pref + 2 verif = 8 Grace workers")
         self.assertEqual(summary[11], 5)
         self.assertEqual(len(strands), 5)
@@ -227,6 +228,7 @@ class TestApuWeave(unittest.TestCase):
         self.assertFalse((out_dir / "pipe.sp2").exists())
         self.assertFalse((out_dir / "link_to_dir.sp2").exists())
         self.assertFalse((out_dir / "link_to_fifo.sp2").exists())
+        self.assertFalse((out_dir / "link_to_devnull.sp2").exists())
         self.assertFalse((out_dir / "._appledouble.sp2").exists())
 
     def test_apuweave_gb10_live_silicon(self):
