@@ -42,7 +42,7 @@ omega-helix spforge <base.ck> <train.bin_or_tok> <out_dir> --windows 8 --json
 ```sh
 omega-helix inspect <run_id> --json
 omega-helix sample <run_id> --prompt "fn main" --n-tokens 32 --weights 700,300 --json
-omega-helix spclip create recipe.spclip <base.ck> 2 500 <a.sp> 500 <b.sp> --json
+omega-helix spclip create recipe.spclip <base.ck> --strand <a.sp> --strand <b.sp> --weights 500,500 --mode 1 --tau 1000 --json
 omega-helix verify --base-ck <base.ck> --pack <strand.sp> --bom <openwaldo-helix-bom.json> --json
 ```
 

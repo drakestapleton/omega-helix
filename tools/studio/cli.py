@@ -1209,7 +1209,7 @@ def cmd_agent(args: argparse.Namespace) -> int:
             ),
             "4_closed_form_spforge_strand": "omega-helix spforge <base.ck> <train.bin_or_tok> <out_dir> --windows 8 --json",
             "5_sample_and_blend_strands": "omega-helix sample <run_id> --prompt 'fn main' --n-tokens 32 --weights 700,300 --json",
-            "6_editable_spclip_recipe": "omega-helix spclip create recipe.spclip <base.ck> 2 500 <a.sp> 500 <b.sp> --json",
+            "6_editable_spclip_recipe": "omega-helix spclip create recipe.spclip <base.ck> --strand <a.sp> --strand <b.sp> --weights 500,500 --mode 1 --tau 1000 --json",
             "7_list_and_inspect_runs": "omega-helix runs --json && omega-helix inspect <run_id> --json",
             "8_offline_trust_audit": "omega-helix verify --base-ck <base.ck> --pack <strand.sp> --bom <openwaldo-helix-bom.json> --json",
             "9_headless_studio_http": "omega-helix studio --headless --no-open --port 18420 --json",
