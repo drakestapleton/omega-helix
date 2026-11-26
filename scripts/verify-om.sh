@@ -206,4 +206,47 @@ cat "$work/apu_spweval.out"
 awk 'NR==1 && $1=="SPWEVAL" && $6 < $5 { ok=1 } END { exit ok ? 0 : 1 }' "$work/apu_spweval.out"
 echo "APU_WEAVE_OM_PASS"
 
+echo "--- 13. pure-Omega serve.om scaling build + live /health check ---"
+if [ "$(uname -s)" = "Linux" ] && [ "$ARCH" = "aarch64" ]; then
+  SRV_PORT="${OLLM_SERVE_PORT:-18292}"
+  printf 'sovereign verified deterministic compute builds clean kernels.\n' > "$work/serve_corpus.txt"
+  i=0
+  while [ "$i" -lt 20 ]; do
+    printf 'alpha beta gamma delta epsilon sovereign compute kernel %d.\n' "$i" >> "$work/serve_corpus.txt"
+    i=$((i + 1))
+  done
+  "$BIN" bpefit "$work/serve_corpus.txt" "$work/serve_merges.bin" 300
+  "$BIN" init "$work/serve_base.ck" 300 16 16 2 32 2 4 1 10 4000
+  "$BIN" serve "$SRV_PORT" "$work/serve_base.ck" "$work/serve_merges.bin" slots=4 ctx=8192 kvblks=128 >"$work/serve.log" 2>&1 &
+  SRV_PID=$!
+  trap 'kill "$SRV_PID" 2>/dev/null || true; wait "$SRV_PID" 2>/dev/null || true; rm -rf "$work"' EXIT
+  ready=0
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    if grep -q "^PORT $SRV_PORT$" "$work/serve.log" 2>/dev/null; then
+      ready=1
+      break
+    fi
+    sleep 0.2
+  done
+  [ "$ready" = 1 ]
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS "http://127.0.0.1:$SRV_PORT/health" >"$work/health.json"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$work/health.json" "http://127.0.0.1:$SRV_PORT/health"
+  fi
+  cat "$work/health.json"
+  echo ""
+  grep -q '"max_slots":4' "$work/health.json"
+  grep -q '"max_ctx":8192' "$work/health.json"
+  grep -q '"kv_cache":' "$work/health.json"
+  kill "$SRV_PID" 2>/dev/null || true
+  wait "$SRV_PID" 2>/dev/null || true
+  SRV_PID=""
+  trap 'rm -rf "$work"' EXIT
+else
+  OUT="$work/a64" TARGET=aarch64 sh "$here/scripts/build.sh"
+  test -f "$work/a64/ollm"
+fi
+echo "SERVE_SCALING_OM_PASS"
+
 echo "OMEGA_HELIX_PURE_OM_PASS"
