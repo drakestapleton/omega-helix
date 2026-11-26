@@ -5,6 +5,7 @@
 #   sh scripts/build.sh                     # default: TARGET=gb10 (Linux AArch64 + GB10 SM121 GPU)
 #   TARGET=aarch64     sh scripts/build.sh  # Linux AArch64 CPU + OpenAI HTTP server
 #   TARGET=macos       sh scripts/build.sh  # Apple Silicon macOS Mach-O CPU binary
+#   TARGET=macos-metal sh scripts/build.sh  # Apple Silicon macOS Mach-O + Metal GPU binary
 #   TARGET=x86linux    sh scripts/build.sh  # Linux x86-64 CPU binary
 #   TARGET=x86efi      sh scripts/build.sh  # Bare-metal x86-64 UEFI application
 #   TARGET=a64efi      sh scripts/build.sh  # Bare-metal AArch64 UEFI application
@@ -55,6 +56,85 @@ host_target_hdr() {
     Linux/x86_64|Linux/amd64) printf 'target x86linux\n' ;;
   esac
 }
+
+find_ng() {
+  if [ -n "${NG:-}" ] && [ -x "$NG" ]; then
+    printf '%s\n' "$NG"
+    return 0
+  fi
+  for cand in \
+    "$(command -v ng 2>/dev/null || true)" \
+    "$HOME/.local/bin/ng" \
+    "$OUT/ng"
+  do
+    if [ -n "$cand" ] && [ -x "$cand" ]; then
+      printf '%s\n' "$cand"
+      return 0
+    fi
+  done
+  ng_src=""
+  for root in \
+    "${OMEGA_MV:-}" \
+    "$HOME/workspace/omega-mv-macos" \
+    "$HOME/canon/omega-mv" \
+    "$here/../omega-mv" \
+    "$here/../omega-mv-macos"
+  do
+    if [ -n "$root" ] && [ -f "$root/seed/ng/src/ir.om" ] && [ -f "$root/seed/ng/src/a64.om" ]; then
+      ng_src="$root/seed/ng/src"
+      break
+    fi
+  done
+  if [ -z "$ng_src" ]; then
+    echo "error: 'ng' compiler or omega-mv seed/ng/src not found (set NG=/path/to/ng or OMEGA_MV=/path/to/omega-mv)." >&2
+    exit 1
+  fi
+  {
+    host_target_hdr
+    cat "$ng_src/ir.om" "$ng_src/front.om" "$ng_src/opt.om" "$ng_src/a64.om" "$ng_src/main.om"
+  } > "$OUT/ng.om"
+  "$OMC" < "$OUT/ng.om" > "$OUT/ng.tmp"
+  chmod +x "$OUT/ng.tmp"
+  mv -f "$OUT/ng.tmp" "$OUT/ng"
+  if [ "$(uname -s)" = Darwin ] && command -v codesign >/dev/null 2>&1; then
+    codesign -s - -f "$OUT/ng" >/dev/null 2>&1
+  fi
+  printf '%s\n' "$OUT/ng"
+}
+
+if [ "$TARGET" = macos-metal ]; then
+  NG=$(find_ng)
+  om_file="$OUT/ollm-metal.om"
+  {
+    printf 'target macos\nom2\n'
+    cat \
+      "$src/math.om" \
+      "$src/data.om" \
+      "$src/gpu/mpool.om" \
+      "$src/model.om" \
+      "$src/adam.om" \
+      "$src/ckpt.om" \
+      "$src/bpe.om" \
+      "$src/spec.om" \
+      "$src/norev.om" \
+      "$src/cli.om" \
+      "$src/noserve.om" \
+      "$src/gpu/metal_io.om" \
+      "$src/gpu/metal_msl.om" \
+      "$src/gpu/metal_macos.om"
+  } > "$om_file"
+  { printf '@ng front-ir\n'; cat "$om_file"; } | "$NG" > "$OUT/ollm-metal.ir"
+  { printf '@ng opt\n'; cat "$OUT/ollm-metal.ir"; } | "$NG" > "$OUT/ollm-metal.opt.ir"
+  { printf '@ng a64 macho\n'; cat "$OUT/ollm-metal.opt.ir"; } | "$NG" > "$OUT/ollm-metal.tmp"
+  chmod +x "$OUT/ollm-metal.tmp"
+  mv -f "$OUT/ollm-metal.tmp" "$OUT/ollm-metal"
+  if [ "$(uname -s)" = Darwin ] && command -v codesign >/dev/null 2>&1; then
+    codesign -s - -f "$OUT/ollm-metal" >/dev/null 2>&1
+  fi
+  printf 'built %s (%s bytes, target=%s, ng=%s)\n' \
+    "$OUT/ollm-metal" "$(wc -c < "$OUT/ollm-metal" | tr -d ' ')" "$TARGET" "$NG"
+  exit 0
+fi
 
 if [ "$TARGET" = tok ]; then
   {
@@ -193,7 +273,7 @@ om2'
     fi
     ;;
   *)
-    echo "error: unknown TARGET '$TARGET' (expected: gb10, aarch64, macos, x86linux, x86efi, a64efi, tok, wtrain, openwaldo, univ, interchange)" >&2
+    echo "error: unknown TARGET '$TARGET' (expected: gb10, aarch64, macos, macos-metal, x86linux, x86efi, a64efi, tok, wtrain, openwaldo, univ, interchange)" >&2
     exit 2
     ;;
 esac

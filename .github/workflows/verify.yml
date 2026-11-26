@@ -67,6 +67,21 @@ jobs:
           fi
           echo "OMC=$RUNNER_TEMP/omc-dist/omc" >> "$GITHUB_ENV"
 
+      - name: Fetch & SHA-256 verify ng sources for macos-metal
+        if: matrix.label == 'macos-arm64'
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://interplane.io/drakestapleton/omega-mv.git "$RUNNER_TEMP/omega-mv"
+          git -C "$RUNNER_TEMP/omega-mv" sparse-checkout set seed/ng/src
+          cd "$RUNNER_TEMP/omega-mv/seed/ng/src"
+          shasum -a 256 -c - <<'EOF'
+          0ab8514ff3be771c2bae73039083d73cf316fd3c0de140b8846fc84f4e7d1c77  ir.om
+          965262f228bde4a2a3637e913ae05b0db4540711ceb3673c6b0608ef066a7f2b  front.om
+          22cf8c30d0be8682c4973ab802ea21abffe13ed229d5090915e4a04ca5ff7559  opt.om
+          2129b005e7753cc8c746b66de977016fca58c8ee327994e6934a2e600c36a253  a64.om
+          a69096b04ab5cd870a6406963964479a12536756fde5050950da0b19fc2e6b79  main.om
+          EOF
+          echo "OMEGA_MV=$RUNNER_TEMP/omega-mv" >> "$GITHUB_ENV"
+
       - name: Run scripts/verify-om.sh (zero-Python pure-Omega gate)
         run: |
           OUT="$RUNNER_TEMP/omega-helix-ci-om" sh scripts/verify-om.sh
