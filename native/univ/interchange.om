@@ -56,12 +56,29 @@ global ixnm uchar 1100
 global ixpath uchar 4400
 global ixob uchar 1048576
 
+const OLLMBF01_MAG ulong 3544410157319212111
+note bfi: 0=V 1=D 2=H 3=HKV 4=HD 5=F 6=L 7=fl 8=th_milli 9=eps_bits 10=max_pos 11=P
+note      12=payload_bytes 13=qdim 14=kvd 15=n_shards 16=gem 17=untied 18=wfnv 19=thash 20=hfnv
+note      21=out_pl 22=sh_sl_cnt 23=dir_len 24=pad_bytes
+global bfi ulong 32
+global bfo ulong *
+global bfsl ulong *
+global bfsh uchar 65536
+global bfshn ulong 256
+global bfdir uchar 4096
+
 text ix_c_imp "import-hf"
+text ix_c_impbf "import-hf-bf16"
+text ix_c_infobf "info-bf16"
 text ix_c_exh "export-hf"
 text ix_c_exg "export-gguf"
 text ix_c_upg "upgrade"
 text ix_s_f32 "f32"
 text ix_s_bf16 "bf16"
+text ixp_idx "model.safetensors.index.json"
+text ixp_st1 "model.safetensors"
+text ixp_cfg1 "config.json"
+text ixk_wm "weight_map"
 
 text ixk_mt "model_type"
 text ixk_vs "vocab_size"
@@ -2666,12 +2683,1083 @@ uputc 10
 uflush
 end
 
+note ======== import-hf-bf16 / info-bf16 (OLLMBF01 sharded BF16 frozen trunk) ========
+
+fn bf_al256 x ulong to ulong
+ret mul div add x 255 256 256
+end
+
+fn bf_set_dir ai ulong to void
+r = argread ai bfdir 0 4000
+if or le r 0 gt r 4000
+exit 2
+end
+n = ulong r
+while gt n 1 bound 4001
+if ne get bfdir sub n 1 47
+break
+end
+n = sub n 1
+end
+put bfi 23 n
+end
+
+fn bf_build_path nm view uchar * nl ulong to ulong
+dl = get bfi 23
+if gt add dl add nl 2 4350
+exit 70
+end
+for i ulong dl
+put ixpath i get bfdir i
+end
+p = dl
+if ne get bfdir sub dl 1 47
+put ixpath p 47
+p = add p 1
+end
+for j ulong nl
+put ixpath add p j get nm j
+end
+put ixs 9 add p nl
+ret add p nl
+end
+
+fn bf_build_shpath si ulong to ulong
+dl = get bfi 23
+nl = get bfshn si
+if gt add dl add nl 2 4350
+exit 70
+end
+for i ulong dl
+put ixpath i get bfdir i
+end
+p = dl
+if ne get bfdir sub dl 1 47
+put ixpath p 47
+p = add p 1
+end
+base = mul si 256
+for j ulong nl
+put ixpath add p j get bfsh add base j
+end
+put ixs 9 add p nl
+ret add p nl
+end
+
+fn bf_slurp_path src edit uchar * code ulong to ulong
+pl = get ixs 9
+fd = int fopen ixpath 0 pl 0 0
+if lt fd 0
+exit 70
+end
+sz = fseek fd 0 2
+if lt sz 0
+c0 = fclose fd
+exit 70
+end
+n = ulong sz
+if or eq n 0 gt n len src
+c1 = fclose fd
+exit int code
+end
+got = ulong 0
+while lt got n bound 1000000
+r = pread fd src got sub n got long got
+if le r 0
+c2 = fclose fd
+exit 70
+end
+got = add got ulong r
+end
+if ne fclose fd 0
+exit 70
+end
+ret n
+end
+
+fn bf_cfg_dir to void
+p = bf_build_path ixp_cfg1 len ixp_cfg1
+src = new uchar 262144 0
+tape = new uint 65536 0
+n = bf_slurp_path src 80
+if lt js_init tape 262144 64 0
+exit 80
+end
+if le js_parse src tape n 0
+exit 80
+end
+if ne js_type tape 0 jsobj
+exit 80
+end
+k = js_first tape 0
+while ne k jsnone bound 1000000
+ix_cfg_member src tape k
+k = js_mnext tape k
+end
+end
+
+fn bf_cfg_check_scal fl ulong to void
+eps = 1.0e-6f64
+if ne get ixc 10 0
+eps = bitcast f64 get ixc 9
+end
+if or ix_bad eps le eps 0.0
+exit 81
+end
+put bfi 9 bitcast ulong eps
+th = 10000.0f64
+if ne get ixc 12 0
+th = bitcast f64 get ixc 11
+end
+mi = mul th 1000.0
+if or ix_bad mi or le mi 0.0 ge mi 1.0e18
+exit 81
+end
+if ne mi f64 ulong mi
+exit 81
+end
+put bfi 8 ulong mi
+put bfi 10 get ixc 7
+if eq get bfi 10 0
+put bfi 10 256
+end
+end
+
+fn bf_cfg_check to void
+mt = get ixc 0
+if or eq mt 0 eq mt 99
+exit 81
+end
+for i ulong 6
+if and ne i 3 eq get ixc add 1 i 0
+exit 81
+end
+end
+if gt get ixc 6 100000
+exit 81
+end
+h = get ixc 3
+hkv = get ixc 4
+if eq hkv 0
+hkv = h
+end
+if or eq hkv 0 or gt hkv h ne rem h hkv 0
+exit 88
+end
+hd = get ixc 8
+if eq hd 0
+if ne rem get ixc 2 h 0
+exit 88
+end
+hd = div get ixc 2 h
+else
+if or eq hd 0 ne rem hd 2 0
+exit 88
+end
+end
+if ne get ixc 14 0
+exit 82
+end
+fl = ix_cfg_flags mt
+if and ne mt 5 ne mt 6
+if ne get ixc 13 2
+fl = or fl 4
+end
+end
+if eq mt 6
+tie = get ixc 13
+if ne tie 0
+if ne eq tie 2 eq and fl 4 0
+exit 81
+end
+end
+end
+put bfi 0 get ixc 1
+put bfi 1 get ixc 2
+put bfi 2 h
+put bfi 3 hkv
+put bfi 4 hd
+put bfi 5 get ixc 5
+put bfi 6 get ixc 6
+put bfi 7 fl
+put bfi 13 mul h hd
+put bfi 14 mul hkv hd
+put bfi 16 0
+if eq mt 5
+put bfi 16 1
+end
+put bfi 17 0
+if and ne and fl 4 0 ne mt 5
+put bfi 17 1
+end
+put ug 0 get bfi 0
+put ug 2 get bfi 1
+put ug 3 h
+put ug 4 hkv
+put ug 5 get bfi 5
+put ug 6 get bfi 6
+put ug 8 hd
+put ug 9 get bfi 14
+put ug 12 fl
+bf_cfg_check_scal fl
+end
+
+fn bf_plan_add sl ulong nb ulong nsc ulong off ulong to ulong
+put bfo mul sl 2 off
+put bfo add mul sl 2 1 nb
+put bfi 11 add get bfi 11 nsc
+ret add off bf_al256 nb
+end
+
+fn bf_plan_lay l ulong off ulong to ulong
+d = get bfi 1
+qd = get bfi 13
+kvd = get bfi 14
+f = get bfi 5
+fl = get bfi 7
+b = add 8 mul l 24
+p = bf_plan_add b mul d 4 d off
+p = bf_plan_add add b 1 mul mul qd d 2 mul qd d p
+p = bf_plan_add add b 2 mul mul kvd d 2 mul kvd d p
+p = bf_plan_add add b 3 mul mul kvd d 2 mul kvd d p
+p = bf_plan_add add b 4 mul mul d qd 2 mul d qd p
+if ne and fl 8 0
+hd = get bfi 4
+p = bf_plan_add add b 5 mul hd 4 hd p
+p = bf_plan_add add b 6 mul hd 4 hd p
+end
+p = bf_plan_add add b 7 mul d 4 d p
+if ne and fl 66 0
+p = bf_plan_add add b 8 mul mul f d 2 mul f d p
+end
+p = bf_plan_add add b 9 mul mul f d 2 mul f d p
+p = bf_plan_add add b 10 mul mul d f 2 mul d f p
+ret p
+end
+
+fn bf_plan to void
+nsl = add 8 mul get bfi 6 24
+r = enlarge bfo mul nsl 2
+if ne r 0
+exit 70
+end
+r2 = enlarge bfsl nsl
+if ne r2 0
+exit 70
+end
+r3 = enlarge ixt mul nsl 8
+if ne r3 0
+exit 70
+end
+put ixs 4 nsl
+for i ulong mul nsl 2 bound IXBIG
+put bfo i 0
+end
+for j ulong mul nsl 8 bound IXBIG
+put ixt j 0
+end
+put bfi 11 0
+v = get bfi 0
+d = get bfi 1
+off = bf_plan_add 0 mul mul v d 2 mul v d 0
+for l ulong get bfi 6 bound IXBIG
+off = bf_plan_lay l off
+end
+off = bf_plan_add 2 mul d 4 d off
+if ne get bfi 17 0
+off = bf_plan_add 3 mul mul v d 2 mul v d off
+end
+put bfi 12 off
+end
+
+fn bf_add_shard nl ulong to void
+if or eq nl 0 gt nl 255
+exit 83
+end
+for i ulong nl
+if eq get ixnm i 47
+exit 83
+end
+if and lt add i 1 nl and eq get ixnm i 46 eq get ixnm add i 1 46
+exit 83
+end
+end
+ns = get bfi 15
+for s ulong ns
+if eq get bfshn s nl
+base = mul s 256
+same = true
+for k ulong nl
+if ne get bfsh add base k get ixnm k
+same = false
+break
+end
+end
+if same
+ret
+end
+end
+end
+if ge ns 256
+exit 83
+end
+dst = mul ns 256
+for j ulong nl
+put bfsh add dst j get ixnm j
+end
+put bfshn ns nl
+put bfi 15 add ns 1
+end
+
+fn bf_shard_wm src view uchar * tape view uint * v ulong to void
+if ne js_type tape v jsobj
+exit 83
+end
+m = js_first tape v
+nb = new uchar 1100 0
+while ne m jsnone bound 1000000
+mv = add m 1
+if ne js_type tape mv jsstr
+exit 83
+end
+r = js_sget src js_off tape mv nb
+if or le r 0 gt r 255
+exit 83
+end
+n = ulong r
+for i ulong n
+put ixnm i get nb i
+end
+bf_add_shard n
+m = js_mnext tape m
+end
+end
+
+fn bf_shard_list to void
+put bfi 15 0
+p = bf_build_path ixp_idx len ixp_idx
+fd = int fopen ixpath 0 p 0 0
+if lt fd 0
+for i ulong len ixp_st1
+put bfsh i get ixp_st1 i
+end
+put bfshn 0 len ixp_st1
+put bfi 15 1
+ret
+end
+c0 = fclose fd
+src = new uchar 983040 0
+tape = new uint 524288 0
+n = bf_slurp_path src 83
+if lt js_init tape 983040 64 0
+exit 83
+end
+if le js_parse src tape n 0
+exit 83
+end
+if ne js_type tape 0 jsobj
+exit 83
+end
+k = js_first tape 0
+found = false
+while ne k jsnone bound 1000000
+if js_streq src js_off tape k ixk_wm
+bf_shard_wm src tape add k 1
+found = true
+break
+end
+k = js_mnext tape k
+end
+if or not found eq get bfi 15 0
+exit 83
+end
+end
+
+fn bf_st_open_sh si ulong to ulong
+pl = bf_build_shpath si
+fd = int fopen ixpath 0 pl 0 0
+if lt fd 0
+exit 70
+end
+put ixs 1 ulong fd
+sz = fseek fd 0 2
+if lt sz 8
+c0 = fclose fd
+exit 87
+end
+hb = new uchar 8 0
+if ne pread fd hb 0 8 0 8
+c1 = fclose fd
+exit 87
+end
+n = ulong 0
+for k ulong 8
+n = or n shl ulong get hb k mul k 8
+end
+if or lt n 2 gt n 983040
+c2 = fclose fd
+exit 83
+end
+if gt add 8 n ulong sz
+c3 = fclose fd
+exit 87
+end
+put ixs 2 add 8 n
+put ixs 3 sub ulong sz add 8 n
+ret n
+end
+
+fn bf_st_member src view uchar * tape view uint * k ulong to void
+ix_key src tape k
+v = add k 1
+if ixn_eq ixs_meta
+if ne js_type tape v jsobj
+exit 83
+end
+ret
+end
+if ne js_type tape v jsobj
+exit 83
+end
+ix_st_entry src tape v
+ix_ext_add
+sl = ix_slot
+if eq sl 9999
+ret
+end
+if ge sl 9998
+exit 84
+end
+ix_slot_put sl
+cnt = get bfi 22
+put bfsl cnt sl
+put bfi 22 add cnt 1
+end
+
+fn bf_check_l_slot b ulong r ulong to void
+d = get bfi 1
+qd = get bfi 13
+kvd = get bfi 14
+f = get bfi 5
+if eq r 0
+ix_req1 b d
+ret
+end
+if eq r 1
+ix_req2 add b 1 qd d
+ret
+end
+if eq r 2
+ix_req2 add b 2 kvd d
+ret
+end
+if eq r 3
+ix_req2 add b 3 kvd d
+ret
+end
+if eq r 4
+ix_req2 add b 4 d qd
+ret
+end
+if eq r 5
+ix_req1 add b 5 get bfi 4
+ret
+end
+if eq r 6
+ix_req1 add b 6 get bfi 4
+ret
+end
+if eq r 7
+ix_req1 add b 7 d
+ret
+end
+if eq r 8
+ix_req2 add b 8 f d
+ret
+end
+if eq r 9
+ix_req2 add b 9 f d
+ret
+end
+if eq r 10
+ix_req2 add b 10 d f
+ret
+end
+if or eq r 11 eq r 14
+ix_bias add b r d
+ret
+end
+if or eq r 12 eq r 13
+ix_bias add b r kvd
+ret
+end
+if or eq r 15 eq r 16
+ix_bias add b r f
+ret
+end
+ix_bias add b 17 d
+end
+
+fn bf_check_slot sl ulong to void
+v = get bfi 0
+d = get bfi 1
+if eq sl 0
+ix_req2 0 v d
+ret
+end
+if eq sl 1
+exit 84
+end
+if eq sl 2
+ix_req1 2 d
+ret
+end
+if eq sl 3
+if eq get bfi 17 0
+exit 84
+end
+ix_req2 3 v d
+ret
+end
+s8 = sub sl 8
+l = div s8 24
+r = rem s8 24
+b = add 8 mul l 24
+fl = get bfi 7
+if and or eq r 5 eq r 6 eq and fl 8 0
+exit 84
+end
+if and eq r 8 eq and fl 66 0
+exit 84
+end
+bf_check_l_slot b r
+end
+
+fn bf_pw_ixob fd int n ulong fpos ulong to void
+p = ulong 0
+while lt p n bound 1000000
+w = pwrite fd ixob p sub n p long add fpos p
+if le w 0
+exit 70
+end
+p = add p ulong w
+end
+end
+
+fn bf_pw_uopw fd int n ulong fpos ulong to void
+p = ulong 0
+while lt p n bound 1000000
+w = pwrite fd uopw p sub n p long add fpos p
+if le w 0
+exit 70
+end
+p = add p ulong w
+end
+end
+
+fn bf_check_bf16_chunk m ulong to void
+for j ulong m bound IXBIG
+b2 = mul j 2
+h = or ulong get uopw b2 shl ulong get uopw add b2 1 8
+if eq and h 32640 32640
+exit 86
+end
+end
+end
+
+fn bf_put_u16 j ulong u ulong to void
+o = mul j 2
+put ixob o uchar and u 255
+put ixob add o 1 uchar and shr u 8 255
+end
+
+fn bf_put_f32 j ulong v f64 to void
+b32 = ulong bitcast uint f32 v
+o = mul j 4
+for k ulong 4
+sh = mul k 8
+put ixob add o k uchar and shr b32 sh 255
+end
+end
+
+fn bf_conv_one j ulong v f64 md ulong to void
+if eq md 0
+bf_put_u16 j ix_bf16 v
+ret
+end
+if eq md 3
+bf_put_u16 j ix_bf16 mul v get ixf 0
+ret
+end
+if eq md 1
+bf_put_f32 j v
+ret
+end
+if eq md 2
+bf_put_f32 j add v 1.0
+ret
+end
+if ne v 0.0
+exit 82
+end
+end
+
+fn bf_conv_chunk m ulong dt ulong md ulong to void
+for j ulong m bound IXBIG
+v = ix_dec j dt
+if ix_bad v
+exit 86
+end
+bf_conv_one j v md
+end
+end
+
+fn bf_pad_slot dst_off ulong nb ulong to void
+al = bf_al256 nb
+if eq al nb
+ret
+end
+pad = sub al nb
+for i ulong pad
+put ixob i 0
+end
+bf_pw_ixob get ucfd 0 pad add dst_off nb
+end
+
+fn bf_chunk_lim ds ulong md ulong to ulong
+cn = div IXOB ds
+if eq md 4
+ret cn
+end
+lim = div IXOB 2
+if or eq md 1 eq md 2
+lim = div IXOB 4
+end
+if gt cn lim
+ret lim
+end
+ret cn
+end
+
+fn bf_stream_one dt ulong md ulong m ulong out_p ulong to ulong
+if and eq dt 2 eq md 0
+bf_check_bf16_chunk m
+nb = mul m 2
+bf_pw_uopw get ucfd 0 nb out_p
+ret add out_p nb
+end
+bf_conv_chunk m dt md
+if eq md 4
+ret out_p
+end
+esz = ulong 2
+if or eq md 1 eq md 2
+esz = 4
+end
+nb2 = mul m esz
+bf_pw_ixob get ucfd 0 nb2 out_p
+ret add out_p nb2
+end
+
+fn bf_stream_slot sl ulong md ulong to void
+b = mul sl 8
+dt = get ixt add b 1
+ds = ix_dsz dt
+pos = add get ixs 2 get ixt add b 5
+n = div sub get ixt add b 6 get ixt add b 5 ds
+cn = bf_chunk_lim ds md
+dst0 = add 256 get bfo mul sl 2
+out_p = dst0
+k = ulong 0
+while lt k n bound IXBIG
+m = sub n k
+if gt m cn
+m = cn
+end
+ix_pread add pos mul k ds mul m ds
+out_p = bf_stream_one dt md m out_p
+k = add k m
+end
+if ne md 4
+bf_pad_slot dst0 sub out_p dst0
+end
+end
+
+fn bf_slot_mode sl ulong to ulong
+gem = get bfi 16
+if eq sl 0
+if ne gem 0
+ret 3
+end
+ret 0
+end
+if eq sl 2
+if ne gem 0
+ret 2
+end
+ret 1
+end
+if eq sl 3
+ret 0
+end
+r = rem sub sl 8 24
+if or eq r 0 or eq r 5 or eq r 6 eq r 7
+if and ne gem 0 or eq r 0 eq r 7
+ret 2
+end
+ret 1
+end
+if ge r 11
+ret 4
+end
+ret 0
+end
+
+fn bf_proc_shard si ulong to void
+put ixs 0 0
+put bfi 22 0
+src = new uchar 983040 0
+tape = new uint 524288 0
+hn = bf_st_open_sh si
+ix_st_read src hn
+if lt js_init tape 983040 64 0
+exit 83
+end
+if le js_parse src tape hn 0
+exit 83
+end
+if ne js_type tape 0 jsobj
+exit 83
+end
+nk = js_nkids tape 0
+r = enlarge ixe mul add nk 1 2
+if ne r 0
+exit 70
+end
+put ixs 13 nk
+k = js_first tape 0
+while ne k jsnone bound 1000000
+bf_st_member src tape k
+k = js_mnext tape k
+end
+ix_cover
+cnt = get bfi 22
+for i ulong cnt bound IXBIG
+sl = get bfsl i
+bf_check_slot sl
+bf_stream_slot sl bf_slot_mode sl
+end
+c0 = fclose int get ixs 1
+end
+
+fn bf_need to void
+fl = get bfi 7
+if not ix_has 0
+exit 84
+end
+if ix_has 1
+exit 84
+end
+if not ix_has 2
+exit 84
+end
+if ne get bfi 17 0
+if not ix_has 3
+exit 84
+end
+else
+if ix_has 3
+exit 84
+end
+end
+for l ulong get bfi 6 bound IXBIG
+b = add 8 mul l 24
+for r ulong 5
+if not ix_has add b r
+exit 84
+end
+end
+if ne and fl 8 0
+if or not ix_has add b 5 not ix_has add b 6
+exit 84
+end
+else
+if or ix_has add b 5 ix_has add b 6
+exit 84
+end
+end
+if not ix_has add b 7
+exit 84
+end
+if ne and fl 66 0
+if not ix_has add b 8
+exit 84
+end
+else
+if ix_has add b 8
+exit 84
+end
+end
+if or not ix_has add b 9 not ix_has add b 10
+exit 84
+end
+end
+end
+
+fn bf_fnv_ixob n ulong to ulong
+h = ulong 14695981039346656037
+for i ulong n
+h = mul xor h ulong get ixob i 1099511628211
+end
+ret h
+end
+
+fn bf_fnv_words h ulong nw ulong to ulong
+x = h
+for i ulong nw bound IXBIG
+b = mul i 8
+w = ulong 0
+for k ulong 8
+w = or w shl ulong get ixob add b k mul k 8
+end
+x = mul xor x w 1099511628211
+end
+ret x
+end
+
+fn bf_hash_fd fd int pay_bytes ulong to ulong
+if ne rem pay_bytes 8 0
+exit 60
+end
+h = ulong 14695981039346656037
+pos = ulong 256
+remb = pay_bytes
+while gt remb 0 bound IXBIG
+cn = remb
+if gt cn IXOB
+cn = IXOB
+end
+got = ulong 0
+while lt got cn bound 1000000
+r = pread fd ixob got sub cn got long add pos got
+if le r 0
+exit 70
+end
+got = add got ulong r
+end
+h = bf_fnv_words h div cn 8
+pos = add pos cn
+remb = sub remb cn
+end
+ret h
+end
+
+fn bf_put8 o ulong v ulong to void
+for k ulong 8
+put ixob add o k uchar and shr v mul k 8 255
+end
+end
+
+fn bf_get8 o ulong to ulong
+v = ulong 0
+for k ulong 8
+v = or v shl ulong get ixob add o k mul k 8
+end
+ret v
+end
+
+fn bf_write_hdr wfnv ulong to void
+for i ulong 256
+put ixob i 0
+end
+bf_put8 0 OLLMBF01_MAG
+bf_put8 8 1
+bf_put8 16 get bfi 0
+bf_put8 24 get bfi 1
+bf_put8 32 get bfi 2
+bf_put8 40 get bfi 3
+bf_put8 48 get bfi 4
+bf_put8 56 get bfi 5
+bf_put8 64 get bfi 6
+bf_put8 72 get bfi 7
+bf_put8 80 get bfi 8
+bf_put8 88 get bfi 9
+bf_put8 96 get bfi 10
+bf_put8 104 get bfi 11
+bf_put8 112 get bfi 12
+bf_put8 120 wfnv
+th = bf_fnv_ixob 128
+put bfi 19 th
+bf_put8 128 th
+hf = bf_fnv_ixob 248
+put bfi 20 hf
+bf_put8 248 hf
+end
+
+fn bf_puthex v ulong to void
+for i ulong 16
+h = and shr v mul sub 15 i 4 15
+if lt h 10
+uputc add h 48
+else
+uputc add h 87
+end
+end
+end
+
+fn bf_print_meta tag ulong to void
+if eq tag 73
+uputc 73
+end
+uputc 66
+uputc 70
+uputc 49
+uputc 32
+uputu get bfi 0
+uputc 32
+uputu get bfi 1
+uputc 32
+uputu get bfi 2
+uputc 32
+uputu get bfi 3
+uputc 32
+uputu get bfi 4
+uputc 32
+uputu get bfi 5
+uputc 32
+uputu get bfi 6
+uputc 32
+uputu get bfi 11
+uputc 32
+uputu get bfi 7
+uputc 32
+bf_puthex get bfi 19
+uputc 32
+uputu get bfi 12
+uputc 10
+uflush
+end
+
+fn ix_cmd_impbf to void
+if ne ulong argcnt 4
+exit 2
+end
+bf_set_dir 2
+bf_cfg_dir
+bf_cfg_check
+bf_plan
+bf_shard_list
+ucopen_tmp 3
+put ixf 0 fsqrt f64 get bfi 1
+ns = get bfi 15
+for s ulong ns
+bf_proc_shard s
+end
+bf_need
+fd0 = get ucfd 0
+if ne fsync fd0 0
+exit 70
+end
+if ne fclose fd0 0
+exit 70
+end
+pl = uargp 3
+fd_r = int fopen upath 0 add pl 4 0 0
+if lt fd_r 0
+exit 70
+end
+wfnv = bf_hash_fd fd_r get bfi 12
+put bfi 18 wfnv
+c0 = fclose fd_r
+bf_write_hdr wfnv
+fd_w = int fopen upath 0 add pl 4 2 0
+if lt fd_w 0
+exit 70
+end
+bf_pw_ixob fd_w 256 0
+if ne fsync fd_w 0
+exit 70
+end
+if ne fclose fd_w 0
+exit 70
+end
+ucrename pl
+bf_print_meta 73
+end
+
+fn ix_cmd_infobf to void
+if ne ulong argcnt 3
+exit 2
+end
+sz = uofsz 2
+if lt sz 256
+exit 60
+end
+pl = uargp 2
+fd = int fopen uarg 0 pl 0 0
+if lt fd 0
+exit 70
+end
+if ne pread fd ixob 0 256 0 256
+c0 = fclose fd
+exit 60
+end
+if ne bf_get8 0 OLLMBF01_MAG
+c1 = fclose fd
+exit 60
+end
+if ne bf_get8 8 1
+c2 = fclose fd
+exit 60
+end
+if ne bf_fnv_ixob 248 bf_get8 248
+c3 = fclose fd
+exit 61
+end
+th = bf_get8 128
+if ne bf_fnv_ixob 128 th
+c4 = fclose fd
+exit 61
+end
+pb = bf_get8 112
+if ne sz add 256 pb
+c5 = fclose fd
+exit 60
+end
+wfnv = bf_get8 120
+put bfi 0 bf_get8 16
+put bfi 1 bf_get8 24
+put bfi 2 bf_get8 32
+put bfi 3 bf_get8 40
+put bfi 4 bf_get8 48
+put bfi 5 bf_get8 56
+put bfi 6 bf_get8 64
+put bfi 7 bf_get8 72
+put bfi 11 bf_get8 104
+put bfi 12 pb
+put bfi 19 th
+if ne bf_hash_fd fd pb wfnv
+c6 = fclose fd
+exit 61
+end
+c7 = fclose fd
+bf_print_meta 66
+end
+
 fn main to int
 if lt ulong argcnt 2
 exit 2
 end
 if ix_arg_eq 1 ix_c_imp
 ix_cmd_import
+ret 0
+end
+if ix_arg_eq 1 ix_c_impbf
+ix_cmd_impbf
+ret 0
+end
+if ix_arg_eq 1 ix_c_infobf
+ix_cmd_infobf
 ret 0
 end
 if ix_arg_eq 1 ix_c_exh
