@@ -5,7 +5,7 @@ note 0 for an id with no kernel), one byte per kernel id. No GPU is touched. Com
 note of the ollm_gb10 row of train/units.tsv with lio.om's `fn main to int` renamed (two mains
 note otherwise); upstream tests/omegallm/gpu-disasm.sh fed the slots to nvdisasm and checked each
 note slot's gkgpr. The image depends on the dims of grset only, not on the layer count or a loop.
-global gdgpr uchar 128
+global gdgpr uchar 192
 fn main to int
 grset 256 32 64 2 128 2
 if not grall
@@ -14,13 +14,13 @@ end
 if not gkall
 exit 2
 end
-w = write 1 gkcode 0 1048576
-for i ulong 64
+w = write 1 gkcode 0 1572864
+for i ulong 96
 put gdgpr i uchar get gkgpr i
 if ne get gkthr i 0
-put gdgpr add i 64 uchar and shr gksmw uint i 23 63
+put gdgpr add i 96 uchar and shr gksmw uint i 23 63
 end
 end
-w = write 2 gdgpr 0 128
+w = write 2 gdgpr 0 192
 exit 0
 end

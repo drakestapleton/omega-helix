@@ -55,7 +55,7 @@ fi
 
 if [ "$1" = "--all" ]; then
   VERBOSE=${VERBOSE:-0}
-  set -- 0 1 2 3 4 5 6 7 9 10 11 13 14 15 16 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 40 42 44 46 48 50 52 54 56 58
+  set -- 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 42 44 46 48 50 52 54 56 58 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87
 else
   VERBOSE=${VERBOSE:-1}
 fi
@@ -78,7 +78,7 @@ chmod +x "$OUT/gpu-dump.tmp"
 mv -f "$OUT/gpu-dump.tmp" "$OUT/gpu-dump"
 
 "$OUT/gpu-dump" > "$OUT/gpu-code.bin" 2> "$OUT/gpu-gpr.bin"
-[ "$(wc -c < "$OUT/gpu-gpr.bin")" -eq 128 ] || { echo "GPR_TABLE_SIZE $(wc -c < "$OUT/gpu-gpr.bin")" >&2; exit 2; }
+[ "$(wc -c < "$OUT/gpu-gpr.bin")" -eq 192 ] || { echo "GPR_TABLE_SIZE $(wc -c < "$OUT/gpu-gpr.bin")" >&2; exit 2; }
 echo "DUMP $(sha256sum "$OUT/gpu-dump" | cut -d' ' -f1) source_sha256 $(sha256sum "$OUT/gpu-dump.om" | cut -d' ' -f1) code_sha256 $(sha256sum "$OUT/gpu-code.bin" | cut -d' ' -f1)"
 
 bad=0
@@ -129,7 +129,7 @@ for s in "$@"; do
       exit (d >= k ? 0 : 4)
     }
   ' "$OUT/gpu-slot$s.sass" && ok_slots=$((ok_slots + 1)) || bad=1
-  [ "$VERBOSE" = 1 ] && echo "SMEM $s target $(od -An -tu1 -j $((64 + s)) -N1 "$OUT/gpu-gpr.bin" | tr -d ' ')"
+  [ "$VERBOSE" = 1 ] && echo "SMEM $s target $(od -An -tu1 -j $((96 + s)) -N1 "$OUT/gpu-gpr.bin" | tr -d ' ')"
 done
 echo "GPU_DISASM_OK slots=$ok_slots bad=$bad"
 [ "$bad" -eq 0 ] || { echo "GPU_DISASM_FAIL" >&2; exit 4; }

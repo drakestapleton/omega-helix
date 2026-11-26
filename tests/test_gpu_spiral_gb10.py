@@ -5,11 +5,12 @@ Always safe on macOS / Linux x86_64 / Spark without touching /dev/nvidia0:
   - Test 1: Pure-Omega CPU dynamic-pool scaling for D=2048 (direct-oww) and
     looped Spiral L_phys=8 x NP=4 (LV=32, dynamic opab overflow).
   - Test 2: SM121 nvdisasm disassembly gate (skipped if nvdisasm unavailable)
-    checking all 43 kernel slots at default, D=1536, and D=2048 T=512 F=8192
-    with bad=0, RMSF/RMSB <= 72 GPRs, and vectorized LDG/STG.E.64 epilogues.
+    checking all 78 kernel slots at default, D=1536, and D=2048 T=512 F=8192
+    with bad=0, RMSF/RMSB/CE_BF16 <= 72 GPRs, vectorized LDG/STG.E.64 epilogues,
+    and OMMA.SF.16864 NVFP4 Tensor Core codegen (slot 84).
   - Test 3 (opt-in via OLLM_GB10_LIVE=1 inside spark-window): live physical
-    GB10 gbfrag, gbcmp2 (L_phys=8 x NP=4 and D=2048), and gfcache OLLMFH01
-    parity against CPU fcache.
+    GB10 gbfrag, gacmp, gbcmp2 (L_phys=8 x NP=4 and D=2048), live nvfp4
+    OMMA.SF.16864, and gfcache OLLMFH01 parity against CPU fcache.
 """
 
 from __future__ import annotations
@@ -147,12 +148,13 @@ class TestGpuSpiralGB10(unittest.TestCase):
                 text=True,
                 check=True,
             )
-            self.assertIn("GPU_DISASM_OK slots=43 bad=0", r.stdout)
+            self.assertIn("GPU_DISASM_OK slots=78 bad=0", r.stdout)
 
-        # Verify D=2048 RMSF/RMSB stay inside 72 GPRs and slot 31 uses LDG/STG.E.64
+        # Verify D=2048 RMSF/RMSB/RMSF_BF16/RMSB_BF16/CE_BF16 stay inside 72 GPRs,
+        # slot 31 uses LDG/STG.E.64, and slot 84 emits SM121 OMMA.SF.16864 NVFP4.
         out_dir = self.tmp / "disasm_detail"
         r_rms = subprocess.run(
-            ["sh", str(ROOT / "tests" / "gpu-disasm.sh"), "10", "11", "31"],
+            ["sh", str(ROOT / "tests" / "gpu-disasm.sh"), "10", "11", "31", "75", "76", "84", "87"],
             cwd=str(ROOT),
             env={
                 **os.environ,
@@ -167,8 +169,12 @@ class TestGpuSpiralGB10(unittest.TestCase):
         )
         self.assertIn("GPR 10 max R66 need 69 declared 72 OK", r_rms.stdout)
         self.assertIn("GPR 11 max R67 need 70 declared 72 OK", r_rms.stdout)
+        self.assertIn("GPR 75 max R66 need 69 declared 72 OK", r_rms.stdout)
+        self.assertIn("GPR 76 max R67 need 70 declared 72 OK", r_rms.stdout)
+        self.assertIn("GPR 87 max R68 need 71 declared 72 OK", r_rms.stdout)
         self.assertIn("LDG.E.64", r_rms.stdout)
         self.assertIn("STG.E.64", r_rms.stdout)
+        self.assertIn("OMMA.SF.16864", r_rms.stdout)
 
     def test_live_gb10_silicon_parity_and_gfcache(self) -> None:
         if os.environ.get("OLLM_GB10_LIVE") != "1":
@@ -177,11 +183,22 @@ class TestGpuSpiralGB10(unittest.TestCase):
         self.assertIsNotNone(gb10, "ollm-gb10 binary not found")
         assert gb10 is not None
 
-        # 1. GBFRAG exact 0-error check across all 10 BF16 HMMA kernels
+        # 1. GBFRAG exact 0-error check across all 10 64x64 + 10 128x128 BF16 HMMA kernels
         frag_ck = self.tmp / "frag.ck"
         subprocess.run([str(gb10), "init", str(frag_ck), "4096", "256", "256", "4", "512", "2", "8", "1", "10", "3000", "1"], check=True, capture_output=True)
         r = subprocess.run([str(gb10), "gbfrag", str(frag_ck)], capture_output=True, text=True, check=True)
         self.assertIn("GBFRAG PASS", r.stdout)
+
+        # 1b. GACMP AdamW parity (256-CTA 128-bit SQN + 256-thr 128-bit ADAM)
+        ac_ck = self.tmp / "ac_gpu.ck"
+        subprocess.run([str(gb10), "init", str(ac_ck), "256", "64", "256", "8", "512", "2", "2", "1", "10", "3000", "1"], check=True, capture_output=True)
+        ra = subprocess.run([str(gb10), "gacmp", str(ac_ck), str(self.corp), "0"], capture_output=True, text=True, check=True)
+        self.assertIn("GACMP PASS", ra.stdout)
+
+        # 1c. Live SM121 OMMA.SF.16864 NVFP4 Tensor Core execution
+        rnv = subprocess.run([str(gb10), "nvfp4", "4096", "4096", "8192", "5"], capture_output=True, text=True, check=True)
+        self.assertIn("NVFP4 4096 4096 8192 5 ", rnv.stdout)
+        self.assertIn(" PASS", rnv.stdout)
 
         # 2. GBCMP2 on Looped Spiral L_phys=8 x NP=4 (LV=32)
         loop_ck = self.tmp / "loop8x4_gpu.ck"

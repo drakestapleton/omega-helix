@@ -126,16 +126,13 @@ put gbst 4 n
 put gbst 5 0
 ret true
 end
-note Existing nvwait is sleep-polling: never spin or inherit a process spin window.
-note One nvsend and one nvwait. The second marker follows the unchanged C3 L2 flush.
-fn gbbsubmit budget ulong to bool
+note Split gbbsubmit into async gbbkick (send pushbuffer without waiting) + gbbjoin (wait + seal check)
+note so Grace CPU can prepare the next batch/CSR/loss while Blackwell executes the active batch.
+fn gbbkick to bool
 if or ne get gbst 3 1 ne get nvfault 0 0
 ret false
 end
 if ne get gbst 1 get gbst 0
-ret gbberr get gbst 1 0 -22
-end
-if or eq budget 0 gt budget 30000000000
 ret gbberr get gbst 1 0 -22
 end
 put gbused 0 0
@@ -159,6 +156,15 @@ put gbst 3 3
 ret false
 end
 put gbst 6 1
+ret true
+end
+fn gbbjoin budget ulong to bool
+if or ne get gbst 3 2 ne get nvfault 0 0
+ret false
+end
+if or eq budget 0 gt budget 30000000000
+ret gbberr get gbst 1 0 -22
+end
 put gbst 7 1
 put nvstage 0 42
 if not nvwait get gbmem 3 16 1179010630 budget
@@ -178,4 +184,15 @@ put gbst 3 0
 put gbst 4 18446744073709551615
 put nvstage 0 43
 ret true
+end
+note Existing nvwait is sleep-polling: never spin or inherit a process spin window.
+note One nvsend and one nvwait. The second marker follows the unchanged C3 L2 flush.
+fn gbbsubmit budget ulong to bool
+if or eq budget 0 gt budget 30000000000
+ret gbberr get gbst 1 0 -22
+end
+if not gbbkick
+ret false
+end
+ret gbbjoin budget
 end

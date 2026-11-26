@@ -263,15 +263,9 @@ e = add div get gbacc 2 8388608.0f64 div 1.0f64 4194304.0f64
 ret gbrat d mul e add mul gbabs al get gbacc 1 gbabs old
 end
 
-note kernel id of the launch in flight (gk.om gkmmb)
+note kernel id of the launch in flight (gk.om gkmm / gkmmsw sets gklt)
 fn gbid to ulong
-ep = ulong get gkbp 6
-if ne ep 0
-ret add 34 ep
-end
-id = add 27 ulong get gkmd 0
-id = add id mul 2 ulong get gkmd 1
-ret add id mul 4 ulong get gkbp 5
+ret ulong get gklt 0
 end
 
 note gkmm's hook after a checked BF16 launch: check the samples, print
@@ -668,6 +662,9 @@ for i ulong 13
 bad = add bad gbf1 i p
 end
 end
+for i ulong 10
+bad = add bad gbf128 i
+end
 for p ulong 2
 for q uint 4
 bad = add bad gbfl p and q 1 shr q 1
@@ -771,6 +768,43 @@ oputc 32
 oputu ulong get gbcs 4
 oputc 32
 oputu ep
+oputc 32
+oputu b
+oputc 10
+ret b
+end
+
+note Exact check of all 10 128x128 BF16 Tensor Core kernels (m=128, n=128, cz=0, nz=6 h2=3, NaN padding)
+fn gbf128 i ulong to ulong
+gbcase i 0
+put gbcs 7 128
+gbnan
+gbwop 0
+gbwop 1
+gbwc
+put gkinv 0 1
+if not gbflch
+ggdie 98
+end
+if eq OMUTN 0
+n = ulong get gbcs 7
+gbput add gbcro 0 0 mul ulong get gbcs 6 add n 8 mul n 4 0
+end
+b = gbfcmp
+oputc 71
+oputc 70
+oputc 32
+oputu 2
+oputc 32
+oputu i
+oputc 32
+oputu ulong get gklt 0
+oputc 32
+oputu ulong get gbcs 5
+oputc 32
+oputu ulong get gbcs 4
+oputc 32
+oputu ulong get gbcs 3
 oputc 32
 oputu b
 oputc 10
