@@ -1,0 +1,15 @@
+TOPOLOGY=macos-arm64
+PLATFORM=macOS Apple Silicon (arm64)
+OS=Darwin
+ARCH=arm64
+IS_WSL=0
+GB10=0
+TARGETS=univ interchange openwaldo tok macos
+OPTIONAL_TARGETS=
+SKIP_BUILD=0
+SIGN_MODE=sha256+adhoc-codesign
+LAUNCH_MODE=local-or-remote
+SKIP_SSH_TUNNEL=1
+BROWSER_CMD=open
+NATIVE_EXE=0
+BIND=127.0.0.1:18420

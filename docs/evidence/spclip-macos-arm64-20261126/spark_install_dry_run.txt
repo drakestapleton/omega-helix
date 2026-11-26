@@ -1,0 +1,15 @@
+TOPOLOGY=spark-headless
+PLATFORM=DGX Spark Linux (aarch64, GB10)
+OS=Linux
+ARCH=aarch64
+IS_WSL=0
+GB10=1
+TARGETS=univ interchange openwaldo tok aarch64 wtrain
+OPTIONAL_TARGETS=gb10
+SKIP_BUILD=0
+SIGN_MODE=sha256
+LAUNCH_MODE=local-headless
+SKIP_SSH_TUNNEL=1
+BROWSER_CMD=print-url
+NATIVE_EXE=0
+BIND=127.0.0.1:18420
