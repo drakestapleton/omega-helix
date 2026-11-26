@@ -121,6 +121,7 @@
       <button type="button" class="qt-spiral-btn" data-spiral="mini64"><b>Mini-Spiral</b> · 64 Razor Strands · ~1.2B (W4)</button>
       <button type="button" class="qt-spiral-btn" data-spiral="mid256"><b>Mid-Spiral</b> · 256 Strands · ~4.2B (W4)</button>
       <button type="button" class="qt-spiral-btn qt-spiral-flagship" data-spiral="flagship2048"><b>Flagship Spiral-2048</b> · 32.5B · 15 GiB W4</button>
+      <button type="button" class="qt-spiral-btn qt-spiral-apu" id="btn-qt-apuweave"><b>⚡ Full-APU Weave</b> · 48 SMs + 20 Grace Cores</button>
     </div>
 
     <div class="qt-grid" role="group" aria-label="One-click training goals">
@@ -384,8 +385,13 @@
 
     <div class="glass block" id="spiral-meter-block">
       <div class="block-h">
-        <h2>Spiral Weave Crystallization Meter <span class="muted small">(<code>OLLMSP02</code> W4 · Zero-Backprop <code>spcryst</code>)</span></h2>
-        <span class="muted small mono" id="sp-meter-status">idle · 0.00s/strand</span>
+        <h2>Spiral Weave Crystallization Meter <span class="muted small">(<code>OLLMSP02</code> W4 · Full-APU <code>apuweave</code> &amp; <code>spcryst</code>)</span></h2>
+        <div class="apu-badges" aria-live="polite">
+          <span class="badge apu-b-sps" id="apu-badge-sps">— strands/s</span>
+          <span class="badge apu-b-ov" id="apu-badge-ov">—× GPU+CPU overlap</span>
+          <span class="badge apu-b-merkle" id="apu-badge-merkle">0/0 Merkle ✓</span>
+          <span class="muted small mono" id="sp-meter-status">idle · 0.00s/strand</span>
+        </div>
       </div>
       <div class="kpis">
         <div class="kpi c1"><span class="kpi-k">Sec / Strand</span><span class="kpi-v" id="sp-kpi-sps">—</span></div>
@@ -396,11 +402,14 @@
       </div>
       <div class="form-grid two" style="margin-top:10px">
         <div class="field"><label for="sp-base-ck">Seed Checkpoint (<code>seed.ck</code>)</label><input id="sp-base-ck" type="text" placeholder="~/workspace/omega-helix-spiral/run/seed.ck" spellcheck="false"></div>
-        <div class="field"><label for="sp-domain-tok">Domain Shard (<code>strand.tok</code>)</label><input id="sp-domain-tok" type="text" placeholder="~/workspace/omega-helix-spiral/data/s01.tok" spellcheck="false"></div>
-        <div class="field"><label for="sp-out-sp2">Output Pack (<code>.sp2</code>)</label><input id="sp-out-sp2" type="text" placeholder="~/workspace/omega-helix-spiral/run/s01.sp2" spellcheck="false"></div>
+        <div class="field"><label for="sp-shards-src">Full-APU Shards Dir / List (<code>shards/</code> or <code>shards.list</code>)</label><input id="sp-shards-src" type="text" placeholder="~/workspace/omega-helix-spiral/data/shards" spellcheck="false"></div>
+        <div class="field"><label for="sp-apu-out">Full-APU Output Dir (<code>.sp2</code> packs)</label><input id="sp-apu-out" type="text" placeholder="~/workspace/omega-helix-spiral/run/apu_strands" spellcheck="false"></div>
+        <div class="field"><label for="sp-domain-tok">Single Shard (<code>strand.tok</code> for <code>spcryst</code>)</label><input id="sp-domain-tok" type="text" placeholder="~/workspace/omega-helix-spiral/data/s01.tok" spellcheck="false"></div>
+        <div class="field"><label for="sp-out-sp2">Single Pack (<code>.sp2</code> for <code>spcryst</code>)</label><input id="sp-out-sp2" type="text" placeholder="~/workspace/omega-helix-spiral/run/s01.sp2" spellcheck="false"></div>
         <div class="field"><label for="sp-eval-tok">Held-Out Eval (<code>held.tok</code>)</label><input id="sp-eval-tok" type="text" placeholder="~/workspace/omega-helix-spiral/data/seed_held.tok" spellcheck="false"></div>
       </div>
       <div class="btn-row" style="margin-top:10px">
+        <button type="button" class="btn btn-forge" id="btn-sp-apuweave"><svg class="ic"><use href="#i-bolt"/></svg>Full-APU Weave (48 SMs + 20 Grace Cores)</button>
         <button type="button" class="btn btn-primary" id="btn-sp-cryst"><svg class="ic"><use href="#i-bolt"/></svg>Crystallize Strand (<code>spcryst</code>)</button>
         <button type="button" class="btn btn-ghost" id="btn-sp-eval"><svg class="ic"><use href="#i-shield"/></svg>Eval Weave (<code>spweval</code>)</button>
       </div>

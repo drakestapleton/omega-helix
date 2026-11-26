@@ -588,6 +588,33 @@ class StudioHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
             return
 
+        if path == "/api/spiral/apuweave":
+            try:
+                base_ck = body.get("base_ck")
+                shards_src = body.get("shards") or body.get("shards_dir") or body.get("shards_list")
+                out_dir = body.get("out_dir")
+                if not base_ck or not shards_src or not out_dir:
+                    raise ValueError("base_ck, shards (or shards_dir/shards_list), and out_dir are required")
+                all_bins = runner.resolve_binaries(bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
+                use_gb10 = bool(body.get("use_gpu", True) and os.path.exists("/dev/nvidiactl") and all_bins.get("ollm_gb10"))
+                ollm_bin = all_bins["ollm_gb10"] if use_gb10 else runner.ensure_binaries(["ollm"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)["ollm"]
+                assert ollm_bin is not None
+                res = studio_spiral.run_apuweave(
+                    ollm_bin,
+                    str(base_ck),
+                    shards_src,
+                    str(out_dir),
+                    f_exp=int(body.get("f_exp", 128)),
+                    lambda_milli=int(body.get("lambda_milli", 100)),
+                    max_toks=int(body.get("max_toks", 512)),
+                    quant_bits=int(body.get("quant_bits", 4)),
+                    workers=int(body.get("workers", 0)),
+                )
+                self._send_json(HTTPStatus.OK, res)
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
         if path == "/api/chains/start":
             try:
                 run = self.server.manager.start_chain(body, wait=False)

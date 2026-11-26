@@ -510,6 +510,33 @@ main {
   background: color-mix(in srgb, var(--c4) 12%, var(--surface));
 }
 
+.qt-spiral-apu {
+  border-color: color-mix(in srgb, var(--c3) 65%, var(--border));
+  background: color-mix(in srgb, var(--c3) 14%, var(--surface));
+}
+
+.apu-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.apu-b-sps {
+  border-color: color-mix(in srgb, var(--c1) 45%, var(--border));
+  color: var(--c1);
+}
+
+.apu-b-ov {
+  border-color: color-mix(in srgb, var(--c2) 45%, var(--border));
+  color: var(--c2);
+}
+
+.apu-b-merkle {
+  border-color: color-mix(in srgb, var(--c3) 55%, var(--border));
+  color: var(--c3);
+}
+
 .spiral-local-row {
   display: flex;
   flex-wrap: wrap;
@@ -785,6 +812,33 @@ main {
   background: color-mix(in srgb, var(--c4) 12%, var(--surface));
 }
 
+.qt-spiral-apu {
+  border-color: color-mix(in srgb, var(--c3) 65%, var(--border));
+  background: color-mix(in srgb, var(--c3) 14%, var(--surface));
+}
+
+.apu-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.apu-b-sps {
+  border-color: color-mix(in srgb, var(--c1) 45%, var(--border));
+  color: var(--c1);
+}
+
+.apu-b-ov {
+  border-color: color-mix(in srgb, var(--c2) 45%, var(--border));
+  color: var(--c2);
+}
+
+.apu-b-merkle {
+  border-color: color-mix(in srgb, var(--c3) 55%, var(--border));
+  color: var(--c3);
+}
+
 .spiral-local-row {
   display: flex;
   flex-wrap: wrap;
@@ -959,6 +1013,33 @@ main {
 .qt-spiral-flagship {
   border-color: color-mix(in srgb, var(--c4) 55%, var(--border));
   background: color-mix(in srgb, var(--c4) 12%, var(--surface));
+}
+
+.qt-spiral-apu {
+  border-color: color-mix(in srgb, var(--c3) 65%, var(--border));
+  background: color-mix(in srgb, var(--c3) 14%, var(--surface));
+}
+
+.apu-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.apu-b-sps {
+  border-color: color-mix(in srgb, var(--c1) 45%, var(--border));
+  color: var(--c1);
+}
+
+.apu-b-ov {
+  border-color: color-mix(in srgb, var(--c2) 45%, var(--border));
+  color: var(--c2);
+}
+
+.apu-b-merkle {
+  border-color: color-mix(in srgb, var(--c3) 55%, var(--border));
+  color: var(--c3);
 }
 
 .spiral-local-row {

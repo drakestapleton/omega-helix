@@ -1660,6 +1660,18 @@
         }
       });
     }
+    if ($("btn-sp-apuweave")) $("btn-sp-apuweave").addEventListener("click", runApuWeave);
+    if ($("btn-qt-apuweave")) {
+      $("btn-qt-apuweave").addEventListener("click", () => {
+        sfx.milestone();
+        activateTab("tab-forge", false);
+        $("spiral-meter-block")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        if ($("sp-base-ck") && !$("sp-base-ck").value) $("sp-base-ck").value = "~/workspace/omega-helix-spiral/run/seed.ck";
+        if ($("sp-shards-src") && !$("sp-shards-src").value) $("sp-shards-src").value = "~/workspace/omega-helix-spiral/data/shards";
+        if ($("sp-apu-out") && !$("sp-apu-out").value) $("sp-apu-out").value = "~/workspace/omega-helix-spiral/run/apu_strands";
+        toast("Full-APU Weave ready — click Full-APU Weave in Forge to launch!", "ok");
+      });
+    }
     if ($("btn-sp-cryst")) $("btn-sp-cryst").addEventListener("click", runSpiralCryst);
     if ($("btn-sp-eval")) $("btn-sp-eval").addEventListener("click", runSpiralEval);
     if ($("btn-verify-locks")) $("btn-verify-locks").addEventListener("click", runVerifyLocks);
@@ -2203,6 +2215,62 @@
       $("spiral-cmd").textContent = (res.resolved_cmd_preview || []).join("\n");
     }
     if ($("sp-kpi-topk")) $("sp-kpi-topk").textContent = String(res.top_k);
+  }
+
+  async function runApuWeave() {
+    const base_ck = ($("sp-base-ck")?.value || "").trim();
+    const shards_dir = ($("sp-shards-src")?.value || "").trim();
+    const out_dir = ($("sp-apu-out")?.value || "").trim();
+    if (!base_ck || !shards_dir || !out_dir) {
+      toast("Enter seed.ck, shards directory/list, and output directory for Full-APU Weave.", "err");
+      sfx.err();
+      return;
+    }
+    const btn = $("btn-sp-apuweave");
+    btn.disabled = true;
+    if ($("sp-meter-status")) $("sp-meter-status").textContent = "Full-APU weaving (48 SMs + 20 Grace cores)…";
+    try {
+      const plan = state.spiral.plan || {};
+      const res = await api("/api/spiral/apuweave", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          base_ck,
+          shards_dir,
+          out_dir,
+          f_exp: Math.min(256, plan.f_exp || 128),
+          lambda_milli: plan.lambda_milli || 100,
+          max_toks: 512,
+          quant_bits: plan.quant_bits || 4,
+        }),
+      });
+      if (!res.ok) {
+        if ($("sp-meter-status")) $("sp-meter-status").textContent = `error: ${res.error}`;
+        toast(res.error || "Full-APU apuweave failed", "err");
+        sfx.err();
+        return;
+      }
+      if ($("apu-badge-sps")) $("apu-badge-sps").textContent = `${res.strands_per_sec} strands/s`;
+      if ($("apu-badge-ov")) $("apu-badge-ov").textContent = `${res.overlap}× GPU+CPU overlap`;
+      if ($("apu-badge-merkle")) $("apu-badge-merkle").textContent = `${res.tamper_ok}/${res.n_shards} Merkle ✓`;
+      if ($("sp-kpi-sps")) $("sp-kpi-sps").textContent = `${res.sec_per_strand}s`;
+      if ($("sp-kpi-count")) $("sp-kpi-count").textContent = String(res.n_shards);
+      if ($("sp-kpi-bytes")) $("sp-kpi-bytes").textContent = fmtBytes(res.w4_bytes || 0);
+      if ($("sp-kpi-loss") && typeof res.woven_eval_loss === "number") $("sp-kpi-loss").textContent = res.woven_eval_loss.toFixed(4);
+      const dropTxt = typeof res.held_drop === "number" ? ` · Δ=${res.held_drop.toFixed(4)} nats` : "";
+      if ($("sp-meter-status")) {
+        $("sp-meter-status").textContent = `APU done · ${res.wall_ms}ms · ${res.strands_per_sec} str/s · ${res.tamper_ok}/${res.n_shards} Merkle ✓${dropTxt}`;
+      }
+      if ($("play-sp-base")) $("play-sp-base").value = base_ck;
+      if ($("play-sp-strands") && Array.isArray(res.out_packs) && res.out_packs.length) {
+        $("play-sp-strands").value = res.out_packs.join("\n");
+      }
+      sfx.celebrate();
+      celebrateBurst();
+      toast(`Full-APU Weave: ${res.n_shards} strands in ${res.wall_ms}ms (${res.strands_per_sec} str/s, ${res.tamper_ok}/${res.n_shards} Merkle ✓)`, "ok");
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   async function runSpiralCryst() {
