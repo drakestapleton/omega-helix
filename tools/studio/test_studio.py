@@ -391,11 +391,13 @@ class StudioTestCase(unittest.TestCase):
             self.assertGreaterEqual(aw["wall_ms"], 0)
             self.assertGreater(aw["w4_bytes"], 160)
 
-            # Directory-path shards_dir works on macOS too (synthesizes shards.list)
+            # Directory-path shards_dir works on macOS too (synthesizes shards.list, skips dotfiles & *.tok/ subdirs)
             sh_dir = sp_dir / "tok_dir"
             sh_dir.mkdir(parents=True, exist_ok=True)
             (sh_dir / "s00.tok").write_bytes(dom_tok.read_bytes())
             (sh_dir / "s01.tok").write_bytes(dom2.read_bytes())
+            (sh_dir / "._appledouble.tok").write_bytes(b"junk")
+            (sh_dir / "nested.tok").mkdir(exist_ok=True)
             apu_dir_out = sp_dir / "apu_dir_out"
             d_req = urllib.request.Request(
                 f"http://127.0.0.1:{port}/api/spiral/apuweave",
@@ -420,15 +422,19 @@ class StudioTestCase(unittest.TestCase):
             self.assertEqual(ad["tamper_ok"], 2)
             self.assertEqual(len(ad["out_packs"]), 2)
 
-            # Bounded manifest reads (DRA-1021): normal manifest, oversized bytes, >2048 entries, FIFO
+            # Bounded manifest reads (DRA-1021 + Issue #25): 3-col (ignored 3rd col) + 2-col <sid> <path>
             normal_manifest = sp_dir / "normal.list"
-            normal_manifest.write_text(f"# header\n{dom_tok}\n{dom2}\n", encoding="utf-8")
+            normal_manifest.write_text(
+                f"# header\n1 {dom_tok} /ignored/custom_out.sp2\n2 {dom2}\n",
+                encoding="utf-8",
+            )
+            manifest_out = sp_dir / "apu_manifest_out"
             m_req = urllib.request.Request(
                 f"http://127.0.0.1:{port}/api/spiral/apuweave",
                 data=json.dumps({
                     "base_ck": str(seed_ck),
                     "shards_list": str(normal_manifest),
-                    "out_dir": str(sp_dir / "apu_manifest_out"),
+                    "out_dir": str(manifest_out),
                     "f_exp": 16,
                     "lambda_milli": 100,
                     "max_toks": 128,
@@ -443,7 +449,10 @@ class StudioTestCase(unittest.TestCase):
                 am = json.loads(resp.read().decode("utf-8"))
             self.assertTrue(am["ok"])
             self.assertEqual(am["n_shards"], 2)
-            self.assertEqual(len(am["out_packs"]), 2)
+            self.assertEqual(
+                am["out_packs"],
+                [str(manifest_out / f"{dom_tok.name}.sp2"), str(manifest_out / f"{dom2.name}.sp2")],
+            )
 
             big_manifest = sp_dir / "oversized.list"
             big_manifest.write_bytes(b"a" * (studio_spiral.MAX_MANIFEST_BYTES + 16))

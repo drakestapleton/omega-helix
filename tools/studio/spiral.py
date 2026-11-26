@@ -713,10 +713,13 @@ def _read_bounded_manifest(manifest_path: Path, out_p: Path) -> list[Path]:
         if len(expected) >= MAX_MANIFEST_ENTRIES:
             raise ValueError(f"shard manifest exceeds {MAX_MANIFEST_ENTRIES} entries limit: {manifest_path}")
         parts = ln.split()
-        if len(parts) >= 3:
-            expected.append(Path(parts[2]).expanduser().resolve())
+        if parts[0].isascii() and parts[0].isdigit() and len(parts[0]) <= 18 and int(parts[0]) > 0:
+            if len(parts) < 2:
+                raise ValueError(f"shard manifest line missing shard path after id: {ln!r}")
+            shard_tok = parts[1]
         else:
-            expected.append(_apu_expected_sp2(out_p, Path(parts[0])))
+            shard_tok = parts[0]
+        expected.append(_apu_expected_sp2(out_p, Path(shard_tok)))
     if not expected:
         raise ValueError(f"shard manifest contains no entries: {manifest_path}")
     return expected
@@ -759,7 +762,7 @@ def run_apuweave(
         if not src_arg.exists():
             raise ValueError(f"shards_source not found: {src_arg}")
         if src_arg.is_dir():
-            tok_files = sorted(src_arg.glob("*.tok"))
+            tok_files = sorted(p for p in src_arg.glob("*.tok") if p.is_file() and not p.name.startswith("."))
             if not tok_files:
                 raise ValueError(f"no .tok shard files found in directory: {src_arg}")
             if len(tok_files) > MAX_MANIFEST_ENTRIES:
