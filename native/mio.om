@@ -131,48 +131,78 @@ end
 ret ulong sz
 end
 
-note cold store (CONTRACT-V3 section 2): GRD and the Adam moments, 3 P values at the CONTRACT-V3
-note maxima (3 29995392 -> 89986176 values, 719889408 bytes), in one private anonymous mapping made
-note on first use (mapnew prot 3 read/write, flags 34 private|anonymous; zero-filled, and inherited
-note copy-on-write by the gradient workers). A failed mapping is an I/O refusal (exit 70).
+note cold store (CONTRACT-V3 section 2): GRD, Adam moments, and solver/specialist scratch up to OCSN
+note f64 values in a dynamic om2 pool grown on demand via enlarge (zero-filled on growth; failed
+note enlarge is an I/O refusal, exit 70; indices >= OCSN trap BOUNDS, exit 103).
 const OCSN ulong 1500000000
+const OCSMIN ulong 65536
 global ocs f64 *
 global ocsf ulong 1
+
+fn ocs_ensure need ulong to bool
+if gt need OCSN
+ret false
+end
+cur = get ocsf 0
+if le need cur
+ret true
+end
+cap = cur
+if lt cap OCSMIN
+cap = OCSMIN
+end
+while lt cap need bound 64
+cap = mul cap 2
+end
+if gt cap OCSN
+cap = OCSN
+end
+r = enlarge ocs cap
+if ne r 0
+ret false
+end
+put ocsf 0 cap
+ret true
+end
 
 fn ocsinit to ulong
 need = mul 3 get og 8
 if gt need OCSN
 ret OCSN
 end
-if gt need get ocsf 0
-r = enlarge ocs need
-if ne r 0
-exit 70
+if lt need OCSMIN
+need = OCSMIN
 end
-put ocsf 0 need
+if not ocs_ensure need
+exit 70
 end
 ret OCSN
 end
 
 fn ocsgrow need ulong to bool
-if gt need OCSN
-ret false
-end
-if gt need get ocsf 0
-r = enlarge ocs need
-if ne r 0
-ret false
-end
-put ocsf 0 need
-end
-ret true
+ret ocs_ensure need
 end
 
 fn ocsg i ulong to f64
+if lt i get ocsf 0
+ret get ocs i
+end
+if lt i OCSN
+ret 0.0f64
+end
 ret get ocs i
 end
 
 fn ocsp i ulong v f64 to void
+if ge i get ocsf 0
+if ge i OCSN
+put ocs i v
+ret
+end
+if not ocs_ensure add i 1
+exit 70
+end
+end
 put ocs i v
 end
 
