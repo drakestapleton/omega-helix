@@ -2238,7 +2238,7 @@
           base_ck,
           shards_dir,
           out_dir,
-          f_exp: Math.min(256, plan.f_exp || 128),
+          f_exp: Math.min(640, plan.f_exp || 128),
           lambda_milli: plan.lambda_milli || 100,
           max_toks: 512,
           quant_bits: plan.quant_bits || 4,

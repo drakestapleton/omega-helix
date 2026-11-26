@@ -357,10 +357,13 @@ class StudioTestCase(unittest.TestCase):
             self.assertTrue(sm["ok"])
             self.assertGreater(len(sm["stdout"]), 0)
 
-            # End-to-end live Full-APU apuweave against native ollm
+            # End-to-end live Full-APU apuweave against native ollm (with stale-pack & worker-clamp checks)
             dom2 = sp_dir / "dom2.bin"
             dom2.write_bytes((b"struct RingDesc seq ulong flags uint end\n" * 80))
             apu_out = sp_dir / "apu_out"
+            apu_out.mkdir(parents=True, exist_ok=True)
+            stale_sp2 = apu_out / "stale_old.sp2"
+            stale_sp2.write_bytes(b"STALE")
             a_req = urllib.request.Request(
                 f"http://127.0.0.1:{port}/api/spiral/apuweave",
                 data=json.dumps({
@@ -371,7 +374,7 @@ class StudioTestCase(unittest.TestCase):
                     "lambda_milli": 100,
                     "max_toks": 128,
                     "quant_bits": 4,
-                    "workers": 1,
+                    "workers": 99,
                     "use_gpu": False,
                 }).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
@@ -382,9 +385,40 @@ class StudioTestCase(unittest.TestCase):
             self.assertTrue(aw["ok"])
             self.assertEqual(aw["n_shards"], 2)
             self.assertEqual(aw["tamper_ok"], 2)
+            self.assertEqual(aw["workers"], 16)
             self.assertEqual(len(aw["out_packs"]), 2)
+            self.assertNotIn(str(stale_sp2), aw["out_packs"])
             self.assertGreaterEqual(aw["wall_ms"], 0)
             self.assertGreater(aw["w4_bytes"], 160)
+
+            # Directory-path shards_dir works on macOS too (synthesizes shards.list)
+            sh_dir = sp_dir / "tok_dir"
+            sh_dir.mkdir(parents=True, exist_ok=True)
+            (sh_dir / "s00.tok").write_bytes(dom_tok.read_bytes())
+            (sh_dir / "s01.tok").write_bytes(dom2.read_bytes())
+            apu_dir_out = sp_dir / "apu_dir_out"
+            d_req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/spiral/apuweave",
+                data=json.dumps({
+                    "base_ck": str(seed_ck),
+                    "shards_dir": str(sh_dir),
+                    "out_dir": str(apu_dir_out),
+                    "f_exp": 16,
+                    "lambda_milli": 100,
+                    "max_toks": 128,
+                    "quant_bits": 4,
+                    "workers": 1,
+                    "use_gpu": False,
+                }).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(d_req, timeout=20.0) as resp:
+                ad = json.loads(resp.read().decode("utf-8"))
+            self.assertTrue(ad["ok"])
+            self.assertEqual(ad["n_shards"], 2)
+            self.assertEqual(ad["tamper_ok"], 2)
+            self.assertEqual(len(ad["out_packs"]), 2)
         finally:
             srv.shutdown()
             srv.server_close()
