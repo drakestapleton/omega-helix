@@ -717,6 +717,9 @@ end
 note true when 128x128 fast epilogues (residual-fused beta + single-store ReLU) are active in ggffn/ggbffn
 note ggnofp[0] = 1 during gtrainf/gtrainb/gprof (skips duplicate FP store; gcmp2/gbcmp2 keeps FP for ogmask rho check)
 global ggnofp uint 1
+fn ggsnofp v uint to void
+put ggnofp 0 v
+end
 fn ggfast_ffn to bool
 if or eq get gkbf 0 0 ne get gkbck 0 0
 ret false
@@ -2011,6 +2014,14 @@ note ggk3: [0] rho max, [1] max |FP_ref| at a flip, [2] max |FP_chip - FP_ref|.
 global ggfs f64 8192
 global ggk2 ulong 4
 global ggk3 f64 3
+fn ggk2z to void
+for k ulong 4
+put ggk2 k 0
+end
+for k ulong 3
+put ggk3 k 0.0f64
+end
+end
 
 note s_j = sum_k |bn_k| |W1[k F + j]| for row t of layer l (k < D ascending), the magnitude sum of
 note the FP dot product the chip rounds (layer l is staged: ogmask runs inside olayb)
@@ -3660,24 +3671,134 @@ note with gpu/ in place of nogpu.om and no renamed main. It runs the GPU command
 note training commands in gb.om and returns true; any other word returns false and ocmd goes on to
 note the CPU commands. The inference interface is documented in docs/omegallm/CONTRACT-BF16.md;
 note command constants encode little-endian word bytes.
-note nvfp4 M N K ITERS: live physical GB10 SM121 OMMA.SF.16864.F32.E2M1.E2M1.UE4M3.4X Tensor Core
-note benchmark & bit-exact verification (slot 84, 500 TF hardware peak). Prints:
-note `NVFP4 M N K ITERS wall_ns tflops_x100 pct_peak_x100 expected got PASS/FAIL`.
+note nvfp4 M N K ITERS: live physical GB10 SM121 OMMA.SF.16864.F32.E2M1.E2M1.UE4M3.4X
+note in-register instruction-rate microbenchmark (slot 84, 500 TF hardware peak).
+note Loads per-thread operands/scales once before the K-loop, repeats 16 independent
+note OMMA.SF.16864 ops in registers per ktile, and verifies 64 multi-CTA/warp-0..7
+note output lanes + 4 NaN sentinels (checked=68). Not a global-memory GEMM. Prints:
+note `NVFP4 M N K ITERS wall_ns tflops_x100 pct_peak_x100 expected got checked bad INREG_OMMA_MICROBENCH PASS/FAIL`.
 fn ggnvfp4_lch m ulong n ulong k ulong to void
 base = gkbase
 ggpt 0 base
-ggpt 1 add base 4096
-ggpt 2 add base 8192
-ggpt 3 add base 12288
+ggpt 1 add base 8192
+ggpt 2 add base 16384
+ggpt 3 add base 24576
 ggpt 4 add base 65536
 ggu 10 div k 64
 ggu 11 n
 ggrun 84 12 div n 128 div m 128 1
 end
 
+fn ggnvfp4_cpos r ulong c ulong n ulong to ulong
+ret add 65536 mul add mul r n c 4
+end
+
+fn ggnvfp4_dr k ulong to ulong
+if eq k 1
+ret 7
+end
+if eq k 3
+ret 99
+end
+if eq k 4
+ret 96
+end
+if ge k 5
+ret 103
+end
+ret 0
+end
+
+fn ggnvfp4_dc k ulong to ulong
+if or eq k 1 eq k 3
+ret 6
+end
+if or eq k 2 eq k 4
+ret 64
+end
+if eq k 5
+ret 66
+end
+if eq k 6
+ret 68
+end
+if eq k 7
+ret 70
+end
+ret 0
+end
+
+fn ggnvfp4_p1 h long r ulong c ulong n ulong to void
+m = mapset h ggnvfp4_cpos r c n 4 2143289344
+m = mapset h ggnvfp4_cpos r add c 1 n 4 2143289344
+m = mapset h ggnvfp4_cpos add r 8 c n 4 2143289344
+m = mapset h ggnvfp4_cpos add r 8 add c 1 n 4 2143289344
+end
+
+fn ggnvfp4_c1 h long r ulong c ulong n ulong exp f64 to ulong
+bad = ulong 0
+if ne f64 bitcast f32 uint mapget h ggnvfp4_cpos r c n 4 exp
+bad = add bad 1
+end
+if ne f64 bitcast f32 uint mapget h ggnvfp4_cpos r add c 1 n 4 exp
+bad = add bad 1
+end
+if ne f64 bitcast f32 uint mapget h ggnvfp4_cpos add r 8 c n 4 exp
+bad = add bad 1
+end
+if ne f64 bitcast f32 uint mapget h ggnvfp4_cpos add r 8 add c 1 n 4 exp
+bad = add bad 1
+end
+ret bad
+end
+
+fn ggnvfp4_poison m ulong n ulong to void
+h = get gbmem 5
+rb1 = sub m 128
+cb1 = sub n 128
+for k ulong 8
+dr = ggnvfp4_dr k
+dc = ggnvfp4_dc k
+ggnvfp4_p1 h dr dc n
+ggnvfp4_p1 h add rb1 dr add cb1 dc n
+end
+r = mapset h ggnvfp4_cpos 0 8 n 4 2143289344
+r = mapset h ggnvfp4_cpos 0 9 n 4 2143289344
+r = mapset h ggnvfp4_cpos 96 72 n 4 2143289344
+r = mapset h ggnvfp4_cpos 96 73 n 4 2143289344
+put gkinv 0 1
+end
+
+fn ggnvfp4_chk m ulong n ulong exp f64 to ulong
+h = get gbmem 5
+rb1 = sub m 128
+cb1 = sub n 128
+bad = ulong 0
+for k ulong 8
+dr = ggnvfp4_dr k
+dc = ggnvfp4_dc k
+bad = add bad ggnvfp4_c1 h dr dc n exp
+bad = add bad ggnvfp4_c1 h add rb1 dr add cb1 dc n exp
+end
+if ne uint mapget h ggnvfp4_cpos 0 8 n 4 2143289344
+bad = add bad 1
+end
+if ne uint mapget h ggnvfp4_cpos 0 9 n 4 2143289344
+bad = add bad 1
+end
+if ne uint mapget h ggnvfp4_cpos 96 72 n 4 2143289344
+bad = add bad 1
+end
+if ne uint mapget h ggnvfp4_cpos 96 73 n 4 2143289344
+bad = add bad 1
+end
+ret bad
+end
+
 fn ggnvfp4_pr m ulong n ulong k ulong it ulong ns long to void
 got = f64 bitcast f32 uint mapget get gbmem 5 65536 4
 exp = f64 k
+bad = ggnvfp4_chk m n exp
 flops = mul mul 2.0f64 f64 mul m n mul f64 k f64 it
 tf = div flops mul f64 ns 1000.0f64
 pct = div mul tf 100.0f64 500.0f64
@@ -3705,7 +3826,33 @@ oputl long exp
 oputc 32
 oputl long got
 oputc 32
-if eq got exp
+oputu 68
+oputc 32
+oputu bad
+oputc 32
+oputc 73
+oputc 78
+oputc 82
+oputc 69
+oputc 71
+oputc 95
+oputc 79
+oputc 77
+oputc 77
+oputc 65
+oputc 95
+oputc 77
+oputc 73
+oputc 67
+oputc 82
+oputc 79
+oputc 66
+oputc 69
+oputc 78
+oputc 67
+oputc 72
+oputc 32
+if eq bad 0
 oputc 80
 oputc 65
 oputc 83
@@ -3727,11 +3874,11 @@ end
 
 fn ggnvfp4_fill to void
 h = get gbmem 5
-for i ulong 1024
+for i ulong 2048
 r = mapset h mul i 4 4 572662306
-r = mapset h add 4096 mul i 4 4 572662306
-r = mapset h add 8192 mul i 4 4 943208504
-r = mapset h add 12288 mul i 4 4 943208504
+r = mapset h add 8192 mul i 4 4 572662306
+r = mapset h add 16384 mul i 4 4 943208504
+r = mapset h add 24576 mul i 4 4 943208504
 end
 put gkinv 0 1
 end
@@ -3750,10 +3897,16 @@ end
 if or eq k 0 eq it 0
 exit 2
 end
-if ne rem m 128 0
+if or gt m 65536 gt n 65536
 exit 2
 end
-if ne rem n 128 0
+if gt mul m n 1073741824
+exit 2
+end
+if or gt k 16777216 gt it 1000000
+exit 2
+end
+if or ne rem m 128 0 ne rem n 128 0
 exit 2
 end
 if ne rem k 64 0
@@ -3763,13 +3916,11 @@ grset 256 32 64 2 128 2
 if not gropen add mul mul m n 4 1048576
 ggsetupfail
 end
-if not gbbopen
-ggdie 122
-end
 ggnvfp4_fill
 ggnvfp4_lch m n k
+ggnvfp4_poison m n
 t0 = monons
-for q ulong it
+for q ulong it bound 1000001
 ggnvfp4_lch m n k
 end
 ns = sub monons t0
@@ -3857,6 +4008,10 @@ ret true
 end
 if eq w 55458452955751
 gbcmp2
+ret true
+end
+if eq w 29328856030863975
+gbcmp2h
 ret true
 end
 if eq w 113668228801127

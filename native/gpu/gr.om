@@ -982,12 +982,16 @@ grfa_ldv_h 12 stsb stg add sm_off 16
 end
 gkimadw ptr 122 1 ptr
 end
-fn grfa_hm4 a uint b0 uint d0 uint to void
+fn grfa_hm4 a uint b0 uint d0 uint last bool to void
 w = uint 8
 for nj uint 4
 d = add d0 mul nj 4
 b = add b0 add mul shr nj 1 4 mul and nj 1 2
+if and last eq nj 3
+gkhmma_s d a b d w 10
+else
 gkhmma d a b d w
+end
 w = 0
 end
 end
@@ -1000,13 +1004,13 @@ for ke uint nk
 off = add sm_off mul ke 1024
 gklds stg 116 off 3 0
 gklds add stg 4 116 add off 512 3 0
-grfa_hm4 add qreg mul ke 4 stg sreg
+grfa_hm4 add qreg mul ke 4 stg sreg eq add ke 1 nk
 end
 end
 fn grfa_pv_h preg uint oreg uint sm_off uint stg uint nb0 uint to void
 gklds stg 116 sm_off 3 0
 gklds add stg 4 116 add sm_off 512 3 0
-grfa_hm4 preg stg add oreg mul nb0 8
+grfa_hm4 preg stg add oreg mul nb0 8 false
 end
 fn grfa_pv preg uint oreg uint e uint sm_off uint stg uint to void
 cs = mul e 32
@@ -1469,7 +1473,11 @@ gkfmulf add 40 u add 40 u 66
 gkfmulf add 40 u add 40 u add 56 mul u 2
 gkfmulf add 48 u add 48 u 66
 gkfmulf add 48 u add 48 u add 57 mul u 2
+if eq add u 1 c
+gkf2fp6 add 32 u add 48 u add 40 u 0
+else
 gkf2fp add 32 u add 48 u add 40 u 0
+end
 end
 end
 fn grrmsf_bf1 to void
@@ -1503,7 +1511,11 @@ gkfmulf add 40 u add 40 u 66
 gkfmulf add 40 u add 40 u 56
 gkfmulf add 48 u add 48 u 66
 gkfmulf add 48 u add 48 u 57
+if eq add u 1 nh
+gkf2fp6 add 32 u add 48 u add 40 u 0
+else
 gkf2fp add 32 u add 48 u add 40 u 0
+end
 end
 grstw 16 32 nh
 gkexit
@@ -1512,6 +1524,9 @@ end
 c = uint 4
 if ne rem nh 4 0
 c = 2
+if ne rem nh 2 0
+c = 1
+end
 end
 it = div nh c
 adv2 = mul c 128
@@ -1580,7 +1595,7 @@ grfsub gr gr vr
 gkfmulf gr gr 67
 grfadd dh dh gr
 end
-gkf2fp add 56 u add 53 u2 add 52 u2 0
+gkf2fp6 add 56 u add 53 u2 add 52 u2 0
 end
 fn grrmsb_bf1_ldg c uint to void
 for u uint c
@@ -2223,7 +2238,7 @@ put gkpend 0 0
 gkf2fp 40 33 32 w
 gkf2fp 41 35 34 0
 gkf2fp 42 37 36 0
-gkf2fp 43 39 38 0
+gkf2fp6 43 39 38 0
 gkstgqo 12 40 0 false
 gkexit
 end
@@ -2240,9 +2255,11 @@ gkstgqo 12 40 0 false
 gkstgqo 12 44 16 true
 gkexit
 end
-note 84 NVFP4_OMMA: Live Physical GB10 SM121 OMMA.SF.16864.F32.E2M1.E2M1.UE4M3.4X Tensor Core GEMM!
-note 256 threads (8 warps, 4x2 warp grid = 128x128 tile), K-tile = 64, 16 independent FP32 accumulators
-note per warp (R16..R79, 4x2 -> 32x64 per warp), UE4M3 block-16 scales in R120/R121, 500 TF hardware peak!
+note 84 NVFP4_OMMA: Live Physical GB10 SM121 OMMA.SF.16864.F32.E2M1.E2M1.UE4M3.4X
+note in-register instruction-rate microbenchmark (not a global-memory GEMM):
+note 256 threads (8 warps, 4x2 warp grid = 128x128 tile), loads per-thread E2M1 A/B and UE4M3 SA/SB
+note once before the K-loop, repeats 16 independent OMMA.SF.16864 ops in registers (R16..R79) per
+note ktile, and stores probe rows R16:17 (r, c..c+1) and R18:19 (r+8, c..c+1) across all CTAs/warps.
 note Args: 0-1 A_e2m1, 2-3 B_e2m1, 4-5 SA_ue4m3, 6-7 SB_ue4m3, 8-9 C_f32, 10 ktiles (K/64), 11 N (cols)
 fn gkommasf rd uint ra uint rb uint rsa uint rsb uint wt uint to void
 w0 = or or 29823 shl rd 16 shl ra 24
@@ -2283,8 +2300,9 @@ gkmovi 4 4294967295
 for i uint 64
 gkmovz add 16 i
 end
-note Load packed E2M1 A (R80..87), B (R88..103), UE4M3 scales (R120, R121) per thread
-gkimadi 8 0 16 255
+note Load packed E2M1 A (R80..87), B (R88..103), UE4M3 scales (R120, R121) safely inside 8192 B buffers
+gkandi 8 0 63
+gkimadi 8 8 16 255
 gkimadw 10 8 1 108
 gkldgqo 80 10 0 false
 gkldgqo 84 10 16 true
@@ -2297,14 +2315,16 @@ gkimadw 10 0 4 112
 gkldg 120 10 0 true
 gkimadw 12 0 4 114
 gkldg 121 12 0 true
-gkmovi 124 1
+note Drain LDG scoreboard before entering register OMMA loop
+gkq 31000 0 0 gkcw 6 7 7 get gkpend 0
+put gkpend 0 0
 top = div get gkat 0 16
 grnvfp4_mma 0
 grnvfp4_mma 1
 gkiadd 122 122 4
 gkisge 0 122 1
 gkbra 0 ulong top
-note Store 16x4 = 64 FP32 accumulators to C_f32[bx*128 + .., by*128 + ..]
+note Store R16:17 -> C[r, c..c+1] and R18:19 -> C[r+8, c..c+1] (+8*N*4 = +R123*32 bytes)
 gkbt 12 6 3 32 true
 gkbt 12 2 7 1 false
 gkimadi 12 3 128 12
@@ -2314,8 +2334,9 @@ gkimadi 13 2 128 13
 gkimad 12 12 123 13
 gkldc64 10 928
 gkimadw 10 12 4 10
+gkimadw 14 123 32 10
 gkstg64o 10 16 0 false
-gkstg64o 10 18 32 true
+gkstg64o 14 18 0 true
 gkexit
 end
 note 87 CE_BF16: 2-pass online softmax CE (256 thr/CTA = 8 warps/CTA!) writing packed dlogits_bf16
