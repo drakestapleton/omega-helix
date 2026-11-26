@@ -112,8 +112,8 @@ python3 -W error::ResourceWarning "$here/tests/test_omg_graph.py"
 
 echo "--- 3f. Spiral-2048 Razor MoE, Full-APU Co-Execution Fabric & GB10 Scaling Suites ---"
 OLLM_BIN="$BIN" python3 -W error::ResourceWarning "$here/tests/test_spiral_weave.py" -v
-OLLM_BIN="$BIN" python3 -W error::ResourceWarning "$here/tests/test_apu_weave.py" -v
-OLLM_BIN="$BIN" python3 -W error::ResourceWarning "$here/tests/test_gpu_spiral_gb10.py" -v
+OLLM_BIN="$BIN" OLLM_GB10_LIVE=0 python3 -W error::ResourceWarning "$here/tests/test_apu_weave.py" -v
+OLLM_BIN="$BIN" OLLM_GB10_LIVE=0 python3 -W error::ResourceWarning "$here/tests/test_gpu_spiral_gb10.py" -v
 
 echo "--- 4. OpenWALDO dataset verifier, pure-Omega ingestor, multi-arch backend & BOM ---"
 OLLM_WALDO_BIN="$OUT/ollm-waldo" OLLM_UNIV_BIN="$OUT/ollm-univ" \

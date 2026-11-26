@@ -65,11 +65,24 @@ def _resolve_cpu_bin() -> Path:
 
 
 def _resolve_gb10_bin() -> Path | None:
-    for c in (
-        ROOT / "build" / "ollm-gb10",
-        ROOT / "build" / "verify-om" / "ollm-gb10",
-        Path.home() / ".local" / "opt" / "omega-helix" / "bin" / "ollm-gb10",
-    ):
+    cands: list[Path] = []
+    env_gb10 = os.environ.get("OLLM_GB10_BIN")
+    if env_gb10:
+        cands.append(Path(env_gb10))
+    out_env = os.environ.get("OUT")
+    if out_env:
+        cands.append(Path(out_env) / "ollm-gb10")
+    env_bin = os.environ.get("OLLM_BIN")
+    if env_bin:
+        cands.append(Path(env_bin).parent / "ollm-gb10")
+    cands.extend(
+        (
+            ROOT / "build" / "ollm-gb10",
+            ROOT / "build" / "verify-om" / "ollm-gb10",
+            Path.home() / ".local" / "opt" / "omega-helix" / "bin" / "ollm-gb10",
+        )
+    )
+    for c in cands:
         if c.is_file() and os.access(c, os.X_OK):
             return c
     return None
