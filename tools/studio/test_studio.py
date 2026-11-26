@@ -419,6 +419,89 @@ class StudioTestCase(unittest.TestCase):
             self.assertEqual(ad["n_shards"], 2)
             self.assertEqual(ad["tamper_ok"], 2)
             self.assertEqual(len(ad["out_packs"]), 2)
+
+            # Bounded manifest reads (DRA-1021): normal manifest, oversized bytes, >2048 entries, FIFO
+            normal_manifest = sp_dir / "normal.list"
+            normal_manifest.write_text(f"# header\n{dom_tok}\n{dom2}\n", encoding="utf-8")
+            m_req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/spiral/apuweave",
+                data=json.dumps({
+                    "base_ck": str(seed_ck),
+                    "shards_list": str(normal_manifest),
+                    "out_dir": str(sp_dir / "apu_manifest_out"),
+                    "f_exp": 16,
+                    "lambda_milli": 100,
+                    "max_toks": 128,
+                    "quant_bits": 4,
+                    "workers": 1,
+                    "use_gpu": False,
+                }).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(m_req, timeout=20.0) as resp:
+                am = json.loads(resp.read().decode("utf-8"))
+            self.assertTrue(am["ok"])
+            self.assertEqual(am["n_shards"], 2)
+            self.assertEqual(len(am["out_packs"]), 2)
+
+            big_manifest = sp_dir / "oversized.list"
+            big_manifest.write_bytes(b"a" * (studio_spiral.MAX_MANIFEST_BYTES + 16))
+            big_req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/spiral/apuweave",
+                data=json.dumps({
+                    "base_ck": str(seed_ck),
+                    "shards_list": str(big_manifest),
+                    "out_dir": str(sp_dir / "apu_big_out"),
+                    "use_gpu": False,
+                }).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                urllib.request.urlopen(big_req, timeout=5.0)
+                self.fail("expected 400 for oversized manifest")
+            except urllib.error.HTTPError as e:
+                try:
+                    self.assertEqual(e.code, 400)
+                    body_err = json.loads(e.read().decode("utf-8"))
+                    self.assertIn("byte limit", body_err["error"])
+                finally:
+                    e.close()
+
+            many_manifest = sp_dir / "many.list"
+            many_manifest.write_text(
+                "\n".join(f"/tmp/s{i:04d}.tok" for i in range(studio_spiral.MAX_MANIFEST_ENTRIES + 1)) + "\n",
+                encoding="utf-8",
+            )
+            many_req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/spiral/apuweave",
+                data=json.dumps({
+                    "base_ck": str(seed_ck),
+                    "shards_list": str(many_manifest),
+                    "out_dir": str(sp_dir / "apu_many_out"),
+                    "use_gpu": False,
+                }).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                urllib.request.urlopen(many_req, timeout=5.0)
+                self.fail("expected 400 for >2048 entries manifest")
+            except urllib.error.HTTPError as e:
+                try:
+                    self.assertEqual(e.code, 400)
+                    body_err = json.loads(e.read().decode("utf-8"))
+                    self.assertIn("entries limit", body_err["error"])
+                finally:
+                    e.close()
+
+            if hasattr(os, "mkfifo"):
+                fifo_p = sp_dir / "nonreg.fifo"
+                os.mkfifo(fifo_p)
+                with self.assertRaises(ValueError) as ctx:
+                    studio_spiral._read_bounded_manifest(fifo_p, sp_dir)
+                self.assertIn("regular file", str(ctx.exception))
         finally:
             srv.shutdown()
             srv.server_close()
