@@ -1,0 +1,3071 @@
+note SPDX-License-Identifier: Apache-2.0
+note native/univ/spdna.om: Pure-Omega OLLMBF01 + OLLMSP02 DNA strand engine & spguard evaluator.
+note Supports CPU (spdna_nogpu.om) and GB10 SM121 GPU (bf_dna.om) through dn_be_* hooks.
+note Error exit codes: 2=usage/CLI, 60=bad format/magic/EOF, 61=FNV checksum mismatch, 62=trunk_hash mismatch, 70=I/O/OOM.
+
+const DN_BF_MAG ulong 3544410157319212111
+const DN_SP_MAG ulong 3616478819487861839
+const DN_CHUNK ulong 1048576
+const DN_FNV_OFF ulong 14695981039346656037
+const DN_FNV_PRM ulong 1099511628211
+
+text dn_s_info "info"
+text dn_s_base "base-eval"
+text dn_s_cryst "cryst"
+text dn_s_spinfo "sp-info"
+text dn_s_calcos "cal-cos"
+text dn_s_guard "spguard-eval"
+text dn_s_swap "swap-bench"
+text dn_s_dumpk "--dump-bf-kernels"
+text dn_s_f_fexp "--fexp"
+text dn_s_f_nproto "--nproto"
+text dn_s_f_epochs "--epochs"
+text dn_s_f_lr "--lr"
+text dn_s_f_lam "--lam"
+text dn_s_f_wd "--wd"
+text dn_s_f_caldom "--cal-dom"
+text dn_s_f_f64 "--f64"
+text dn_s_f_w4 "--w4"
+text dn_l_info "INFO_BF16 V="
+text dn_l_d " D="
+text dn_l_h " H="
+text dn_l_hkv " HKV="
+text dn_l_hd " HD="
+text dn_l_f " F="
+text dn_l_l " L="
+text dn_l_pay " PAYLOAD="
+text dn_l_th " TRUNK_HASH="
+text dn_l_spi "SP_INFO V2 D="
+text dn_l_fexp " FEXP="
+text dn_l_np " NPROTO="
+text dn_l_fl " FLAGS="
+text dn_l_by " BYTES="
+text dn_l_tau " TAU="
+text dn_l_fnv " SP_FNV64="
+text dn_l_bas "BASE N="
+text dn_l_los " LOSS="
+text dn_l_ppl " PPL="
+text dn_l_acc " ACC="
+text dn_l_ms " MS="
+text dn_l_cry "CRYST N="
+text dn_l_trb " TR_BASE="
+text dn_l_cb " CAL_BASE="
+text dn_l_bst " BEST="
+text dn_l_cal "CAL_COS TAU="
+text dn_l_gmx " GEN_MAX="
+text dn_l_da " DOM_ACT="
+text dn_l_ga " GEN_ACT="
+text dn_l_spg "SPGUARD TAU="
+text dn_l_db " DOM_BASE="
+text dn_l_ds " DOM_SP="
+text dn_l_dd " DOM_DELTA="
+text dn_l_gb " GEN_BASE="
+text dn_l_gs " GEN_SP="
+text dn_l_gd " GEN_DELTA="
+text dn_l_gjsd " GEN_JSD="
+text dn_l_rcp " RECEIPT="
+text dn_l_swp "SWAP_BENCH ITERS="
+text dn_l_ba " BYTES_A="
+text dn_l_bb " BYTES_B="
+text dn_l_mm " MEAN_MS="
+text dn_l_mx " MAX_MS="
+text dn_k_th "trunk_hash"
+text dn_k_nt "n_tokens"
+text dn_k_ls "loss"
+text dn_k_pp "ppl"
+text dn_k_ac "acc"
+text dn_k_ms "ms"
+text dn_k_lb "loss_bits"
+text dn_k_sf "sp_fnv64"
+text dn_k_sb "sp_bytes"
+text dn_k_ta "tau"
+text dn_k_tb "tau_bits"
+text dn_k_dn "dom_n"
+text dn_k_dbl "dom_base_loss"
+text dn_k_dsl "dom_sp_loss"
+text dn_k_ddl "dom_delta_loss"
+text dn_k_dbp "dom_base_ppl"
+text dn_k_dsp "dom_sp_ppl"
+text dn_k_dba "dom_base_acc"
+text dn_k_dsa "dom_sp_acc"
+text dn_k_da "dom_act"
+text dn_k_dar "dom_act_rate"
+text dn_k_dj "dom_jsd"
+text dn_k_dbb "dom_base_bits"
+text dn_k_dsb "dom_sp_bits"
+text dn_k_gn "gen_n"
+text dn_k_gbl "gen_base_loss"
+text dn_k_gsl "gen_sp_loss"
+text dn_k_gdl "gen_delta_loss"
+text dn_k_gbp "gen_base_ppl"
+text dn_k_gsp "gen_sp_ppl"
+text dn_k_gba "gen_base_acc"
+text dn_k_gsa "gen_sp_acc"
+text dn_k_ga "gen_act"
+text dn_k_gar "gen_act_rate"
+text dn_k_gj "gen_jsd"
+text dn_k_gbb "gen_base_bits"
+text dn_k_gsb "gen_sp_bits"
+text dn_k_gjb "gen_jsd_bits"
+text dn_k_rh "receipt_fnv64"
+text dn_k_em "eval_ms"
+
+global dn_arg uchar 4096
+global dn_path uchar 4096
+global dn_hdr uchar 256
+global dn_sphdr uchar 80
+global dn_json uchar 65536
+global dn_jpos ulong 1
+global dn_rcp uchar 4096
+global dn_rpos ulong 1
+
+global dn_st ulong 32
+global dn_sp_st ulong 16
+global dn_io uchar 1048576
+global dn_mem uchar *
+global dn_woff ulong *
+global dn_act f64 *
+global dn_tmp f64 *
+global dn_rcos f64 *
+global dn_rsin f64 *
+global dn_toks ulong *
+global dn_tgts ulong *
+global dn_zbuf f64 *
+global dn_rbuf f64 *
+global dn_bl f64 *
+global dn_bh ulong *
+global dn_gl f64 *
+global dn_gh ulong *
+global dn_jsd f64 *
+global dn_active ulong *
+
+global dn_mm_a f64 *
+global dn_mm_b f64 *
+global dn_mm_c f64 *
+
+global dn_ftoks ulong *
+global dn_ftn ulong 1
+global dn_cal_toks ulong *
+global dn_cal_tn ulong 1
+
+global dn_ztr f64 *
+global dn_rtr f64 *
+global dn_tr_tgts ulong *
+global dn_uhat f64 *
+global dn_uema f64 *
+global dn_zcal f64 *
+global dn_uhat_cal f64 *
+global dn_cal_tgts ulong *
+
+global dn_win f64 *
+global dn_wup f64 *
+global dn_qwin f64 *
+global dn_qwup f64 *
+global dn_qwup_t f64 *
+global dn_proto f64 *
+global dn_bwin f64 *
+global dn_bwup f64 *
+
+global dn_pre f64 *
+global dn_phi f64 *
+global dn_phit f64 *
+global dn_dphi f64 *
+global dn_dz f64 *
+global dn_dzt f64 *
+global dn_dpret f64 *
+global dn_uhat_t f64 *
+global dn_rt f64 *
+global dn_gwin f64 *
+global dn_gwup f64 *
+global dn_m1 f64 *
+global dn_v1 f64 *
+global dn_m2 f64 *
+global dn_v2 f64 *
+global dn_chol_g f64 *
+global dn_chol_b f64 *
+global dn_sp_bytes uchar *
+global dn_cos_d f64 *
+global dn_cos_g f64 *
+global dn_p_cnt ulong *
+global dn_p_acc f64 *
+global dn_p_mind f64 *
+global dn_c_par f64 16
+
+fn dn_enlarge_f arr_id ulong n ulong to void
+r = long 0
+if eq arr_id 0
+  r = enlarge dn_act n
+end
+if eq arr_id 1
+  r = enlarge dn_tmp n
+end
+if eq arr_id 2
+  r = enlarge dn_rcos n
+end
+if eq arr_id 3
+  r = enlarge dn_rsin n
+end
+if eq arr_id 4
+  r = enlarge dn_zbuf n
+end
+if eq arr_id 5
+  r = enlarge dn_rbuf n
+end
+if eq arr_id 6
+  r = enlarge dn_bl n
+end
+if eq arr_id 7
+  r = enlarge dn_gl n
+end
+if eq arr_id 8
+  r = enlarge dn_jsd n
+end
+if eq arr_id 9
+  r = enlarge dn_mm_a n
+end
+if eq arr_id 10
+  r = enlarge dn_mm_b n
+end
+if eq arr_id 11
+  r = enlarge dn_mm_c n
+end
+if ne r 0
+  exit 70
+end
+end
+
+fn dn_enlarge_u arr_id ulong n ulong to void
+r = long 0
+if eq arr_id 0
+  r = enlarge dn_woff n
+end
+if eq arr_id 1
+  r = enlarge dn_toks n
+end
+if eq arr_id 2
+  r = enlarge dn_tgts n
+end
+if eq arr_id 3
+  r = enlarge dn_bh n
+end
+if eq arr_id 4
+  r = enlarge dn_gh n
+end
+if eq arr_id 5
+  r = enlarge dn_active n
+end
+if eq arr_id 6
+  r = enlarge dn_ftoks n
+end
+if eq arr_id 7
+  r = enlarge dn_cal_toks n
+end
+if eq arr_id 8
+  r = enlarge dn_tr_tgts n
+end
+if eq arr_id 9
+  r = enlarge dn_cal_tgts n
+end
+if ne r 0
+  exit 70
+end
+end
+
+fn dn_enlarge_tr arr_id ulong n ulong to void
+r = long 0
+if eq arr_id 0
+  r = enlarge dn_ztr n
+end
+if eq arr_id 1
+  r = enlarge dn_rtr n
+end
+if eq arr_id 2
+  r = enlarge dn_uhat n
+end
+if eq arr_id 3
+  r = enlarge dn_uema n
+end
+if eq arr_id 4
+  r = enlarge dn_zcal n
+end
+if eq arr_id 5
+  r = enlarge dn_uhat_cal n
+end
+if eq arr_id 6
+  r = enlarge dn_win n
+end
+if eq arr_id 7
+  r = enlarge dn_wup n
+end
+if eq arr_id 8
+  r = enlarge dn_qwin n
+end
+if eq arr_id 9
+  r = enlarge dn_qwup n
+end
+if eq arr_id 10
+  r = enlarge dn_qwup_t n
+end
+if eq arr_id 11
+  r = enlarge dn_proto n
+end
+if eq arr_id 12
+  r = enlarge dn_bwin n
+end
+if eq arr_id 13
+  r = enlarge dn_bwup n
+end
+if ne r 0
+  exit 70
+end
+end
+
+fn dn_enlarge_opt arr_id ulong n ulong to void
+r = long 0
+if eq arr_id 0
+  r = enlarge dn_pre n
+end
+if eq arr_id 1
+  r = enlarge dn_phi n
+end
+if eq arr_id 2
+  r = enlarge dn_phit n
+end
+if eq arr_id 3
+  r = enlarge dn_dphi n
+end
+if eq arr_id 4
+  r = enlarge dn_dz n
+end
+if eq arr_id 5
+  r = enlarge dn_dzt n
+end
+if eq arr_id 6
+  r = enlarge dn_dpret n
+end
+if eq arr_id 7
+  r = enlarge dn_uhat_t n
+end
+if eq arr_id 8
+  r = enlarge dn_rt n
+end
+if eq arr_id 9
+  r = enlarge dn_gwin n
+end
+if eq arr_id 10
+  r = enlarge dn_gwup n
+end
+if eq arr_id 11
+  r = enlarge dn_m1 n
+end
+if eq arr_id 12
+  r = enlarge dn_v1 n
+end
+if eq arr_id 13
+  r = enlarge dn_m2 n
+end
+if eq arr_id 14
+  r = enlarge dn_v2 n
+end
+if eq arr_id 15
+  r = enlarge dn_chol_g n
+end
+if eq arr_id 16
+  r = enlarge dn_chol_b n
+end
+if eq arr_id 17
+  r = enlarge dn_cos_d n
+end
+if eq arr_id 18
+  r = enlarge dn_cos_g n
+end
+if ne r 0
+  exit 70
+end
+end
+
+fn dn_put_cstr s view uchar * to void
+for i ulong len s
+  uputc ulong get s i
+end
+end
+
+fn dn_arg_eq ai ulong s view uchar * to bool
+r = argread ai dn_arg 0 4096
+if ne r long len s
+  ret false
+end
+for i ulong len s
+  if ne get dn_arg i get s i
+    ret false
+  end
+end
+ret true
+end
+
+fn dn_path_arg ai ulong to ulong
+r = argread ai dn_arg 0 4096
+if or le r 0 gt r 4090
+  exit 2
+end
+n = ulong r
+for i ulong n
+  put dn_path i get dn_arg i
+end
+ret n
+end
+
+fn dn_paru ai ulong to ulong
+r = argread ai dn_arg 0 4096
+if le r 0
+  exit 2
+end
+v = ulong 0
+for i ulong ulong r
+  c = ulong get dn_arg i
+  if or lt c 48 gt c 57
+    exit 2
+  end
+  v = add mul v 10 sub c 48
+end
+ret v
+end
+
+fn dn_parf_exp i0 ulong n ulong v0 f64 to f64
+eneg = false
+i = i0
+if lt i n
+  c = ulong get dn_arg i
+  if eq c 45
+    eneg = true
+    i = add i 1
+  end
+  if eq c 43
+    i = add i 1
+  end
+end
+if ge i n
+  exit 2
+end
+ev = ulong 0
+while lt i n bound 64
+  c2 = ulong get dn_arg i
+  if or lt c2 48 gt c2 57
+    exit 2
+  end
+  ev = add mul ev 10 sub c2 48
+  i = add i 1
+end
+v = v0
+for k ulong ev
+  if eneg
+    v = mul v 0.1f64
+  else
+    v = mul v 10.0f64
+  end
+end
+ret v
+end
+
+fn dn_parf ai ulong to f64
+r = argread ai dn_arg 0 4096
+if le r 0
+  exit 2
+end
+n = ulong r
+i = ulong 0
+if eq get dn_arg 0 45
+  i = 1
+end
+v = 0.0f64
+sc = 1.0f64
+frac = false
+while lt i n bound 4096
+  c = ulong get dn_arg i
+  if or eq c 101 eq c 69
+    v = dn_parf_exp add i 1 n v
+    break
+  end
+  if eq c 46
+    frac = true
+  else
+    if or lt c 48 gt c 57
+      exit 2
+    end
+    d = f64 sub c 48
+    if not frac
+      v = add mul v 10.0f64 d
+    else
+      sc = mul sc 0.1f64
+      v = add v mul d sc
+    end
+  end
+  i = add i 1
+end
+if eq get dn_arg 0 45
+  ret sub 0.0f64 v
+end
+ret v
+end
+
+fn dn_putf v f64 ndec ulong to void
+x = v
+if lt x 0.0f64
+  uputc 45
+  x = sub 0.0f64 x
+end
+half = 0.5f64
+for k ulong ndec
+  half = mul half 0.1f64
+end
+x = add x half
+ip = ulong long x
+uputu ip
+if gt ndec 0
+  uputc 46
+  fr = sub x f64 ip
+  for k2 ulong ndec
+    fr = mul fr 10.0f64
+    dg = long fr
+    if lt dg 0
+      dg = 0
+    end
+    if gt dg 9
+      dg = 9
+    end
+    uputc add 48 ulong dg
+    fr = sub fr f64 dg
+  end
+end
+end
+
+fn dn_puth16 v ulong to void
+uputc 48
+uputc 120
+for i ulong 16
+  sh = mul sub 15 i 4
+  nib = and shr v sh 15
+  if lt nib 10
+    uputc add 48 nib
+  else
+    uputc add 87 nib
+  end
+end
+end
+
+fn dn_pread_all fd int pos ulong n ulong to void
+got = ulong 0
+while lt got n bound 1000000
+  r = pread fd dn_io got sub n got long add pos got
+  if le r 0
+    exit 60
+  end
+  got = add got ulong r
+end
+end
+
+fn dn_pwrite_sp fd int n ulong fpos ulong to void
+pos = ulong 0
+while lt pos n bound 9223372036854775807
+  cn = sub n pos
+  if gt cn DN_CHUNK
+    cn = DN_CHUNK
+  end
+  for i ulong cn bound DN_CHUNK
+    put dn_io i get dn_sp_bytes add pos i
+  end
+  p = ulong 0
+  while lt p cn bound 1000000
+    w = pwrite fd dn_io p sub cn p long add add fpos pos p
+    if le w 0
+      exit 70
+    end
+    p = add p ulong w
+  end
+  pos = add pos cn
+end
+end
+
+fn dn_pread_sp fd int n ulong fpos ulong to void
+pos = ulong 0
+while lt pos n bound 9223372036854775807
+  cn = sub n pos
+  if gt cn DN_CHUNK
+    cn = DN_CHUNK
+  end
+  got = ulong 0
+  while lt got cn bound 1000000
+    r = pread fd dn_io got sub cn got long add add fpos pos got
+    if le r 0
+      exit 60
+    end
+    got = add got ulong r
+  end
+  for i ulong cn bound DN_CHUNK
+    put dn_sp_bytes add pos i get dn_io i
+  end
+  pos = add pos cn
+end
+end
+
+fn dn_pread_hdr fd int n ulong to void
+got = ulong 0
+while lt got n bound 1000
+  r = pread fd dn_hdr got sub n got long got
+  if le r 0
+    exit 60
+  end
+  got = add got ulong r
+end
+end
+
+fn dn_pread_sphdr fd int to void
+got = ulong 0
+while lt got 80 bound 1000
+  r = pread fd dn_sphdr got sub 80 got long got
+  if le r 0
+    exit 60
+  end
+  got = add got ulong r
+end
+end
+
+fn dn_h8 o ulong to ulong
+v = ulong 0
+for k ulong 8
+  v = or v shl ulong get dn_hdr add o k mul k 8
+end
+ret v
+end
+
+fn dn_sp8 o ulong to ulong
+v = ulong 0
+for k ulong 8
+  v = or v shl ulong get dn_sphdr add o k mul k 8
+end
+ret v
+end
+
+fn dn_sp4 o ulong to ulong
+v = ulong 0
+for k ulong 4
+  v = or v shl ulong get dn_sphdr add o k mul k 8
+end
+ret v
+end
+
+fn dn_put_sp8 o ulong v ulong to void
+for k ulong 8
+  put dn_sp_bytes add o k uchar and shr v mul k 8 255
+end
+end
+
+fn dn_put_sp4 o ulong v ulong to void
+for k ulong 4
+  put dn_sp_bytes add o k uchar and shr v mul k 8 255
+end
+end
+
+fn dn_fnv_hdr n ulong to ulong
+h = DN_FNV_OFF
+for i ulong n
+  h = mul xor h ulong get dn_hdr i DN_FNV_PRM
+end
+ret h
+end
+
+fn dn_fnv_sp s ulong n ulong to ulong
+h = DN_FNV_OFF
+for i ulong n
+  h = mul xor h ulong get dn_sp_bytes add s i DN_FNV_PRM
+end
+ret h
+end
+
+fn dn_fnv_io_words h0 ulong nw ulong to ulong
+h = h0
+for i ulong nw bound DN_CHUNK
+  b = mul i 8
+  w = ulong 0
+  for k ulong 8
+    w = or w shl ulong get dn_io add b k mul k 8
+  end
+  h = mul xor h w DN_FNV_PRM
+end
+ret h
+end
+
+fn dn_hash_bf_payload fd int pb ulong to ulong
+if ne rem pb 8 0
+  exit 60
+end
+h = DN_FNV_OFF
+pos = ulong 256
+remb = pb
+while gt remb 0 bound 9223372036854775807
+  cn = remb
+  if gt cn DN_CHUNK
+    cn = DN_CHUNK
+  end
+  dn_pread_all fd pos cn
+  h = dn_fnv_io_words h div cn 8
+  pos = add pos cn
+  remb = sub remb cn
+end
+ret h
+end
+
+fn dn_al256 nb ulong to ulong
+ret mul div add nb 255 256 256
+end
+
+fn dn_plan_add sl ulong nb ulong off ulong to ulong
+put dn_woff sl off
+ret add off dn_al256 nb
+end
+
+fn dn_plan_lay l ulong off ulong to ulong
+d = get dn_st 1
+qd = get dn_st 13
+kvd = get dn_st 14
+f = get dn_st 5
+b = add 8 mul l 24
+p = dn_plan_add b mul d 4 off
+p = dn_plan_add add b 1 mul mul qd d 2 p
+p = dn_plan_add add b 2 mul mul kvd d 2 p
+p = dn_plan_add add b 3 mul mul kvd d 2 p
+p = dn_plan_add add b 4 mul mul d qd 2 p
+if ne and get dn_st 7 8 0
+  p = dn_plan_add add b 5 mul get dn_st 4 4 p
+  p = dn_plan_add add b 6 mul get dn_st 4 4 p
+end
+p = dn_plan_add add b 7 mul d 4 p
+if ne and get dn_st 7 66 0
+  p = dn_plan_add add b 8 mul mul f d 2 p
+end
+p = dn_plan_add add b 9 mul mul f d 2 p
+ret dn_plan_add add b 10 mul mul d f 2 p
+end
+
+fn dn_plan_woff to void
+l = get dn_st 6
+dn_enlarge_u 0 add 8 mul l 24
+v = get dn_st 0
+d = get dn_st 1
+off = dn_plan_add 0 mul mul v d 2 0
+for i ulong l
+  off = dn_plan_lay i off
+end
+off = dn_plan_add 2 mul d 4 off
+if ne get dn_st 19 0
+  off = dn_plan_add 3 mul mul v d 2 off
+end
+if ne off get dn_st 12
+  exit 60
+end
+end
+
+fn dn_lmw_off to ulong
+if ne get dn_st 19 0
+  ret get dn_woff 3
+end
+ret get dn_woff 0
+end
+
+fn dn_init_rope wcap ulong to void
+hd = get dn_st 4
+he = div hd 2
+dn_enlarge_f 2 mul wcap he
+dn_enlarge_f 3 mul wcap he
+lth = uflog div f64 get dn_st 8 1000.0f64
+for i ulong he
+  invf = ufexp mul div mul -2.0f64 f64 i f64 hd lth
+  for pos ulong wcap
+    ang = mul f64 pos invf
+    idx = add mul pos he i
+    put dn_rcos idx ufcos ang
+    put dn_rsin idx ufsin ang
+  end
+end
+end
+
+fn dn_alloc_be fd int to void
+d = get dn_st 1
+wcap = get dn_st 10
+row_w = add mul d 3 mul get dn_st 13 2
+row_w = add row_w add mul get dn_st 14 2 mul get dn_st 5 2
+act_n = mul wcap row_w
+min_n = mul wcap mul d 4
+if lt act_n min_n
+  act_n = min_n
+end
+dn_enlarge_f 0 act_n
+tmp_n = get dn_st 0
+if lt tmp_n wcap
+  tmp_n = wcap
+end
+if lt tmp_n mul d 2
+  tmp_n = mul d 2
+end
+dn_enlarge_f 1 tmp_n
+dn_enlarge_f 4 mul wcap d
+dn_enlarge_f 5 mul wcap d
+dn_enlarge_f 6 wcap
+dn_enlarge_f 7 wcap
+dn_enlarge_f 8 wcap
+dn_enlarge_u 1 wcap
+dn_enlarge_u 2 wcap
+dn_enlarge_u 3 wcap
+dn_enlarge_u 4 wcap
+dn_enlarge_u 5 wcap
+dn_init_rope wcap
+put dn_st 18 ulong fd
+dn_be_open
+end
+
+fn dn_store_bf_hdr to void
+put dn_st 0 dn_h8 16
+put dn_st 1 dn_h8 24
+put dn_st 2 dn_h8 32
+put dn_st 3 dn_h8 40
+put dn_st 4 dn_h8 48
+put dn_st 5 dn_h8 56
+put dn_st 6 dn_h8 64
+put dn_st 7 dn_h8 72
+put dn_st 8 dn_h8 80
+put dn_st 9 dn_h8 88
+put dn_st 10 128
+put dn_st 11 dn_h8 104
+put dn_st 12 dn_h8 112
+put dn_st 13 mul get dn_st 2 get dn_st 4
+put dn_st 14 mul get dn_st 3 get dn_st 4
+put dn_st 15 dn_h8 120
+put dn_st 16 dn_h8 128
+put dn_st 17 dn_h8 248
+put dn_st 19 0
+if ne and get dn_st 7 4 0
+  put dn_st 19 1
+end
+end
+
+fn dn_open_trunk ai ulong verify_pay bool need_be bool to void
+pl = dn_path_arg ai
+fd = int fopen dn_path 0 pl 0 0
+if lt fd 0
+  exit 70
+end
+sz = fseek fd 0 2
+if lt sz 256
+  pl = ulong fclose fd
+  exit 60
+end
+dn_pread_hdr fd 256
+if or ne dn_h8 0 DN_BF_MAG ne dn_h8 8 1
+  pl = ulong fclose fd
+  exit 60
+end
+dn_store_bf_hdr
+if or ne dn_fnv_hdr 128 get dn_st 16 ne dn_fnv_hdr 248 get dn_st 17
+  pl = ulong fclose fd
+  exit 61
+end
+if lt ulong sz add 256 get dn_st 12
+  pl = ulong fclose fd
+  exit 61
+end
+dn_plan_woff
+if verify_pay
+  if ne dn_hash_bf_payload fd get dn_st 12 get dn_st 15
+    pl = ulong fclose fd
+    exit 61
+  end
+end
+if need_be
+  dn_alloc_be fd
+end
+pl = ulong fclose fd
+end
+
+fn dn_io_u32 b ulong to ulong
+v = ulong get dn_io b
+v = or v shl ulong get dn_io add b 1 8
+v = or v shl ulong get dn_io add b 2 16
+ret or v shl ulong get dn_io add b 3 24
+end
+
+fn dn_load_u32_chunk fd int dst_id ulong pos ulong cn ulong to void
+dn_pread_all fd pos cn
+cnt = div cn 4
+idx0 = div pos 4
+v = get dn_st 0
+for i ulong cnt
+  tv = dn_io_u32 mul i 4
+  if ge tv v
+    idx0 = ulong fclose fd
+    exit 60
+  end
+  if eq dst_id 6
+    put dn_ftoks add idx0 i tv
+  else
+    put dn_cal_toks add idx0 i tv
+  end
+end
+end
+
+fn dn_load_u32 ai ulong dst_id ulong to ulong
+pl = dn_path_arg ai
+fd = int fopen dn_path 0 pl 0 0
+if lt fd 0
+  exit 70
+end
+sz = fseek fd 0 2
+if or lt sz 8 ne rem ulong sz 4 0
+  pl = ulong fclose fd
+  exit 60
+end
+n = div ulong sz 4
+if lt n 2
+  pl = ulong fclose fd
+  exit 60
+end
+dn_enlarge_u dst_id n
+pos = ulong 0
+while lt pos ulong sz bound 9223372036854775807
+  cn = sub ulong sz pos
+  if gt cn DN_CHUNK
+    cn = DN_CHUNK
+  end
+  dn_load_u32_chunk fd dst_id pos cn
+  pos = add pos cn
+end
+pl = ulong fclose fd
+if eq dst_id 6
+  put dn_ftn 0 n
+else
+  put dn_cal_tn 0 n
+end
+ret sub n 1
+end
+
+fn dn_fill_win is_cal bool pos ulong wct ulong to void
+for t ulong wct
+  if is_cal
+    put dn_toks t get dn_cal_toks add pos t
+    put dn_tgts t get dn_cal_toks add add pos t 1
+  else
+    put dn_toks t get dn_ftoks add pos t
+    put dn_tgts t get dn_ftoks add add pos t 1
+  end
+end
+put dn_st 10 wct
+end
+
+fn dn_jb b ulong to void
+p = get dn_jpos 0
+if lt p 65500
+  put dn_json p uchar and b 255
+  put dn_jpos 0 add p 1
+end
+end
+
+fn dn_js s view uchar * to void
+for i ulong len s
+  dn_jb ulong get s i
+end
+end
+
+fn dn_ju v ulong to void
+if eq v 0
+  dn_jb 48
+  ret
+end
+buf = new uchar 32 0
+n = ulong 0
+x = v
+while gt x 0 bound 64
+  put buf n uchar add 48 rem x 10
+  x = div x 10
+  n = add n 1
+end
+for i ulong n
+  dn_jb ulong get buf sub sub n 1 i
+end
+end
+
+fn dn_jhex16 v ulong to void
+dn_jb 48
+dn_jb 120
+for i ulong 16
+  sh = mul sub 15 i 4
+  nib = and shr v sh 15
+  if lt nib 10
+    dn_jb add 48 nib
+  else
+    dn_jb add 87 nib
+  end
+end
+end
+
+fn dn_jf v f64 ndec ulong to void
+x = v
+if lt x 0.0f64
+  dn_jb 45
+  x = sub 0.0f64 x
+end
+half = 0.5f64
+for k ulong ndec
+  half = mul half 0.1f64
+end
+x = add x half
+ip = ulong long x
+dn_ju ip
+if gt ndec 0
+  dn_jb 46
+  fr = sub x f64 ip
+  for k2 ulong ndec
+    fr = mul fr 10.0f64
+    dg = long fr
+    if lt dg 0
+      dg = 0
+    end
+    if gt dg 9
+      dg = 9
+    end
+    dn_jb add 48 ulong dg
+    fr = sub fr f64 dg
+  end
+end
+end
+
+fn dn_jk s view uchar * to void
+dn_jb 34
+dn_js s
+dn_jb 34
+dn_jb 58
+dn_jb 32
+end
+
+fn dn_jhex_kv k view uchar * v ulong comma bool to void
+dn_jk k
+dn_jb 34
+dn_jhex16 v
+dn_jb 34
+if comma
+  dn_jb 44
+end
+dn_jb 10
+end
+
+fn dn_ju_kv k view uchar * v ulong comma bool to void
+dn_jk k
+dn_ju v
+if comma
+  dn_jb 44
+end
+dn_jb 10
+end
+
+fn dn_jf_kv k view uchar * v f64 nd ulong comma bool to void
+dn_jk k
+dn_jf v nd
+if comma
+  dn_jb 44
+end
+dn_jb 10
+end
+
+fn dn_jwrite ai ulong to void
+pl = dn_path_arg ai
+fd = int fopen dn_path 0 pl 577 420
+if lt fd 0
+  exit 70
+end
+n = get dn_jpos 0
+p = ulong 0
+while lt p n bound 100000
+  w = pwrite fd dn_json p sub n p long p
+  if le w 0
+    pl = ulong fclose fd
+    exit 70
+  end
+  p = add p ulong w
+end
+pl = ulong fsync fd
+pl = ulong fclose fd
+end
+
+note Block-32 W4 pack/unpack/QAT
+fn dn_arr_get src_id ulong idx ulong to f64
+if eq src_id 0
+  ret get dn_win idx
+end
+if eq src_id 1
+  ret get dn_wup idx
+end
+ret get dn_proto idx
+end
+
+fn dn_arr_put dst_id ulong idx ulong val f64 to void
+if eq dst_id 0
+  put dn_win idx val
+  ret
+end
+if eq dst_id 1
+  put dn_wup idx val
+  ret
+end
+put dn_proto idx val
+end
+
+fn dn_w4_nblocks nw ulong to ulong
+ret div add nw 31 32
+end
+
+fn dn_w4_bytes nw ulong to ulong
+ret mul dn_w4_nblocks nw 20
+end
+
+fn dn_w4_blk_sc src_id ulong s ulong nw ulong to f64
+amax = 0.0f64
+for j ulong 32
+  idx = add s j
+  if lt idx nw
+    av = fabs dn_arr_get src_id idx
+    if gt av amax
+      amax = av
+    end
+  end
+end
+sc = div amax 7.0f64
+if lt sc 1.0e-12f64
+  sc = 1.0e-12f64
+end
+ret sc
+end
+
+fn dn_w4_qbyte sc f64 v0 f64 v1 f64 to uchar
+q0 = long add div v0 sc 7.5f64
+if lt q0 0
+  q0 = 0
+end
+if gt q0 14
+  q0 = 14
+end
+q1 = long add div v1 sc 7.5f64
+if lt q1 0
+  q1 = 0
+end
+if gt q1 14
+  q1 = 14
+end
+ret uchar or and ulong q0 15 shl and ulong q1 15 4
+end
+
+fn dn_w4_pack_blk src_id ulong b ulong nw ulong out_off ulong to void
+s = mul b 32
+sc32 = ulong bitcast uint f32 dn_w4_blk_sc src_id s nw
+bo = add out_off mul b 20
+dn_put_sp4 bo sc32
+bo = add bo 4
+sc = f64 bitcast f32 uint sc32
+for p ulong 16
+  i0 = add s mul p 2
+  v0 = 0.0f64
+  v1 = 0.0f64
+  if lt i0 nw
+    v0 = dn_arr_get src_id i0
+  end
+  if lt add i0 1 nw
+    v1 = dn_arr_get src_id add i0 1
+  end
+  put dn_sp_bytes add bo p dn_w4_qbyte sc v0 v1
+end
+end
+
+fn dn_w4_pack src_id ulong nw ulong out_off ulong to ulong
+nb = dn_w4_nblocks nw
+for b ulong nb
+  dn_w4_pack_blk src_id b nw out_off
+end
+ret mul nb 20
+end
+
+fn dn_sp_u32 bo ulong to ulong
+u = ulong 0
+for k ulong 4
+  u = or u shl ulong get dn_sp_bytes add bo k mul k 8
+end
+ret u
+end
+
+fn dn_w4_dq nib ulong sc f64 to f64
+ret mul sub f64 nib 7.0f64 sc
+end
+
+fn dn_w4_unpack_blk dst_id ulong b ulong nw ulong in_off ulong to void
+bo = add in_off mul b 20
+sc = f64 bitcast f32 uint dn_sp_u32 bo
+bo = add bo 4
+s = mul b 32
+for p ulong 16
+  bt = ulong get dn_sp_bytes add bo p
+  i0 = add s mul p 2
+  if lt i0 nw
+    dn_arr_put dst_id i0 dn_w4_dq and bt 15 sc
+  end
+  i0 = add i0 1
+  if lt i0 nw
+    dn_arr_put dst_id i0 dn_w4_dq and shr bt 4 15 sc
+  end
+end
+end
+
+fn dn_w4_unpack dst_id ulong nw ulong in_off ulong to ulong
+nb = dn_w4_nblocks nw
+for b ulong nb
+  dn_w4_unpack_blk dst_id b nw in_off
+end
+ret mul nb 20
+end
+
+fn dn_w4_qat_blk src_id ulong dst_id ulong b ulong nw ulong to void
+s = mul b 32
+sc = f64 f32 dn_w4_blk_sc src_id s nw
+for j2 ulong 32
+  idx = add s j2
+  if lt idx nw
+    q = long add div dn_arr_get src_id idx sc 7.5f64
+    if lt q 0
+      q = 0
+    end
+    if gt q 14
+      q = 14
+    end
+    vq = mul sub f64 ulong q 7.0f64 sc
+    if eq dst_id 0
+      put dn_qwin idx vq
+    else
+      put dn_qwup idx vq
+    end
+  end
+end
+end
+
+fn dn_w4_qat_arr src_id ulong dst_id ulong nw ulong to void
+nb = dn_w4_nblocks nw
+for b ulong nb
+  dn_w4_qat_blk src_id dst_id b nw
+end
+end
+
+fn dn_f64_pack src_id ulong nw ulong out_off ulong to ulong
+for i ulong nw
+  dn_put_sp8 add out_off mul i 8 bitcast ulong dn_arr_get src_id i
+end
+ret mul nw 8
+end
+
+fn dn_f64_unpack dst_id ulong nw ulong in_off ulong to ulong
+for i ulong nw
+  o = add in_off mul i 8
+  v = ulong 0
+  for k ulong 8
+    v = or v shl ulong get dn_sp_bytes add o k mul k 8
+  end
+  dn_arr_put dst_id i bitcast f64 v
+end
+ret mul nw 8
+end
+
+fn dn_norm_protos nproto ulong d ulong to void
+for k ulong nproto
+  pb = mul k d
+  s2 = 0.0f64
+  for j ulong d
+    vx = get dn_proto add pb j
+    s2 = add s2 mul vx vx
+  end
+  inv = div 1.0f64 fsqrt add s2 1.0e-12f64
+  for j2 ulong d
+    val = mul get dn_proto add pb j2 inv
+    put dn_proto add pb j2 val
+  end
+end
+end
+
+fn dn_sp_pack_all fl ulong nw_m ulong nw_p ulong to ulong
+p = ulong 80
+if ne and fl 1 0
+  p = add p dn_w4_pack 0 nw_m p
+  p = add p dn_w4_pack 1 nw_m p
+  p = add p dn_w4_pack 2 nw_p p
+else
+  p = add p dn_f64_pack 0 nw_m p
+  p = add p dn_f64_pack 1 nw_m p
+  p = add p dn_f64_pack 2 nw_p p
+end
+ret sub p 80
+end
+
+fn dn_sp_put_hdr fl ulong fexp ulong np ulong pay_b ulong tau f64 to ulong
+fnv = dn_fnv_sp 80 pay_b
+dn_put_sp8 0 DN_SP_MAG
+dn_put_sp4 8 2
+dn_put_sp4 12 fl
+dn_put_sp8 16 get dn_st 1
+dn_put_sp8 24 fexp
+dn_put_sp8 32 np
+dn_put_sp8 40 bitcast ulong tau
+dn_put_sp8 48 get dn_st 16
+dn_put_sp8 56 pay_b
+dn_put_sp8 64 fnv
+dn_put_sp8 72 0
+put dn_sp_st 0 2
+put dn_sp_st 1 fl
+put dn_sp_st 2 get dn_st 1
+put dn_sp_st 3 fexp
+put dn_sp_st 4 np
+put dn_sp_st 5 bitcast ulong tau
+put dn_sp_st 6 get dn_st 16
+put dn_sp_st 7 pay_b
+put dn_sp_st 8 fnv
+put dn_sp_st 9 add 80 pay_b
+ret fnv
+end
+
+fn dn_sp_write ai ulong fl ulong fexp ulong np ulong tau f64 to ulong
+nw_m = mul fexp get dn_st 1
+nw_p = mul np get dn_st 1
+pay_b = ulong 0
+if ne and fl 1 0
+  pay_b = add mul 2 dn_w4_bytes nw_m dn_w4_bytes nw_p
+else
+  pay_b = mul add mul 2 nw_m nw_p 8
+end
+tot = add 80 pay_b
+r = enlarge dn_sp_bytes tot
+if ne r 0
+  exit 70
+end
+pay_b = dn_sp_pack_all fl nw_m nw_p
+fnv = dn_sp_put_hdr fl fexp np pay_b tau
+fd = int fopen dn_path 0 dn_path_arg ai 577 420
+if lt fd 0
+  exit 70
+end
+dn_pwrite_sp fd tot 0
+tot = ulong fsync fd
+tot = ulong fclose fd
+ret fnv
+end
+
+fn dn_sp_hdr_parse fd int sz long check_trunk bool to void
+if lt sz 80
+  sz = fclose fd
+  exit 60
+end
+dn_pread_sphdr fd
+if or ne dn_sp8 0 DN_SP_MAG ne dn_sp4 8 2
+  sz = fclose fd
+  exit 60
+end
+put dn_sp_st 0 2
+put dn_sp_st 1 dn_sp4 12
+put dn_sp_st 2 dn_sp8 16
+put dn_sp_st 3 dn_sp8 24
+put dn_sp_st 4 dn_sp8 32
+put dn_sp_st 5 dn_sp8 40
+put dn_sp_st 6 dn_sp8 48
+put dn_sp_st 7 dn_sp8 56
+put dn_sp_st 8 dn_sp8 64
+put dn_sp_st 9 ulong sz
+if or eq get dn_sp_st 2 0 or eq get dn_sp_st 3 0 eq get dn_sp_st 4 0
+  sz = fclose fd
+  exit 60
+end
+if ne ulong sz add 80 get dn_sp_st 7
+  sz = fclose fd
+  exit 60
+end
+if check_trunk
+  if or ne get dn_sp_st 2 get dn_st 1 ne get dn_sp_st 6 get dn_st 16
+    sz = fclose fd
+    exit 62
+  end
+end
+end
+
+fn dn_sp_check_size fl ulong d ulong fe ulong np ulong pb ulong to bool
+nw_m = mul fe d
+nw_p = mul np d
+exp_pb = ulong 0
+if ne and fl 1 0
+  exp_pb = add mul 2 dn_w4_bytes nw_m dn_w4_bytes nw_p
+else
+  exp_pb = mul add mul 2 nw_m nw_p 8
+end
+ret eq pb exp_pb
+end
+
+fn dn_sp_load ai ulong check_trunk bool to void
+fd = int fopen dn_path 0 dn_path_arg ai 0 0
+if lt fd 0
+  exit 70
+end
+dn_sp_hdr_parse fd fseek fd 0 2 check_trunk
+d = get dn_sp_st 2
+fe = get dn_sp_st 3
+np = get dn_sp_st 4
+fl = get dn_sp_st 1
+if not dn_sp_check_size fl d fe np get dn_sp_st 7
+  fd = int fclose fd
+  exit 60
+end
+r = enlarge dn_sp_bytes get dn_sp_st 9
+if ne r 0
+  fd = int fclose fd
+  exit 70
+end
+dn_pread_sp fd get dn_sp_st 9 0
+if ne dn_fnv_sp 80 get dn_sp_st 7 get dn_sp_st 8
+  fd = int fclose fd
+  exit 61
+end
+fd = int fclose fd
+dn_enlarge_tr 6 mul fe d
+dn_enlarge_tr 7 mul fe d
+dn_enlarge_tr 11 mul np d
+p = ulong 80
+if ne and fl 1 0
+  p = add p dn_w4_unpack 0 mul fe d p
+  p = add p dn_w4_unpack 1 mul fe d p
+  p = add p dn_w4_unpack 2 mul np d p
+else
+  p = add p dn_f64_unpack 0 mul fe d p
+  p = add p dn_f64_unpack 1 mul fe d p
+  p = add p dn_f64_unpack 2 mul np d p
+end
+dn_norm_protos np d
+end
+
+fn dn_sp_load_fast ai ulong to void
+dn_sp_load ai true
+end
+
+note Matrix & GEMM marshalling
+fn dn_transpose_wup fe ulong d ulong to void
+for i ulong fe
+  ib = mul i d
+  for j ulong d
+    v = get dn_qwup add ib j
+    put dn_qwup_t add mul j fe i v
+  end
+end
+end
+
+fn dn_tr_get src_id ulong idx ulong to f64
+if eq src_id 0
+  ret get dn_phi idx
+end
+if eq src_id 1
+  ret get dn_dz idx
+end
+if eq src_id 2
+  ret get dn_uhat idx
+end
+if eq src_id 3
+  ret get dn_rtr idx
+end
+ret get dn_pre idx
+end
+
+fn dn_tr_put dst_id ulong idx ulong val f64 to void
+if eq dst_id 0
+  put dn_phit idx val
+  ret
+end
+if eq dst_id 1
+  put dn_dzt idx val
+  ret
+end
+if eq dst_id 2
+  put dn_uhat_t idx val
+  ret
+end
+if eq dst_id 3
+  put dn_rt idx val
+  ret
+end
+put dn_dpret idx val
+end
+
+fn dn_transpose_into dst_id ulong src_id ulong rows ulong cols ulong to void
+for r ulong rows
+  rb = mul r cols
+  for c ulong cols
+    dn_tr_put dst_id add mul c rows r dn_tr_get src_id add rb c
+  end
+end
+end
+
+fn dn_get_mm_a src_id ulong idx ulong to f64
+if eq src_id 0
+  ret get dn_uhat idx
+end
+if eq src_id 1
+  ret get dn_uhat_cal idx
+end
+if eq src_id 2
+  ret get dn_phi idx
+end
+if eq src_id 3
+  ret get dn_dz idx
+end
+if eq src_id 4
+  ret get dn_phit idx
+end
+if eq src_id 5
+  ret get dn_dpret idx
+end
+ret get dn_uema idx
+end
+
+fn dn_get_mm_b src_id ulong idx ulong to f64
+if eq src_id 0
+  ret get dn_qwin idx
+end
+if eq src_id 1
+  ret get dn_qwup_t idx
+end
+if eq src_id 2
+  ret get dn_qwup idx
+end
+if eq src_id 3
+  ret get dn_phit idx
+end
+if eq src_id 4
+  ret get dn_rt idx
+end
+if eq src_id 5
+  ret get dn_dzt idx
+end
+if eq src_id 6
+  ret get dn_uhat_t idx
+end
+ret get dn_proto idx
+end
+
+fn dn_run_gemm a_id ulong b_id ulong m ulong n ulong k ulong to void
+ao = get dn_st 21
+bo = get dn_st 22
+put dn_st 21 0
+put dn_st 22 0
+ca = mul m k
+dn_enlarge_f 9 ca
+for i ulong ca
+  put dn_mm_a i dn_get_mm_a a_id add ao i
+end
+cb = mul n k
+dn_enlarge_f 10 cb
+for j ulong cb
+  put dn_mm_b j dn_get_mm_b b_id add bo j
+end
+dn_enlarge_f 11 mul m n
+dn_be_gemm_abT m n k
+end
+
+note Causal U_hat and U_ema extraction per window
+fn dn_ema_blend db ulong pb ulong d ulong to void
+es2 = 0.0f64
+for j ulong d
+  a = mul 0.75f64 get dn_uema add pb j
+  b = mul 0.25f64 get dn_tmp j
+  ev = add a b
+  put dn_uema add db j ev
+  es2 = add es2 mul ev ev
+end
+inv = div 1.0f64 fsqrt add es2 1.0e-8f64
+for j2 ulong d
+  val = mul get dn_uema add db j2 inv
+  put dn_uema add db j2 val
+end
+end
+
+fn dn_win_norm_tok sb ulong db ulong d ulong is_cal bool first bool to void
+s2 = 0.0f64
+for j ulong d
+  vx = get dn_zbuf add sb j
+  s2 = add s2 mul vx vx
+end
+inv = div 1.0f64 fsqrt add s2 1.0e-8f64
+for j2 ulong d
+  val = mul get dn_zbuf add sb j2 inv
+  put dn_tmp j2 val
+  if is_cal
+    put dn_uhat_cal add db j2 val
+  else
+    put dn_uhat add db j2 val
+  end
+end
+if not is_cal
+  if first
+    for j3 ulong d
+      put dn_uema add db j3 get dn_tmp j3
+    end
+  else
+    dn_ema_blend db sub db d d
+  end
+end
+end
+
+fn dn_win_norm_ema dst_off ulong wct ulong d ulong is_cal bool to void
+for t ulong wct
+  dn_win_norm_tok mul t d add dst_off mul t d d is_cal eq t 0
+end
+end
+
+fn dn_vec_norm_zbuf zb ulong d ulong to f64
+s2 = 0.0f64
+for j ulong d
+  vx = get dn_zbuf add zb j
+  s2 = add s2 mul vx vx
+end
+ret div 1.0f64 fsqrt add s2 1.0e-8f64
+end
+
+fn dn_win_ema_vec t ulong d ulong to void
+zb = mul t d
+inv = dn_vec_norm_zbuf zb d
+if eq t 0
+  for j2 ulong d
+    put dn_tmp j2 mul get dn_zbuf add zb j2 inv
+  end
+  ret
+end
+es2 = 0.0f64
+for j3 ulong d
+  a = mul 0.75f64 get dn_tmp j3
+  b = mul get dn_zbuf add zb j3 inv
+  ev = add a mul 0.25f64 b
+  put dn_tmp add d j3 ev
+  es2 = add es2 mul ev ev
+end
+einv = div 1.0f64 fsqrt add es2 1.0e-8f64
+for j4 ulong d
+  val = mul get dn_tmp add d j4 einv
+  put dn_tmp j4 val
+end
+end
+
+fn dn_max_proto_cos d ulong np ulong to f64
+best = -1.0f64
+for k ulong np
+  pb = mul k d
+  dt = 0.0f64
+  for j ulong d
+    a = get dn_tmp j
+    b = get dn_proto add pb j
+    dt = add dt mul a b
+  end
+  if gt dt best
+    best = dt
+  end
+end
+ret best
+end
+
+fn dn_dot_uema_proto ub ulong pb ulong d ulong to f64
+dt = 0.0f64
+for j ulong d
+  a = get dn_uema add ub j
+  b = get dn_proto add pb j
+  dt = add dt mul a b
+end
+ret dt
+end
+
+fn dn_proto_ff_pass k ulong n ulong d ulong to ulong
+pb = mul k d
+best_i = ulong 0
+best_v = -1.0f64
+for i2 ulong n
+  dist = sub 1.0f64 dn_dot_uema_proto mul i2 d pb d
+  if lt dist get dn_p_mind i2
+    put dn_p_mind i2 dist
+  end
+  if gt get dn_p_mind i2 best_v
+    best_v = get dn_p_mind i2
+    best_i = i2
+  end
+end
+ret best_i
+end
+
+fn dn_proto_ff n ulong np ulong d ulong to void
+r = enlarge dn_p_mind n
+if ne r 0
+  exit 70
+end
+for i ulong n
+  put dn_p_mind i 2.0f64
+end
+for k ulong sub np 1
+  best_i = dn_proto_ff_pass k n d
+  nb = mul add k 1 d
+  sb = mul best_i d
+  for j ulong d
+    v = get dn_uema add sb j
+    put dn_proto add nb j v
+  end
+end
+end
+
+fn dn_argmax_row rb ulong np ulong to ulong
+bk = ulong 0
+bs = -2.0f64
+for k ulong np
+  sc = get dn_mm_c add rb k
+  if gt sc bs
+    bs = sc
+    bk = k
+  end
+end
+ret bk
+end
+
+fn dn_proto_lloyd_assign n ulong np ulong d ulong to void
+for k ulong np
+  put dn_p_cnt k 0
+end
+for x ulong mul np d
+  put dn_p_acc x 0.0f64
+end
+for i ulong n
+  bk = dn_argmax_row mul i np np
+  put dn_p_cnt bk add get dn_p_cnt bk 1
+  ab = mul bk d
+  ub = mul i d
+  for j ulong d
+    av = get dn_p_acc add ab j
+    uv = get dn_uema add ub j
+    put dn_p_acc add ab j add av uv
+  end
+end
+end
+
+fn dn_proto_lloyd_update np ulong d ulong to void
+for k2 ulong np
+  if gt get dn_p_cnt k2 0
+    ab2 = mul k2 d
+    for j2 ulong d
+      v = get dn_p_acc add ab2 j2
+      put dn_proto add ab2 j2 v
+    end
+  end
+end
+end
+
+fn dn_proto_lloyd n ulong np ulong d ulong to void
+r1 = enlarge dn_p_cnt np
+if ne r1 0
+  exit 70
+end
+r2 = enlarge dn_p_acc mul np d
+if ne r2 0
+  exit 70
+end
+for it ulong 3
+  dn_run_gemm 6 7 n np d
+  dn_proto_lloyd_assign n np d
+  dn_proto_lloyd_update np d
+  dn_norm_protos np d
+end
+end
+
+fn dn_build_protos n ulong np ulong d ulong to void
+dn_enlarge_tr 11 mul np d
+for j ulong d
+  put dn_proto j get dn_uema j
+end
+dn_proto_ff n np d
+dn_proto_lloyd n np d
+end
+
+note Cholesky decomposition & solve on dn_chol_g[fe, fe] + dn_chol_b[fe, d] -> dn_wup[fe, d]
+fn dn_chol_dot_fac i2 ulong j ulong fe ulong to f64
+sm = get dn_chol_g add mul i2 fe j
+for k ulong j
+  gik = get dn_chol_g add mul i2 fe k
+  gjk = get dn_chol_g add mul j fe k
+  sm = sub sm mul gik gjk
+end
+ret sm
+end
+
+fn dn_chol_factor fe ulong lam f64 to void
+for i ulong fe
+  ii = add mul i fe i
+  put dn_chol_g ii add get dn_chol_g ii lam
+end
+for i2 ulong fe
+  for j ulong add i2 1
+    sm = dn_chol_dot_fac i2 j fe
+    if eq i2 j
+      if lt sm 1.0e-9f64
+        sm = 1.0e-9f64
+      end
+      put dn_chol_g add mul i2 fe i2 fsqrt sm
+    else
+      diag = get dn_chol_g add mul j fe j
+      put dn_chol_g add mul i2 fe j div sm diag
+    end
+  end
+end
+end
+
+fn dn_chol_dot_fwd c ulong i ulong fe ulong d ulong to f64
+sm = get dn_chol_b add mul i d c
+for k ulong i
+  gik = get dn_chol_g add mul i fe k
+  wk = get dn_wup add mul k d c
+  sm = sub sm mul gik wk
+end
+ret sm
+end
+
+fn dn_chol_fwd_col c ulong fe ulong d ulong to void
+for i ulong fe
+  sm = dn_chol_dot_fwd c i fe d
+  diag = get dn_chol_g add mul i fe i
+  put dn_wup add mul i d c div sm diag
+end
+end
+
+fn dn_chol_dot_bwd c ulong i2 ulong fe ulong d ulong to f64
+sm = get dn_wup add mul i2 d c
+remf = sub sub fe 1 i2
+for k2 ulong remf
+  kk = add add i2 1 k2
+  gki = get dn_chol_g add mul kk fe i2
+  wk = get dn_wup add mul kk d c
+  sm = sub sm mul gki wk
+end
+ret sm
+end
+
+fn dn_chol_bwd_col c ulong fe ulong d ulong to void
+for r ulong fe
+  i2 = sub sub fe 1 r
+  sm2 = dn_chol_dot_bwd c i2 fe d
+  diag2 = get dn_chol_g add mul i2 fe i2
+  put dn_wup add mul i2 d c div sm2 diag2
+end
+end
+
+fn dn_chol_solve fe ulong d ulong to void
+for c ulong d
+  dn_chol_fwd_col c fe d
+  dn_chol_bwd_col c fe d
+end
+end
+
+fn dn_apply_silu_n cnt ulong to void
+dn_enlarge_opt 1 cnt
+for i ulong cnt
+  x = get dn_pre i
+  put dn_phi i mul x ufsig x
+end
+end
+
+fn dn_copy_q_to_master fe ulong d ulong to void
+tot = mul fe d
+for i ulong tot
+  put dn_qwin i get dn_win i
+  put dn_qwup i get dn_wup i
+end
+end
+
+fn dn_copy_best_to_master fe ulong d ulong to void
+tot = mul fe d
+for i ulong tot
+  put dn_win i get dn_bwin i
+  put dn_wup i get dn_bwup i
+end
+end
+
+fn dn_save_best fe ulong d ulong to void
+tot = mul fe d
+for i ulong tot
+  put dn_bwin i get dn_qwin i
+  put dn_bwup i get dn_qwup i
+end
+end
+
+note Windowed Z_edit + lm_bwd accumulation
+fn dn_pack_z_row is_cal bool zb ulong db ulong ob ulong d ulong to void
+for j ulong d
+  a = 0.0f64
+  if is_cal
+    a = get dn_zcal add zb j
+  else
+    a = get dn_ztr add zb j
+  end
+  b = get dn_mm_c add db j
+  put dn_zbuf add ob j add a b
+end
+end
+
+fn dn_pack_z_win is_cal bool off ulong pos ulong wct ulong to void
+d = get dn_st 1
+for t ulong wct
+  if is_cal
+    put dn_tgts t get dn_cal_tgts add pos t
+  else
+    put dn_tgts t get dn_tr_tgts add add off pos t
+  end
+  zb = mul add off add pos t d
+  dn_pack_z_row is_cal zb mul add pos t d mul t d d
+end
+end
+
+fn dn_accum_dz_win pos ulong wct ulong nb ulong to void
+d = get dn_st 1
+sc = div f64 wct f64 nb
+for t ulong wct
+  rb = mul add pos t d
+  ib = mul t d
+  for j ulong d
+    rv = mul get dn_rbuf add ib j sc
+    put dn_dz add rb j rv
+  end
+end
+end
+
+fn dn_eval_z_edit is_cal bool off ulong n ulong want_grad bool to f64
+ls_tot = 0.0f64
+pos = ulong 0
+while lt pos n bound 9223372036854775807
+  wct = sub n pos
+  if gt wct 128
+    wct = 128
+  end
+  dn_pack_z_win is_cal off pos wct
+  lw = dn_be_lm_bwd wct want_grad
+  ls_tot = add ls_tot mul lw f64 wct
+  if want_grad
+    dn_accum_dz_win pos wct n
+  end
+  pos = add pos wct
+end
+ret div ls_tot f64 n
+end
+
+fn dn_eval_batch_edit off ulong nb ulong fe ulong d ulong want_grad bool to f64
+dn_enlarge_opt 0 mul nb fe
+dn_enlarge_opt 1 mul nb fe
+put dn_st 21 mul off d
+put dn_st 22 0
+dn_run_gemm 0 0 nb fe d
+for i ulong mul nb fe
+  x = get dn_mm_c i
+  put dn_pre i x
+  put dn_phi i mul x ufsig x
+end
+dn_transpose_wup fe d
+dn_run_gemm 2 1 nb d fe
+ret dn_eval_z_edit false off nb want_grad
+end
+
+fn dn_copy_split_row is_cal bool sb ulong db ulong d ulong to void
+for j ulong d
+  zv = get dn_zbuf add sb j
+  if is_cal
+    put dn_zcal add db j zv
+  else
+    rv = get dn_rbuf add sb j
+    put dn_ztr add db j zv
+    put dn_rtr add db j rv
+  end
+end
+end
+
+fn dn_store_split_win is_cal bool pos ulong wct ulong d ulong to f64
+ls = 0.0f64
+for t ulong wct
+  ls = add ls get dn_bl t
+  idx = add pos t
+  if is_cal
+    put dn_cal_tgts idx get dn_tgts t
+  else
+    put dn_tr_tgts idx get dn_tgts t
+  end
+  dn_copy_split_row is_cal mul t d mul idx d d
+end
+ret ls
+end
+
+fn dn_collect_split is_cal bool ntot ulong d ulong to f64
+if is_cal
+  dn_enlarge_tr 4 mul ntot d
+  dn_enlarge_tr 5 mul ntot d
+  dn_enlarge_u 9 ntot
+else
+  dn_enlarge_tr 0 mul ntot d
+  dn_enlarge_tr 1 mul ntot d
+  dn_enlarge_tr 2 mul ntot d
+  dn_enlarge_tr 3 mul ntot d
+  dn_enlarge_u 8 ntot
+end
+ls = 0.0f64
+pos = ulong 0
+while lt pos ntot bound 9223372036854775807
+  wct = sub ntot pos
+  if gt wct 128
+    wct = 128
+  end
+  dn_fill_win is_cal pos wct
+  dn_be_win_run not is_cal
+  ls = add ls dn_store_split_win is_cal pos wct d
+  dn_win_norm_ema mul pos d wct d is_cal
+  pos = add pos wct
+end
+ret div ls f64 ntot
+end
+
+fn dn_init_win_sm fe ulong d ulong to void
+dn_enlarge_tr 6 mul fe d
+dn_enlarge_tr 8 mul fe d
+st = ulong 281474976710659
+for i ulong mul fe d
+  st = usmx st
+  if eq and st 1 0
+    put dn_win i 0.5f64
+  else
+    put dn_win i -0.5f64
+  end
+end
+end
+
+fn dn_scale_qwup tot ulong eta f64 to void
+for wi ulong tot
+  val = mul get dn_wup wi eta
+  put dn_qwup wi val
+end
+end
+
+fn dn_scale_wup tot ulong eta f64 to void
+for wi ulong tot
+  val = mul get dn_wup wi eta
+  put dn_wup wi val
+end
+end
+
+fn dn_ridge_linesearch n ulong fe ulong d ulong to void
+ntest = n
+if gt ntest 512
+  ntest = 512
+end
+dn_copy_q_to_master fe d
+dn_enlarge_opt 4 mul ntest d
+ls_b = dn_eval_batch_edit 0 ntest fe d false
+best_eta = 0.0f64
+best_ls = 1.0e30f64
+for sc_i ulong 4
+  eta = 0.05f64
+  if eq sc_i 1
+    eta = 0.15f64
+  end
+  if eq sc_i 2
+    eta = 0.4f64
+  end
+  if eq sc_i 3
+    eta = 1.0f64
+  end
+  dn_scale_qwup mul fe d eta
+  ls = dn_eval_batch_edit 0 ntest fe d false
+  if lt ls best_ls
+    best_ls = ls
+    best_eta = eta
+  end
+end
+if gt best_ls ls_b
+  best_eta = 0.01f64
+end
+dn_scale_wup mul fe d best_eta
+end
+
+fn dn_ridge_init n ulong fe ulong d ulong lam f64 to void
+dn_enlarge_opt 0 mul n fe
+dn_run_gemm 0 0 n fe d
+for i ulong mul n fe
+  put dn_pre i get dn_mm_c i
+end
+dn_apply_silu_n mul n fe
+dn_enlarge_opt 2 mul fe n
+dn_transpose_into 0 0 n fe
+dn_enlarge_opt 15 mul fe fe
+dn_run_gemm 4 3 fe fe n
+for g ulong mul fe fe
+  put dn_chol_g g get dn_mm_c g
+end
+dn_enlarge_opt 8 mul d n
+dn_transpose_into 3 3 n d
+dn_enlarge_opt 16 mul fe d
+dn_run_gemm 4 4 fe d n
+for b ulong mul fe d
+  put dn_chol_b b get dn_mm_c b
+end
+dn_chol_factor fe lam
+dn_enlarge_tr 7 mul fe d
+dn_enlarge_tr 9 mul fe d
+dn_enlarge_tr 10 mul d fe
+dn_chol_solve fe d
+dn_ridge_linesearch n fe d
+end
+
+fn dn_zero_opt tot ulong to void
+dn_enlarge_opt 9 tot
+dn_enlarge_opt 10 tot
+dn_enlarge_opt 11 tot
+dn_enlarge_opt 12 tot
+dn_enlarge_opt 13 tot
+dn_enlarge_opt 14 tot
+for i ulong tot
+  put dn_gwin i 0.0f64
+  put dn_gwup i 0.0f64
+  put dn_m1 i 0.0f64
+  put dn_v1 i 0.0f64
+  put dn_m2 i 0.0f64
+  put dn_v2 i 0.0f64
+end
+end
+
+fn dn_bwd_silu cnt ulong to void
+for i ulong cnt
+  x = get dn_pre i
+  s = ufsig x
+  sp = mul s add 1.0f64 mul x sub 1.0f64 s
+  put dn_pre i mul get dn_mm_c i sp
+end
+end
+
+fn dn_bwd_step off ulong nb ulong fe ulong d ulong to f64
+ls = dn_eval_batch_edit off nb fe d true
+dn_enlarge_opt 3 mul nb fe
+dn_run_gemm 3 2 nb fe d
+dn_bwd_silu mul nb fe
+dn_enlarge_opt 2 mul fe nb
+dn_transpose_into 0 0 nb fe
+dn_enlarge_opt 5 mul d nb
+dn_transpose_into 1 1 nb d
+dn_run_gemm 4 5 fe d nb
+for j ulong mul fe d
+  put dn_gwup j get dn_mm_c j
+end
+dn_enlarge_opt 6 mul fe nb
+dn_transpose_into 4 4 nb fe
+dn_enlarge_opt 7 mul d nb
+dn_transpose_into 2 2 nb d
+put dn_st 22 mul off d
+dn_run_gemm 5 6 fe d nb
+for j2 ulong mul fe d
+  put dn_gwin j2 get dn_mm_c j2
+end
+ret ls
+end
+
+fn dn_adamw_gscale tot ulong to f64
+gn2 = 0.0f64
+for i ulong tot
+  g1 = get dn_gwin i
+  g2 = get dn_gwup i
+  gn2 = add gn2 add mul g1 g1 mul g2 g2
+end
+gn = fsqrt gn2
+if gt gn 5.0f64
+  ret div 5.0f64 gn
+end
+ret 1.0f64
+end
+
+fn dn_adamw_one is_up bool i ulong to void
+g = 0.0f64
+m = 0.0f64
+v = 0.0f64
+w = 0.0f64
+if is_up
+  g = get dn_gwup i
+  m = get dn_m2 i
+  v = get dn_v2 i
+  w = get dn_wup i
+else
+  g = get dn_gwin i
+  m = get dn_m1 i
+  v = get dn_v1 i
+  w = get dn_win i
+end
+g = mul g get dn_c_par 10
+m = add mul 0.9f64 m mul 0.1f64 g
+v = add mul 0.999f64 v mul 0.001f64 mul g g
+mh = div m get dn_c_par 13
+vh = fsqrt div v get dn_c_par 14
+u = div mh add vh 1.0e-8f64
+wn = sub mul w get dn_c_par 12 mul get dn_c_par 11 u
+if is_up
+  put dn_m2 i m
+  put dn_v2 i v
+  put dn_wup i wn
+else
+  put dn_m1 i m
+  put dn_v1 i v
+  put dn_win i wn
+end
+end
+
+fn dn_adamw_update tot ulong step ulong lr f64 wd f64 to void
+put dn_c_par 10 dn_adamw_gscale tot
+put dn_c_par 11 lr
+put dn_c_par 12 sub 1.0f64 mul lr wd
+put dn_c_par 13 sub 1.0f64 ufexp mul f64 step uflog 0.9f64
+put dn_c_par 14 sub 1.0f64 ufexp mul f64 step uflog 0.999f64
+for i ulong tot
+  dn_adamw_one false i
+  dn_adamw_one true i
+end
+end
+
+fn dn_eval_cal_str ncal ulong fe ulong d ulong to f64
+dn_enlarge_opt 0 mul ncal fe
+dn_enlarge_opt 1 mul ncal fe
+dn_run_gemm 1 0 ncal fe d
+for i ulong mul ncal fe
+  x = get dn_mm_c i
+  put dn_phi i mul x ufsig x
+end
+dn_transpose_wup fe d
+dn_run_gemm 2 1 ncal d fe
+ret dn_eval_z_edit true 0 ncal false
+end
+
+fn dn_apply_qat_or_copy do_qat bool fe ulong d ulong to void
+if do_qat
+  dn_w4_qat_arr 0 0 mul fe d
+  dn_w4_qat_arr 1 1 mul fe d
+else
+  dn_copy_q_to_master fe d
+end
+end
+
+fn dn_cryst_epoch ntr ulong fe ulong qat bool lr f64 to f64
+d = get dn_st 1
+pos = ulong 0
+ep_ls = 0.0f64
+while lt pos ntr bound 9223372036854775807
+  nb = sub ntr pos
+  if gt nb 2048
+    nb = 2048
+  end
+  dn_apply_qat_or_copy qat fe d
+  ls = dn_bwd_step pos nb fe d
+  ep_ls = add ep_ls mul ls f64 nb
+  put dn_st 23 add get dn_st 23 1
+  dn_adamw_update mul fe d get dn_st 23 lr get dn_c_par 2
+  pos = add pos nb
+end
+ret div ep_ls f64 ntr
+end
+
+fn dn_ep_lr ep ulong epochs ulong to f64
+ang = mul 3.141592653589793f64 div f64 ep f64 epochs
+sc = add 0.1f64 mul 0.45f64 add 1.0f64 ufcos ang
+ret mul get dn_c_par 0 sc
+end
+
+fn dn_cryst_loop ntr ulong ncal ulong fe ulong epochs ulong has_cal bool do_w4 bool to f64
+d = get dn_st 1
+best_v = 1.0e30f64
+dn_enlarge_tr 12 mul fe d
+dn_enlarge_tr 13 mul fe d
+dn_copy_q_to_master fe d
+dn_save_best fe d
+if has_cal
+  best_v = dn_eval_cal_str ncal fe d
+end
+bmax = ulong 2048
+if gt bmax ntr
+  bmax = ntr
+end
+dn_enlarge_opt 4 mul bmax d
+put dn_st 23 0
+for ep ulong epochs
+  lr = dn_ep_lr ep epochs
+  qat = false
+  if do_w4
+    qat = ge mul ep 3 epochs
+  end
+  vc = dn_cryst_epoch ntr fe qat lr
+  dn_apply_qat_or_copy do_w4 fe d
+  if has_cal
+    vc = dn_eval_cal_str ncal fe d
+  end
+  if lt vc best_v
+    best_v = vc
+    dn_save_best fe d
+  end
+end
+dn_copy_best_to_master fe d
+ret best_v
+end
+
+note CLI Subcommands
+fn dn_cmd_info to void
+if ne ulong argcnt 3
+  exit 2
+end
+dn_open_trunk 2 true false
+dn_put_cstr dn_l_info
+uputu get dn_st 0
+dn_put_cstr dn_l_d
+uputu get dn_st 1
+dn_put_cstr dn_l_h
+uputu get dn_st 2
+dn_put_cstr dn_l_hkv
+uputu get dn_st 3
+dn_put_cstr dn_l_hd
+uputu get dn_st 4
+dn_put_cstr dn_l_f
+uputu get dn_st 5
+dn_put_cstr dn_l_l
+uputu get dn_st 6
+dn_put_cstr dn_l_pay
+uputu get dn_st 12
+dn_put_cstr dn_l_th
+dn_puth16 get dn_st 16
+uputc 10
+uflush
+end
+
+fn dn_cmd_spinfo to void
+if ne ulong argcnt 3
+  exit 2
+end
+dn_sp_load 2 false
+dn_put_cstr dn_l_spi
+uputu get dn_sp_st 2
+dn_put_cstr dn_l_fexp
+uputu get dn_sp_st 3
+dn_put_cstr dn_l_np
+uputu get dn_sp_st 4
+dn_put_cstr dn_l_fl
+uputu get dn_sp_st 1
+dn_put_cstr dn_l_by
+uputu get dn_sp_st 9
+dn_put_cstr dn_l_tau
+dn_putf bitcast f64 get dn_sp_st 5 6
+dn_put_cstr dn_l_th
+dn_puth16 get dn_sp_st 6
+dn_put_cstr dn_l_fnv
+dn_puth16 get dn_sp_st 8
+uputc 10
+uflush
+end
+
+fn dn_base_run_all n ulong to ulong
+ls = 0.0f64
+hits = ulong 0
+pos = ulong 0
+while lt pos n bound 9223372036854775807
+  wct = sub n pos
+  if gt wct 128
+    wct = 128
+  end
+  dn_fill_win false pos wct
+  dn_be_win_run false
+  for t ulong wct
+    ls = add ls get dn_bl t
+    hits = add hits get dn_bh t
+  end
+  pos = add pos wct
+end
+put dn_c_par 8 div ls f64 n
+ret hits
+end
+
+fn dn_cmd_base_eval to void
+na = ulong argcnt
+if and ne na 4 ne na 5
+  exit 2
+end
+dn_open_trunk 2 false true
+t0 = monons
+n = dn_load_u32 3 6
+hits = dn_base_run_all n
+ms = div f64 sub monons t0 1000000.0f64
+mean_ls = get dn_c_par 8
+dn_put_cstr dn_l_bas
+uputu n
+dn_put_cstr dn_l_los
+dn_putf mean_ls 6
+dn_put_cstr dn_l_ppl
+dn_putf ufexp mean_ls 4
+dn_put_cstr dn_l_acc
+dn_putf div f64 hits f64 n 6
+dn_put_cstr dn_l_ms
+dn_putf ms 2
+dn_put_cstr dn_l_th
+dn_puth16 get dn_st 16
+uputc 10
+uflush
+if eq na 5
+  put dn_jpos 0 0
+  dn_jb 123
+  dn_jb 10
+  dn_jhex_kv dn_k_th get dn_st 16 true
+  dn_ju_kv dn_k_nt n true
+  dn_jf_kv dn_k_ls mean_ls 6 true
+  dn_jf_kv dn_k_pp ufexp mean_ls 6 true
+  dn_jf_kv dn_k_ac div f64 hits f64 n 6 true
+  dn_jf_kv dn_k_ms ms 2 true
+  dn_jhex_kv dn_k_lb bitcast ulong mean_ls false
+  dn_jb 125
+  dn_jb 10
+  dn_jwrite 4
+end
+dn_be_close
+end
+
+fn dn_cryst_parse_args na ulong to void
+put dn_st 24 512
+put dn_st 25 64
+put dn_st 26 16
+put dn_st 27 1
+put dn_st 28 0
+put dn_c_par 0 0.003f64
+put dn_c_par 1 1.0f64
+put dn_c_par 2 0.02f64
+i = ulong 5
+while lt i na bound 64
+  if dn_arg_eq i dn_s_f_fexp
+    i = add i 1
+    put dn_st 24 dn_paru i
+  else
+    if dn_arg_eq i dn_s_f_nproto
+      i = add i 1
+      put dn_st 25 dn_paru i
+    else
+      if dn_arg_eq i dn_s_f_epochs
+        i = add i 1
+        put dn_st 26 dn_paru i
+      else
+        if dn_arg_eq i dn_s_f_lr
+          i = add i 1
+          put dn_c_par 0 dn_parf i
+        else
+          if dn_arg_eq i dn_s_f_lam
+            i = add i 1
+            put dn_c_par 1 dn_parf i
+          else
+            if dn_arg_eq i dn_s_f_wd
+              i = add i 1
+              put dn_c_par 2 dn_parf i
+            else
+              if dn_arg_eq i dn_s_f_caldom
+                i = add i 1
+                put dn_st 28 i
+              else
+                if dn_arg_eq i dn_s_f_f64
+                  put dn_st 27 0
+                else
+                  if dn_arg_eq i dn_s_f_w4
+                    put dn_st 27 1
+                  else
+                    exit 2
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  i = add i 1
+end
+end
+
+fn dn_cryst_print ntr ulong tb f64 cb f64 bv f64 dt_ms f64 to void
+dn_put_cstr dn_l_cry
+uputu ntr
+dn_put_cstr dn_l_fexp
+uputu get dn_st 24
+dn_put_cstr dn_l_np
+uputu get dn_st 25
+dn_put_cstr dn_l_trb
+dn_putf tb 6
+dn_put_cstr dn_l_cb
+dn_putf cb 6
+dn_put_cstr dn_l_bst
+dn_putf bv 6
+dn_put_cstr dn_l_by
+uputu get dn_sp_st 9
+dn_put_cstr dn_l_ms
+dn_putf dt_ms 2
+dn_put_cstr dn_l_fnv
+dn_puth16 get dn_sp_st 8
+uputc 10
+uflush
+end
+
+fn dn_cmd_cryst to void
+if lt ulong argcnt 5
+  exit 2
+end
+dn_cryst_parse_args ulong argcnt
+dn_open_trunk 2 false true
+t0 = monons
+d = get dn_st 1
+ntr = dn_load_u32 3 6
+tr_base = dn_collect_split false ntr d
+has_cal = ne get dn_st 28 0
+ncal = ulong 0
+cal_base = tr_base
+if has_cal
+  ncal = dn_load_u32 get dn_st 28 7
+  cal_base = dn_collect_split true ncal d
+end
+fe = get dn_st 24
+np = get dn_st 25
+dn_build_protos ntr np d
+dn_init_win_sm fe d
+dn_ridge_init ntr fe d get dn_c_par 1
+dn_zero_opt mul fe d
+bv = dn_cryst_loop ntr ncal fe get dn_st 26 has_cal ne get dn_st 27 0
+sp_fnv = dn_sp_write 4 get dn_st 27 fe np 1.0f64
+dn_cryst_print ntr tr_base cal_base bv div f64 sub monons t0 1000000.0f64
+dn_be_close
+end
+
+fn dn_collect_cos is_cal bool n ulong d ulong np ulong dst_id ulong to void
+if eq dst_id 0
+  dn_enlarge_opt 17 n
+else
+  dn_enlarge_opt 18 n
+end
+pos = ulong 0
+while lt pos n bound 9223372036854775807
+  wct = sub n pos
+  if gt wct 128
+    wct = 128
+  end
+  dn_fill_win is_cal pos wct
+  dn_be_win_run false
+  for t ulong wct
+    dn_win_ema_vec t d
+    sc = dn_max_proto_cos d np
+    if eq dst_id 0
+      put dn_cos_d add pos t sc
+    else
+      put dn_cos_g add pos t sc
+    end
+  end
+  pos = add pos wct
+end
+end
+
+fn dn_count_above is_g bool n ulong tau f64 to ulong
+c = ulong 0
+for i ulong n
+  v = 0.0f64
+  if is_g
+    v = get dn_cos_g i
+  else
+    v = get dn_cos_d i
+  end
+  if ge v tau
+    c = add c 1
+  end
+end
+ret c
+end
+
+fn dn_max_gcos ng ulong to f64
+gmax = -1.0f64
+for i ulong ng
+  if gt get dn_cos_g i gmax
+    gmax = get dn_cos_g i
+  end
+end
+ret gmax
+end
+
+fn dn_tau_score nd ulong ng ulong tau f64 to f64
+da = dn_count_above false nd tau
+ga = dn_count_above true ng tau
+ret sub div f64 da f64 nd mul 20.0f64 div f64 ga f64 ng
+end
+
+fn dn_choose_tau nd ulong ng ulong margin f64 gmax f64 to f64
+cand = add gmax margin
+if lt cand 0.999f64
+  if gt mul dn_count_above false nd cand 4 nd
+    ret cand
+  end
+end
+best_tau = cand
+best_sc = -1.0e18f64
+for t ulong 400
+  tau = add -0.2f64 mul f64 t 0.003f64
+  sc = dn_tau_score nd ng tau
+  if gt sc best_sc
+    best_sc = sc
+    best_tau = tau
+  end
+end
+if lt best_tau 0.0f64
+  ret 0.0f64
+end
+ret best_tau
+end
+
+fn dn_cmd_cal_cos to void
+na = ulong argcnt
+if and ne na 6 ne na 7
+  exit 2
+end
+margin = 0.005f64
+if eq na 7
+  margin = dn_parf 6
+end
+dn_open_trunk 2 false true
+dn_sp_load_fast 3
+nd = dn_load_u32 4 6
+ng = dn_load_u32 5 7
+dn_collect_cos false nd get dn_sp_st 2 get dn_sp_st 4 0
+dn_collect_cos true ng get dn_sp_st 2 get dn_sp_st 4 1
+gmax = dn_max_gcos ng
+tau = dn_choose_tau nd ng margin gmax
+sp_fnv = dn_sp_write 3 get dn_sp_st 1 get dn_sp_st 3 get dn_sp_st 4 tau
+dn_put_cstr dn_l_cal
+dn_putf tau 6
+dn_put_cstr dn_l_gmx
+dn_putf gmax 6
+dn_put_cstr dn_l_da
+dn_putf div f64 dn_count_above false nd tau f64 nd 6
+dn_put_cstr dn_l_ga
+dn_putf div f64 dn_count_above true ng tau f64 ng 6
+dn_put_cstr dn_l_fnv
+dn_puth16 sp_fnv
+uputc 10
+uflush
+dn_be_close
+end
+
+fn dn_sp_win_prep_a wct ulong d ulong to void
+dn_enlarge_f 9 mul wct d
+for t ulong wct
+  zb = mul t d
+  if eq get dn_active t 0
+    for j ulong d
+      put dn_mm_a add zb j 0.0f64
+    end
+  else
+    inv = dn_vec_norm_zbuf zb d
+    for j3 ulong d
+      val = mul get dn_zbuf add zb j3 inv
+      put dn_mm_a add zb j3 val
+    end
+  end
+end
+end
+
+fn dn_sp_win_apply_delta wct ulong d ulong to void
+for t ulong wct
+  if ne get dn_active t 0
+    zb = mul t d
+    for j ulong d
+      val = add get dn_zbuf add zb j get dn_mm_c add zb j
+      put dn_zbuf add zb j val
+    end
+  end
+end
+end
+
+fn dn_prep_wup_b fe ulong d ulong to void
+dn_enlarge_tr 9 mul fe d
+dn_enlarge_tr 10 mul d fe
+for i ulong mul fe d
+  put dn_qwup i get dn_wup i
+end
+dn_transpose_wup fe d
+dn_enlarge_f 10 mul d fe
+for i2 ulong mul d fe
+  put dn_mm_b i2 get dn_qwup_t i2
+end
+end
+
+fn dn_apply_sp_win wct ulong fe ulong d ulong any_act bool to void
+if not any_act
+  ret
+end
+dn_sp_win_prep_a wct d
+dn_enlarge_f 10 mul fe d
+for i ulong mul fe d
+  put dn_mm_b i get dn_win i
+end
+dn_enlarge_f 11 mul wct fe
+dn_be_gemm_abT wct fe d
+dn_enlarge_f 9 mul wct fe
+for p ulong mul wct fe
+  xv = get dn_mm_c p
+  put dn_mm_a p mul xv ufsig xv
+end
+dn_prep_wup_b fe d
+dn_enlarge_f 11 mul wct d
+dn_be_gemm_abT wct d fe
+dn_sp_win_apply_delta wct d
+end
+
+fn dn_eval_guard_win wct ulong d ulong np ulong tau f64 to bool
+any_act = false
+for t ulong wct
+  dn_win_ema_vec t d
+  if ge dn_max_proto_cos d np tau
+    put dn_active t 1
+    put dn_st 20 add get dn_st 20 1
+    any_act = true
+  else
+    put dn_active t 0
+  end
+end
+ret any_act
+end
+
+fn dn_accum_guard_win wct ulong to void
+sb = 0.0f64
+sg = 0.0f64
+sj = 0.0f64
+hb = ulong 0
+hg = ulong 0
+for t ulong wct
+  sb = add sb get dn_bl t
+  sg = add sg get dn_gl t
+  sj = add sj get dn_jsd t
+  hb = add hb get dn_bh t
+  hg = add hg get dn_gh t
+end
+put dn_c_par 3 add get dn_c_par 3 sb
+put dn_c_par 4 add get dn_c_par 4 sg
+put dn_c_par 7 add get dn_c_par 7 sj
+put dn_st 21 add get dn_st 21 hb
+put dn_st 22 add get dn_st 22 hg
+end
+
+fn dn_eval_guard_split n ulong fe ulong d ulong np ulong tau f64 to void
+put dn_c_par 3 0.0f64
+put dn_c_par 4 0.0f64
+put dn_c_par 5 0.0f64
+put dn_c_par 6 0.0f64
+put dn_c_par 7 0.0f64
+put dn_st 20 0
+put dn_st 21 0
+put dn_st 22 0
+pos = ulong 0
+while lt pos n bound 9223372036854775807
+  wct = sub n pos
+  if gt wct 128
+    wct = 128
+  end
+  dn_fill_win false pos wct
+  dn_be_win_run false
+  any_act = dn_eval_guard_win wct d np tau
+  dn_apply_sp_win wct fe d any_act
+  dn_be_guard_eval_win wct any_act
+  dn_accum_guard_win wct
+  pos = add pos wct
+end
+put dn_c_par 3 div get dn_c_par 3 f64 n
+put dn_c_par 4 div get dn_c_par 4 f64 n
+put dn_c_par 5 div f64 get dn_st 21 f64 n
+put dn_c_par 6 div f64 get dn_st 22 f64 n
+put dn_c_par 7 div get dn_c_par 7 f64 n
+end
+
+fn dn_rcp_b b ulong to void
+p = get dn_rpos 0
+if lt p 4090
+  put dn_rcp p uchar and b 255
+  put dn_rpos 0 add p 1
+end
+end
+
+fn dn_rcp_hex v ulong to void
+dn_rcp_b 48
+dn_rcp_b 120
+for i ulong 16
+  sh = mul sub 15 i 4
+  nib = and shr v sh 15
+  if lt nib 10
+    dn_rcp_b add 48 nib
+  else
+    dn_rcp_b add 87 nib
+  end
+end
+end
+
+fn dn_rcp_u v ulong to void
+if eq v 0
+  dn_rcp_b 48
+  ret
+end
+buf = new uchar 32 0
+n = ulong 0
+x = v
+while gt x 0 bound 64
+  put buf n uchar add 48 rem x 10
+  x = div x 10
+  n = add n 1
+end
+for i ulong n
+  dn_rcp_b ulong get buf sub sub n 1 i
+end
+end
+
+fn dn_fnv_rcp to ulong
+h = DN_FNV_OFF
+n = get dn_rpos 0
+for i ulong n
+  h = mul xor h ulong get dn_rcp i DN_FNV_PRM
+end
+ret h
+end
+
+fn dn_build_guard_rcp nd ulong ng ulong tau f64 to ulong
+put dn_rpos 0 0
+dn_rcp_hex get dn_st 16
+dn_rcp_b 124
+dn_rcp_hex get dn_sp_st 8
+dn_rcp_b 124
+dn_rcp_hex bitcast ulong tau
+dn_rcp_b 124
+dn_rcp_u nd
+dn_rcp_b 124
+dn_rcp_hex bitcast ulong get dn_c_par 9
+dn_rcp_b 124
+dn_rcp_hex bitcast ulong get dn_c_par 10
+dn_rcp_b 124
+dn_rcp_u get dn_st 29
+dn_rcp_b 124
+dn_rcp_u ng
+dn_rcp_b 124
+dn_rcp_hex bitcast ulong get dn_c_par 3
+dn_rcp_b 124
+dn_rcp_hex bitcast ulong get dn_c_par 4
+dn_rcp_b 124
+dn_rcp_u get dn_st 20
+dn_rcp_b 124
+dn_rcp_hex bitcast ulong get dn_c_par 7
+ret dn_fnv_rcp
+end
+
+fn dn_print_guard nd ulong ng ulong tau f64 rcp_h ulong dt_ms f64 to void
+dn_put_cstr dn_l_spg
+dn_putf tau 6
+dn_put_cstr dn_l_db
+dn_putf get dn_c_par 9 6
+dn_put_cstr dn_l_ds
+dn_putf get dn_c_par 10 6
+dn_put_cstr dn_l_dd
+dn_putf sub get dn_c_par 10 get dn_c_par 9 6
+dn_put_cstr dn_l_da
+dn_putf div f64 get dn_st 29 f64 nd 6
+dn_put_cstr dn_l_gb
+dn_putf get dn_c_par 3 6
+dn_put_cstr dn_l_gs
+dn_putf get dn_c_par 4 6
+dn_put_cstr dn_l_gd
+dn_putf sub get dn_c_par 4 get dn_c_par 3 6
+dn_put_cstr dn_l_ga
+dn_putf div f64 get dn_st 20 f64 ng 6
+dn_put_cstr dn_l_gjsd
+dn_putf get dn_c_par 7 6
+dn_put_cstr dn_l_rcp
+dn_puth16 rcp_h
+dn_put_cstr dn_l_ms
+dn_putf dt_ms 2
+uputc 10
+uflush
+end
+
+fn dn_write_guard_json nd ulong ng ulong tau f64 rcp_h ulong dt_ms f64 to void
+put dn_jpos 0 0
+dn_jb 123
+dn_jb 10
+dn_jhex_kv dn_k_th get dn_st 16 true
+dn_jhex_kv dn_k_sf get dn_sp_st 8 true
+dn_ju_kv dn_k_sb get dn_sp_st 9 true
+dn_jf_kv dn_k_ta tau 6 true
+dn_jhex_kv dn_k_tb bitcast ulong tau true
+dn_ju_kv dn_k_dn nd true
+dn_jf_kv dn_k_dbl get dn_c_par 9 6 true
+dn_jf_kv dn_k_dsl get dn_c_par 10 6 true
+dn_jf_kv dn_k_ddl sub get dn_c_par 10 get dn_c_par 9 6 true
+dn_jf_kv dn_k_dbp ufexp get dn_c_par 9 6 true
+dn_jf_kv dn_k_dsp ufexp get dn_c_par 10 6 true
+dn_jf_kv dn_k_dba get dn_c_par 11 6 true
+dn_jf_kv dn_k_dsa get dn_c_par 12 6 true
+dn_ju_kv dn_k_da get dn_st 29 true
+dn_jf_kv dn_k_dar div f64 get dn_st 29 f64 nd 6 true
+dn_jf_kv dn_k_dj get dn_c_par 13 6 true
+dn_jhex_kv dn_k_dbb bitcast ulong get dn_c_par 9 true
+dn_jhex_kv dn_k_dsb bitcast ulong get dn_c_par 10 true
+dn_ju_kv dn_k_gn ng true
+dn_jf_kv dn_k_gbl get dn_c_par 3 6 true
+dn_jf_kv dn_k_gsl get dn_c_par 4 6 true
+dn_jf_kv dn_k_gdl sub get dn_c_par 4 get dn_c_par 3 6 true
+dn_jf_kv dn_k_gbp ufexp get dn_c_par 3 6 true
+dn_jf_kv dn_k_gsp ufexp get dn_c_par 4 6 true
+dn_jf_kv dn_k_gba get dn_c_par 5 6 true
+dn_jf_kv dn_k_gsa get dn_c_par 6 6 true
+dn_ju_kv dn_k_ga get dn_st 20 true
+dn_jf_kv dn_k_gar div f64 get dn_st 20 f64 ng 6 true
+dn_jf_kv dn_k_gj get dn_c_par 7 6 true
+dn_jhex_kv dn_k_gbb bitcast ulong get dn_c_par 3 true
+dn_jhex_kv dn_k_gsb bitcast ulong get dn_c_par 4 true
+dn_jhex_kv dn_k_gjb bitcast ulong get dn_c_par 7 true
+dn_jhex_kv dn_k_rh rcp_h true
+dn_jf_kv dn_k_em dt_ms 2 false
+dn_jb 125
+dn_jb 10
+dn_jwrite 6
+end
+
+fn dn_cmd_spguard_eval to void
+na = ulong argcnt
+if and ne na 6 and ne na 7 ne na 8
+  exit 2
+end
+dn_open_trunk 2 false true
+dn_sp_load_fast 3
+tau = bitcast f64 get dn_sp_st 5
+if eq na 8
+  tau = dn_parf 7
+end
+t0 = monons
+nd = dn_load_u32 4 6
+dn_eval_guard_split nd get dn_sp_st 3 get dn_sp_st 2 get dn_sp_st 4 tau
+put dn_c_par 9 get dn_c_par 3
+put dn_c_par 10 get dn_c_par 4
+put dn_c_par 11 get dn_c_par 5
+put dn_c_par 12 get dn_c_par 6
+put dn_c_par 13 get dn_c_par 7
+put dn_st 29 get dn_st 20
+ng = dn_load_u32 5 6
+dn_eval_guard_split ng get dn_sp_st 3 get dn_sp_st 2 get dn_sp_st 4 tau
+dt_ms = div f64 sub monons t0 1000000.0f64
+rcp_h = dn_build_guard_rcp nd ng tau
+dn_print_guard nd ng tau rcp_h dt_ms
+if ge na 7
+  dn_write_guard_json nd ng tau rcp_h dt_ms
+end
+dn_be_close
+end
+
+fn dn_cmd_swap_bench to void
+na = ulong argcnt
+if and ne na 5 ne na 6
+  exit 2
+end
+iters = ulong 20
+if eq na 6
+  iters = dn_paru 5
+end
+if eq iters 0
+  exit 2
+end
+dn_open_trunk 2 false false
+ba = ulong 0
+bb = ulong 0
+tot_ns = ulong 0
+max_ns = ulong 0
+for it ulong iters
+  ai = ulong 3
+  if ne rem it 2 0
+    ai = 4
+  end
+  t0 = ulong monons
+  dn_sp_load_fast ai
+  dt = sub ulong monons t0
+  tot_ns = add tot_ns dt
+  if gt dt max_ns
+    max_ns = dt
+  end
+  if eq it 0
+    ba = get dn_sp_st 9
+  else
+    if eq it 1
+      bb = get dn_sp_st 9
+    end
+  end
+end
+dn_put_cstr dn_l_swp
+uputu iters
+dn_put_cstr dn_l_ba
+uputu ba
+dn_put_cstr dn_l_bb
+uputu bb
+dn_put_cstr dn_l_mm
+dn_putf div f64 tot_ns mul f64 iters 1000000.0f64 3
+dn_put_cstr dn_l_mx
+dn_putf div f64 max_ns 1000000.0f64 3
+uputc 10
+uflush
+end
+
+fn dn_cmd_dumpk to void
+if ne ulong argcnt 3
+  exit 2
+end
+pl = dn_path_arg 2
+if not dn_be_dump_kernels pl
+  exit 2
+end
+end
+
+fn main to int
+if lt ulong argcnt 2
+  exit 2
+end
+if dn_arg_eq 1 dn_s_info
+  dn_cmd_info
+  ret 0
+end
+if dn_arg_eq 1 dn_s_base
+  dn_cmd_base_eval
+  ret 0
+end
+if dn_arg_eq 1 dn_s_cryst
+  dn_cmd_cryst
+  ret 0
+end
+if dn_arg_eq 1 dn_s_spinfo
+  dn_cmd_spinfo
+  ret 0
+end
+if dn_arg_eq 1 dn_s_calcos
+  dn_cmd_cal_cos
+  ret 0
+end
+if dn_arg_eq 1 dn_s_guard
+  dn_cmd_spguard_eval
+  ret 0
+end
+if dn_arg_eq 1 dn_s_swap
+  dn_cmd_swap_bench
+  ret 0
+end
+if dn_arg_eq 1 dn_s_dumpk
+  dn_cmd_dumpk
+  ret 0
+end
+exit 2
+end

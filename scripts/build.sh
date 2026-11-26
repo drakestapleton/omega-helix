@@ -15,6 +15,8 @@
 #   TARGET=univ        sh scripts/build.sh  # Pure-Omega Universal zero-cap LLM engine (ollm-univ)
 #   TARGET=interchange sh scripts/build.sh  # Pure-Omega Safetensors/HF/GGUF converter (ollm-interchange)
 #   TARGET=aien-m16    sh scripts/build.sh  # Pure-Omega /dev/aien-gpu M16 hardware gate (aien-m16-om)
+#   TARGET=dna         sh scripts/build.sh  # Pure-Omega OLLMBF01 + OLLMSP02 DNA engine (ollm-dna)
+#   TARGET=dna-gb10    sh scripts/build.sh  # Pure-Omega GB10 SM121 OLLMBF01 + OLLMSP02 engine (ollm-dna-gb10)
 #
 # Env:
 #   OMC   Path to seeded omc compiler (auto-detected if unset)
@@ -246,6 +248,39 @@ if [ "$TARGET" = aien-m16 ]; then
   exit 0
 fi
 
+if [ "$TARGET" = dna ]; then
+  u=$src/univ
+  {
+    host_target_hdr
+    printf 'om2\n'
+    cat "$u/umath.om" "$u/spdna.om" "$u/spdna_nogpu.om"
+  } > "$OUT/ollm-dna.om"
+  "$OMC" < "$OUT/ollm-dna.om" > "$OUT/ollm-dna.tmp"
+  chmod +x "$OUT/ollm-dna.tmp"
+  mv -f "$OUT/ollm-dna.tmp" "$OUT/ollm-dna"
+  if [ "$(uname -s)" = Darwin ] && command -v codesign >/dev/null 2>&1; then
+    codesign -s - -f "$OUT/ollm-dna" >/dev/null 2>&1
+  fi
+  printf 'built %s (%s bytes, target=%s, omc=%s)\n' \
+    "$OUT/ollm-dna" "$(wc -c < "$OUT/ollm-dna" | tr -d ' ')" "$TARGET" "$OMC"
+  exit 0
+fi
+
+if [ "$TARGET" = dna-gb10 ]; then
+  u=$src/univ
+  g=$src/gpu
+  {
+    printf 'om2\n'
+    cat "$u/umath.om" "$u/spdna.om" "$g/context.om" "$g/vector.om" "$g/launch.om" "$g/batch.om" "$g/gk.om" "$g/gr.om" "$g/bf_kernels.om" "$g/bf_dna.om"
+  } > "$OUT/ollm-dna-gb10.om"
+  "$OMC" < "$OUT/ollm-dna-gb10.om" > "$OUT/ollm-dna-gb10.tmp"
+  chmod +x "$OUT/ollm-dna-gb10.tmp"
+  mv -f "$OUT/ollm-dna-gb10.tmp" "$OUT/ollm-dna-gb10"
+  printf 'built %s (%s bytes, target=%s, omc=%s)\n' \
+    "$OUT/ollm-dna-gb10" "$(wc -c < "$OUT/ollm-dna-gb10" | tr -d ' ')" "$TARGET" "$OMC"
+  exit 0
+fi
+
 lead=
 pre=
 pool=lpool.om
@@ -305,7 +340,7 @@ om2'
     fi
     ;;
   *)
-    echo "error: unknown TARGET '$TARGET' (expected: gb10, aarch64, macos, macos-metal, x86linux, x86efi, a64efi, tok, wtrain, openwaldo, univ, interchange)" >&2
+    echo "error: unknown TARGET '$TARGET' (expected: gb10, aarch64, macos, macos-metal, x86linux, x86efi, a64efi, tok, wtrain, openwaldo, univ, interchange, aien-m16, dna, dna-gb10)" >&2
     exit 2
     ;;
 esac

@@ -1,0 +1,715 @@
+note SPDX-License-Identifier: Apache-2.0
+note native/gpu/bf_kernels.om: SM121 SASS kernels (slots 88..94) for pure-Omega OLLMBF01 execution.
+note Uses exact gr.om/gk.om encoders, verified via nvdisasm -b SM121 and max_gpr + 3 <= gkgpr.
+
+const BF_K_FIRST ulong 88
+const BF_K_COUNT ulong 7
+text bf_k_mag "OMBFK01"
+global bf_k_hdr uchar 128
+
+fn bf_put4_at buf_off ulong v ulong to void
+for k ulong 4
+  put bf_k_hdr add buf_off k uchar and shr v mul k 8 255
+end
+end
+
+fn bf_put4_io io_off ulong v ulong to void
+for k ulong 4
+  put dn_io add io_off k uchar and shr v mul k 8 255
+end
+end
+
+note 2D grid prologue: 256 threads/CTA, R26=1, R31=-1, R11 = ctaid.x*256 + tid.x
+fn bf_pro2d to void
+gkldc 1 892 false
+gks2r 0 33 true
+gks2r 2 37 true
+gks2r 3 38 true
+gkq 4278482860 27392 134220288 or gkcw 4 2 7 get gkpend 0 8192
+put gkpend 0 4
+gkimadi 11 2 256 0
+gkiadd 11 11 0
+gkmovi 31 4294967295
+gkmovi 26 1
+end
+
+note 88 BF_RMSNORM: 1 warp/row (256 thr/CTA, R4 < ct*32); args: ct*32, X_bf16, G_f32, Y_bf16
+fn bf_k88_c2_s1 to void
+for u uint 2
+  gkimadi add 40 u add 32 u 65536 255
+  gkandi add 48 u add 32 u 4294901760
+  gkffmaf 64 add 40 u add 40 u 64
+  gkffmaf 64 add 48 u add 48 u 64
+end
+end
+
+fn bf_k88_c2_s2 to void
+for u uint 2
+  gkldg64o add 56 mul u 2 14 mul u 256 ne u 0
+end
+for u uint 2
+  gkimadi add 40 u add 32 u 65536 255
+  gkandi add 48 u add 32 u 4294901760
+  gkfmulf add 40 u add 40 u 66
+  gkfmulf add 40 u add 40 u add 56 mul u 2
+  gkfmulf add 48 u add 48 u 66
+  gkfmulf add 48 u add 48 u add 57 mul u 2
+  w = get gkpend 0
+  put gkpend 0 0
+  gkf2fp add 32 u add 48 u add 40 u w
+end
+end
+
+fn bf_k88_small nh uint d2 uint to void
+grrptr 10 1 d2
+grldw 32 10 nh true
+gkmovz 64
+for u uint nh
+  gkimadi add 40 u add 32 u 65536 255
+  gkandi add 48 u add 32 u 4294901760
+  gkffmaf 64 add 40 u add 40 u 64
+  gkffmaf 64 add 48 u add 48 u 64
+end
+grwred 0 0
+gkffmaf 65 64 24 25
+grmufu 66 65 5120
+gkldc64 14 grarg 4
+gkimadw 14 9 8 14
+grrptr 16 5 d2
+for u uint nh
+  gkldg64o 56 14 mul u 256 false
+  gkfmulf add 40 u add 40 u 66
+  gkfmulf add 40 u add 40 u 56
+  gkfmulf add 48 u add 48 u 66
+  gkfmulf add 48 u add 48 u 57
+  w = get gkpend 0
+  put gkpend 0 0
+  gkf2fp add 32 u add 48 u add 40 u w
+end
+grstw 16 32 nh
+gkexit
+end
+
+fn bf_k88_rmsnorm to void
+d = uint get dn_st 1
+d2 = mul d 2
+nh = div d 64
+grrrow256
+gkmovi 24 grf div 1.0f64 f64 d
+gkmovi 25 bitcast uint f32 bitcast f64 get dn_st 9
+if le nh 4
+  bf_k88_small nh d2
+  ret
+end
+it = div nh 2
+grrptr 10 1 d2
+gkmovz 64
+top = grtop 30 it
+grldw 32 10 2 true
+bf_k88_c2_s1
+gradv 10 256
+grbot 30 top
+grwred 0 0
+gkffmaf 65 64 24 25
+grmufu 66 65 5120
+grrptr 10 1 d2
+gkldc64 14 grarg 4
+gkimadw 14 9 8 14
+grrptr 16 5 d2
+top2 = grtop 30 it
+grldw 32 10 2 true
+bf_k88_c2_s2
+grstw 16 32 2
+gradv 10 256
+gradv 14 512
+gradv 16 256
+grbot 30 top2
+gkexit
+end
+
+note 89 BF_SWIGLU: 256 thr/CTA, 8 BF16s/thread; args: n_vec8, G_bf16(in-out), U_bf16
+fn bf_k89_pair u uint to void
+gkimadi 40 add 32 u 65536 255
+gkandi 41 add 32 u 4294901760
+gkimadi 42 add 36 u 65536 255
+gkandi 43 add 36 u 4294901760
+gkfmulf 44 40 29
+grmufu 44 44 2048
+grfadd 44 44 25
+grmufu 44 44 4096
+gkfmulf 44 40 44
+gkfmulf 40 44 42
+gkfmulf 44 41 29
+grmufu 44 44 2048
+grfadd 44 44 25
+grmufu 44 44 4096
+gkfmulf 44 41 44
+gkfmulf 41 44 43
+w = get gkpend 0
+put gkpend 0 0
+gkf2fp add 32 u 41 40 w
+end
+
+fn bf_k89_swiglu to void
+grpro256
+grptr 10 1 4 16
+grptr 12 3 4 16
+gkmovi 25 grf 1.0f64
+gkmovi 29 grf -1.4426950408889634f64
+gkldgqo 32 10 0 true
+gkldgqo 36 12 0 false
+for u uint 4
+  bf_k89_pair u
+end
+gkstgqo 10 32 0 false
+gkexit
+end
+
+note 90 BF_QKNORM_ROPE: grid (div(NH*32+255,256), ct, 1), HD=128
+note args: 0-1 dummy, 2-3 X_bf16, 4-5 G_f32, 6-7 COS_f32, 8-9 SIN_f32, 10 NH, 11 do_norm
+fn bf_k90_rope_sub to void
+gkldc64 16 grarg 6
+gkimadw 16 3 256 16
+gkimadw 16 9 8 16
+gkldg64o 44 16 0 true
+gkldc64 18 grarg 8
+gkimadw 18 3 256 18
+gkimadw 18 9 8 18
+gkldg64o 46 18 0 false
+gkfmulf 50 34 44
+gkfmulf 51 36 46
+grfsub 50 50 51
+gkfmulf 52 36 44
+gkffmaf 52 34 46 52
+gkfmulf 51 35 45
+gkfmulf 53 37 47
+grfsub 51 51 53
+gkfmulf 53 37 45
+gkffmaf 53 35 47 53
+w = get gkpend 0
+put gkpend 0 0
+gkf2fp 32 51 50 w
+gkf2fp 33 53 52 0
+gkstg 10 32 0 true
+gkstg 10 33 128 false
+gkexit
+end
+
+fn bf_k90_qknorm_rope to void
+bf_pro2d
+gkshr 12 11 5
+gkandi 9 11 31
+gkldc 13 grarg 10 false
+gkisetp 0 12 13 6
+gkexitp 0
+gkimad 8 3 13 12
+gkldc64 10 grarg 2
+gkimadw 10 8 256 10
+gkimadw 10 9 4 10
+gkldg 32 10 0 true
+gkldg 33 10 128 false
+gkimadi 34 32 65536 255
+gkandi 35 32 4294901760
+gkimadi 36 33 65536 255
+gkandi 37 33 4294901760
+gkldc 14 grarg 11 false
+gkisetp 1 14 255 2
+mk = grbfwd_mk 1
+gkmovi 24 grf div 1.0f64 128.0f64
+gkmovi 25 bitcast uint f32 bitcast f64 get dn_st 9
+gkfmulf 64 34 34
+gkffmaf 64 35 35 64
+gkffmaf 64 36 36 64
+gkffmaf 64 37 37 64
+grwred 0 0
+gkffmaf 65 64 24 25
+grmufu 66 65 5120
+gkldc64 16 grarg 4
+gkimadw 16 9 8 16
+gkldg64o 40 16 0 true
+gkldg64o 42 16 256 false
+gkfmulf 34 34 66
+gkfmulf 34 34 40
+gkfmulf 35 35 66
+gkfmulf 35 35 41
+gkfmulf 36 36 66
+gkfmulf 36 36 42
+gkfmulf 37 37 66
+gkfmulf 37 37 43
+grbfwd_fx 1 mk
+bf_k90_rope_sub
+end
+
+note 91 BF_GQA_ATTN_HD128: grid (div(H*32+255,256), ct, 1), HD=128
+note args: 0-1 Q, 2-3 K, 4-5 V, 6-7 O, 8 H, 9 HKV, 10 grp_shift
+fn bf_k91_step grp_sh uint k_row uint to void
+gkldg64o 38 14 0 true
+gkldg64o 40 16 0 false
+gkimadi 50 38 65536 255
+gkandi 51 38 4294901760
+gkimadi 52 39 65536 255
+gkandi 53 39 4294901760
+gkfmulf 64 34 50
+gkffmaf 64 35 51 64
+gkffmaf 64 36 52 64
+gkffmaf 64 37 53 64
+grwred 0 0
+gkfmulf 64 64 28
+grfmax 66 44 64
+grfsub 67 44 66
+grmufu 67 67 2048
+grfsub 64 64 66
+grmufu 64 64 2048
+grfadd 44 66 255
+gkfmulf 45 45 67
+grfadd 45 45 64
+gkimadi 54 40 65536 255
+gkandi 55 40 4294901760
+gkimadi 56 41 65536 255
+gkandi 57 41 4294901760
+for o uint 4
+  gkfmulf add 46 o add 46 o 67
+  gkffmaf add 46 o add 54 o 64 add 46 o
+end
+gradv 14 k_row
+gradv 16 k_row
+end
+
+fn bf_k91_gqa_hd128 to void
+h = uint get dn_st 2
+hkv = uint get dn_st 3
+grp = div h hkv
+grp_sh = uint 0
+if eq grp 2
+  grp_sh = 1
+end
+if eq grp 4
+  grp_sh = 2
+end
+if eq grp 8
+  grp_sh = 3
+end
+if eq grp 16
+  grp_sh = 4
+end
+bf_pro2d
+gkshr 12 11 5
+gkandi 9 11 31
+gkmovi 13 h
+gkisetp 0 12 13 6
+gkexitp 0
+gkimadi 8 3 h 12
+gkldc64 10 grarg 0
+gkimadw 10 8 256 10
+gkimadw 10 9 8 10
+gkldg64o 32 10 0 false
+gkimadi 34 32 65536 255
+gkandi 35 32 4294901760
+gkimadi 36 33 65536 255
+gkandi 37 33 4294901760
+gkshr 18 12 grp_sh
+gkldc64 14 grarg 2
+gkimadw 14 18 256 14
+gkimadw 14 9 8 14
+gkldc64 16 grarg 4
+gkimadw 16 18 256 16
+gkimadw 16 9 8 16
+gkmovi 28 grf mul div 1.0f64 fsqrt 128.0f64 1.4426950408889634f64
+gkmovi 44 grf -1.0e30f64
+gkmovz 45
+for i uint 4
+  gkmovz add 46 i
+end
+gkmovi 29 mul hkv 256
+gkiadd 30 3 26
+top = div get gkat 0 16
+bf_k91_step grp_sh mul hkv 256
+grbot 30 top
+grmufu 67 45 4096
+for o uint 4
+  gkfmulf add 46 o add 46 o 67
+end
+w = get gkpend 0
+put gkpend 0 0
+gkf2fp 32 47 46 w
+gkf2fp 33 49 48 0
+gkldc64 10 grarg 6
+gkimadw 10 8 256 10
+gkimadw 10 9 8 10
+gkstg64o 10 32 0 false
+gkexit
+end
+
+note 92 BF_CE_SOFTMAX: 1 warp/row, 128 cols/iter; V % 128 == 0
+note args: 0 R*32, 2-3 logits_f32, 4-5 tgts_u32, 6-7 stats_f32[ct,4], 8-9 dlogits_bf16, 10 write_dlogits
+fn bf_k92_p1_step to void
+gkldgqo 32 10 0 false
+for u uint 4
+  if eq u 0
+    gkiadd 47 45 255
+  else
+    gkiadd 47 47 26
+  end
+  gkiadd 48 47 46
+  grfsetp 1 add 32 u 43 4
+  grfsel 43 add 32 u 43 1
+  grfsel 44 48 44 1
+end
+gkiadd 45 45 27
+end
+
+fn bf_k92_wred_max to void
+grfadd 64 43 255
+grfadd 66 44 255
+for i uint 5
+  o = uint shr 16 i
+  grshfl 65 64 o
+  grshfl 67 66 o
+  grfsetp 1 65 64 4
+  grfsel 64 65 64 1
+  grfsel 66 67 66 1
+end
+grfadd 43 64 255
+gkandi 50 66 8388607
+end
+
+fn bf_k92_p2_step to void
+gkldgqo 32 10 0 false
+for u uint 4
+  gkffmaf add 32 u add 32 u 28 65
+  grmufu add 32 u add 32 u 2048
+  grfsub 41 add 32 u 40
+  grfadd 42 66 41
+  grfsub 66 42 66
+  grfsub 40 66 41
+  grfadd 66 42 255
+end
+end
+
+fn bf_k92_p3_step to void
+gkldgqo 32 10 0 false
+for u uint 4
+  gkffmaf add 32 u add 32 u 28 65
+  grmufu add 32 u add 32 u 2048
+  gkfmulf add 32 u add 32 u 67
+  if eq u 0
+    gkiadd 47 45 255
+  else
+    gkiadd 47 47 26
+  end
+  gkisetp 1 47 20 2
+  grfsub 40 add 32 u 25
+  grfsel add 32 u 40 add 32 u 1
+end
+w = get gkpend 0
+put gkpend 0 0
+gkf2fp 48 33 32 w
+gkf2fp 49 35 34 0
+gkstg64o 18 48 0 false
+gkiadd 45 45 27
+end
+
+fn bf_k92_ce to void
+v = uint get dn_st 0
+v4 = mul v 4
+v2 = mul v 2
+it = div v 128
+grrrow256
+gkmovi 25 grf 1.0f64
+gkmovi 27 128
+gkmovi 28 grf 1.4426950408889634f64
+gkmovi 29 grf -1.4426950408889634f64
+gkmovi 46 1258291200
+grptr 12 3 8 4
+gkldg 20 12 0 false
+grptr 14 1 8 v4
+gkimadw 14 20 4 14
+gkldg 68 14 0 false
+grptr 10 1 8 v4
+gkimadw 10 9 16 10
+gkimadi 45 9 4 255
+gkmovi 43 grf -1.0e30f64
+gkmovi 44 1258291200
+top1 = grtop 30 it
+bf_k92_p1_step
+gradv 10 512
+grbot 30 top1
+bf_k92_wred_max
+gkfmulf 65 43 29
+grptr 10 1 8 v4
+gkimadw 10 9 16 10
+gkmovz 66
+gkmovz 40
+top2 = grtop 30 it
+bf_k92_p2_step
+gradv 10 512
+grbot 30 top2
+grfsub 64 66 40
+grwred 0 0
+grfadd 51 64 255
+grmufu 67 64 4096
+gkldc 52 grarg 10 false
+gkisetp 1 52 255 2
+mk = grbfwd_mk 1
+gkfmulf 65 43 29
+grptr 10 1 8 v4
+gkimadw 10 9 16 10
+grptr 18 7 8 v2
+gkimadw 18 9 8 18
+gkimadi 45 9 4 255
+top3 = grtop 30 it
+bf_k92_p3_step
+gradv 10 512
+gradv 18 256
+grbot 30 top3
+grbfwd_fx 1 mk
+gkisetp 1 9 255 5
+gkexitp 1
+grptr 16 5 8 16
+gkstg 16 43 0 true
+gkstg 16 51 4 true
+gkstg 16 68 8 true
+gkstg 16 50 12 false
+gkexit
+end
+
+note 93 BF_JSD_TWO: 1 warp/row, 128 cols/iter; V % 128 == 0
+note args: 0 R*32, 2-3 G_f32, 4-5 B_f32, 6-7 Tgts, 8-9 BaseSt, 10-11 GuardSt, 12-13 JsdOut
+fn bf_k93_p3_step to void
+gkldgqo 32 10 0 true
+gkldgqo 36 12 0 false
+for u uint 4
+  gkffmaf add 32 u add 32 u 28 65
+  grmufu add 32 u add 32 u 2048
+  gkfmulf add 32 u add 32 u 67
+  gkffmaf add 36 u add 36 u 28 53
+  grmufu add 36 u add 36 u 2048
+  gkfmulf add 36 u add 36 u 54
+  grfadd 56 add 32 u add 36 u
+  gkfmulf 56 56 24
+  grfmax 56 56 27
+  grfmax 57 add 32 u 27
+  grmufu 58 56 4096
+  gkfmulf 57 57 58
+  grmufu 57 57 3072
+  gkfmulf 57 57 add 32 u
+  grfadd 66 66 57
+  grfmax 57 add 36 u 27
+  gkfmulf 57 57 58
+  grmufu 57 57 3072
+  gkfmulf 57 57 add 36 u
+  grfadd 66 66 57
+end
+end
+
+fn bf_k93_jsd_head to void
+v4 = mul uint get dn_st 0 4
+grrrow256
+gkmovi 24 grf 0.5f64
+gkmovi 25 grf 0.34657359027997264f64
+gkmovi 27 grf 1.0e-30f64
+gkmovi 28 grf 1.4426950408889634f64
+gkmovi 29 grf -1.4426950408889634f64
+gkmovi 46 1258291200
+grptr 12 5 8 4
+gkldg 20 12 0 false
+grptr 14 1 8 v4
+gkimadw 14 20 4 14
+gkldg 68 14 0 false
+grptr 10 1 8 v4
+gkimadw 10 9 16 10
+gkimadi 45 9 4 255
+gkmovi 43 grf -1.0e30f64
+gkmovi 44 1258291200
+end
+
+fn bf_k93_jsd to void
+v = uint get dn_st 0
+v4 = mul v 4
+it = div v 128
+bf_k93_jsd_head
+gkmovi 27 128
+top1 = grtop 30 it
+bf_k92_p1_step
+gradv 10 512
+grbot 30 top1
+bf_k92_wred_max
+gkmovi 27 grf 1.0e-30f64
+gkfmulf 65 43 29
+grptr 10 1 8 v4
+gkimadw 10 9 16 10
+gkmovz 66
+gkmovz 40
+top2 = grtop 30 it
+bf_k92_p2_step
+gradv 10 512
+grbot 30 top2
+grfsub 64 66 40
+grwred 0 0
+grfadd 51 64 255
+grmufu 67 64 4096
+grptr 16 7 8 16
+gkldg 52 16 0 true
+gkldg 53 16 4 false
+gkfmulf 55 52 29
+grmufu 54 53 4096
+grfadd 53 55 255
+gkfmulf 65 43 29
+grptr 10 1 8 v4
+gkimadw 10 9 16 10
+grptr 12 3 8 v4
+gkimadw 12 9 16 12
+gkmovz 66
+top3 = grtop 30 it
+bf_k93_p3_step
+gradv 10 512
+gradv 12 512
+grbot 30 top3
+grfadd 64 66 255
+grwred 0 0
+gkfmulf 64 64 25
+gkisetp 1 9 255 5
+gkexitp 1
+grptr 16 9 8 16
+gkstg 16 43 0 true
+gkstg 16 51 4 true
+gkstg 16 68 8 true
+gkstg 16 50 12 true
+grptr 18 11 8 4
+gkstg 18 64 0 false
+gkexit
+end
+
+note 94 BF_EMBED_GATHER: grid (div(d_vec8+255,256), ct, 1), 8 BF16s/thread
+note args: 0 d_vec8, 2-3 E_bf16, 4-5 Toks_u32, 6-7 Out_bf16, 8 D_bytes
+fn bf_k94_embed to void
+bf_pro2d
+gkldc 12 grarg 0 false
+gkisetp 0 11 12 6
+gkexitp 0
+gkldc 13 grarg 8 false
+gkldc64 14 grarg 4
+gkimadw 14 3 4 14
+gkldg 15 14 0 false
+gkldc64 16 grarg 2
+gkimadwr 16 15 13 16
+gkimadw 16 11 16 16
+gkldgqo 32 16 0 false
+gkldc64 18 grarg 6
+gkimadwr 18 3 13 18
+gkimadw 18 11 16 18
+gkstgqo 18 32 0 false
+gkexit
+end
+
+fn bf_reg_slot id uint thr uint gpr uint to bool
+if gt get gkat 0 mul ulong add id 1 16384
+  ret false
+end
+put gkthr id thr
+put gkgpr id gpr
+put gksm id 0
+ret true
+end
+
+fn bf_emit_all to bool
+gkslot 88
+bf_k88_rmsnorm
+if not bf_reg_slot 88 256 72
+  ret false
+end
+gkslot 89
+bf_k89_swiglu
+if not bf_reg_slot 89 256 72
+  ret false
+end
+gkslot 90
+bf_k90_qknorm_rope
+if not bf_reg_slot 90 256 72
+  ret false
+end
+gkslot 91
+bf_k91_gqa_hd128
+if not bf_reg_slot 91 256 72
+  ret false
+end
+gkslot 92
+bf_k92_ce
+if not bf_reg_slot 92 256 80
+  ret false
+end
+gkslot 93
+bf_k93_jsd
+if not bf_reg_slot 93 256 80
+  ret false
+end
+gkslot 94
+bf_k94_embed
+if not bf_reg_slot 94 256 72
+  ret false
+end
+ret true
+end
+
+fn bf_dump_write_slot fd int id ulong fpos ulong to ulong
+off = mul id 16384
+for i ulong 16384
+  put dn_io i get gkcode add off i
+end
+p = ulong 0
+while lt p 16384 bound 1000
+  w = pwrite fd dn_io p sub 16384 p long add fpos p
+  if le w 0
+    ret 0
+  end
+  p = add p ulong w
+end
+ret 16384
+end
+
+fn bf_dump_kernels_file path_len ulong to bool
+put dn_st 0 151936
+put dn_st 1 2560
+put dn_st 2 32
+put dn_st 3 8
+put dn_st 4 128
+put dn_st 5 9728
+put dn_st 9 bitcast ulong 1.0e-6f64
+if not bf_emit_all
+  ret false
+end
+for i ulong 128
+  put bf_k_hdr i 0
+end
+for c ulong len bf_k_mag
+  put bf_k_hdr c get bf_k_mag c
+end
+bf_put4_at 8 BF_K_COUNT
+bf_put4_at 12 BF_K_FIRST
+for s ulong BF_K_COUNT
+  id = add BF_K_FIRST s
+  bo = add 16 mul s 16
+  bf_put4_at bo id
+  bf_put4_at add bo 4 ulong get gkgpr id
+  bf_put4_at add bo 8 ulong get gkthr id
+  bf_put4_at add bo 12 16384
+end
+fd = int fopen dn_path 0 path_len 577 420
+if lt fd 0
+  ret false
+end
+w0 = pwrite fd bf_k_hdr 0 128 0
+if ne w0 128
+  fd = int fclose fd
+  ret false
+end
+for s2 ulong BF_K_COUNT
+  if eq bf_dump_write_slot fd add BF_K_FIRST s2 add 128 mul s2 16384 0
+    fd = int fclose fd
+    ret false
+  end
+end
+fd = int fsync fd
+fd = int fclose fd
+ret true
+end
