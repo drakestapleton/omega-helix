@@ -1,0 +1,586 @@
+note SPDX-License-Identifier: Apache-2.0
+note native/univ/spdna_nogpu.om: CPU backend hooks for portable ollm-dna (TARGET=dna).
+note Implements the dn_be_* interface using pure-Omega CPU f64/f32/bf16 compute.
+
+global dn_cpul f64 *
+global dn_cpup f64 *
+
+fn dn_be_is_gpu to bool
+ret false
+end
+
+fn dn_be_dump_kernels path_len ulong to bool
+ret false
+end
+
+fn dn_be_open_stream fd int pb ulong to void
+pos = ulong 256
+remb = pb
+while gt remb 0 bound 9223372036854775807
+  cn = remb
+  if gt cn DN_CHUNK
+    cn = DN_CHUNK
+  end
+  dn_pread_all fd pos cn
+  off = sub pos 256
+  for i ulong cn bound 1048576
+    bt = get dn_io i
+    put dn_mem add off i bt
+  end
+  pos = add pos cn
+  remb = sub remb cn
+end
+end
+
+fn dn_be_open to void
+pb = get dn_st 12
+r = enlarge dn_mem pb
+if ne r 0
+  exit 70
+end
+dn_be_open_stream int get dn_st 18 pb
+v = get dn_st 0
+t = get dn_st 10
+if eq t 0
+  t = 128
+end
+r = enlarge dn_cpul mul t v
+if ne r 0
+  exit 70
+end
+r = enlarge dn_cpup mul t v
+if ne r 0
+  exit 70
+end
+end
+
+fn dn_be_close to void
+end
+
+fn dn_be_bf16 off ulong idx ulong to f64
+o = add off mul idx 2
+hi = ulong get dn_mem add o 1
+lo = ulong get dn_mem o
+ret ubf16_to_f64 or shl hi 8 lo
+end
+
+fn dn_be_f32 off ulong idx ulong to f64
+o = add off mul idx 4
+u = ulong get dn_mem o
+u = or u shl ulong get dn_mem add o 1 8
+u = or u shl ulong get dn_mem add o 2 16
+u = or u shl ulong get dn_mem add o 3 24
+ret f64 bitcast f32 uint u
+end
+
+fn dn_be_dot_bf16 xb ulong woff ulong wr ulong k ulong to f64
+acc = 0.0f64
+for j ulong k
+  xv = get dn_act add xb j
+  wv = dn_be_bf16 woff add wr j
+  acc = add acc mul xv wv
+end
+ret acc
+end
+
+fn dn_be_rms_row xb ulong goff ulong yb ulong d ulong to void
+s2 = 0.0f64
+for j ulong d
+  vx = get dn_act add xb j
+  s2 = add s2 mul vx vx
+end
+inv = div 1.0f64 fsqrt add div s2 f64 d bitcast f64 get dn_st 9
+for j2 ulong d
+  gv = dn_be_f32 goff j2
+  xv = mul get dn_act add xb j2 inv
+  put dn_act add yb j2 mul xv gv
+end
+end
+
+fn dn_be_rms xoff ulong goff ulong yoff ulong ct ulong d ulong to void
+for t ulong ct
+  dn_be_rms_row add xoff mul t d goff add yoff mul t d d
+end
+end
+
+fn dn_be_mat_row xb ulong woff ulong yb ulong k ulong n ulong add_into bool to void
+for o ulong n
+  acc = dn_be_dot_bf16 xb woff mul o k k
+  if add_into
+    cur = get dn_act add yb o
+    put dn_act add yb o add cur acc
+  else
+    put dn_act add yb o acc
+  end
+end
+end
+
+fn dn_be_mat xoff ulong woff ulong yoff ulong m ulong k ulong n ulong to void
+for i ulong m
+  dn_be_mat_row add xoff mul i k woff add yoff mul i n k n false
+end
+end
+
+fn dn_be_mat_add xoff ulong woff ulong yoff ulong m ulong k ulong n ulong to void
+for i ulong m
+  dn_be_mat_row add xoff mul i k woff add yoff mul i n k n true
+end
+end
+
+fn dn_be_qkn_one xb ulong noff ulong hd ulong to void
+s2 = 0.0f64
+for j ulong hd
+  v = get dn_act add xb j
+  s2 = add s2 mul v v
+end
+inv = div 1.0f64 fsqrt add div s2 f64 hd bitcast f64 get dn_st 9
+for j2 ulong hd
+  gv = dn_be_f32 noff j2
+  xv = mul get dn_act add xb j2 inv
+  put dn_act add xb j2 mul xv gv
+end
+end
+
+fn dn_be_qkn_row xoff ulong noff ulong ct ulong nh ulong hd ulong to void
+if eq and get dn_st 7 8 0
+  ret
+end
+row_w = mul nh hd
+for t ulong ct
+  tb = add xoff mul t row_w
+  for h ulong nh
+    dn_be_qkn_one add tb mul h hd noff hd
+  end
+end
+end
+
+fn dn_be_rope_pair p0 ulong p1 ulong r_i ulong to void
+c = get dn_rcos r_i
+s = get dn_rsin r_i
+x0 = get dn_act p0
+x1 = get dn_act p1
+r0 = sub mul x0 c mul x1 s
+put dn_act p0 r0
+r1 = add mul x1 c mul x0 s
+put dn_act p1 r1
+end
+
+fn dn_be_rope_vec vb ulong pos ulong hd ulong to void
+he = div hd 2
+rb = mul pos he
+for i ulong he
+  p0 = add vb i
+  dn_be_rope_pair p0 add p0 he add rb i
+end
+end
+
+fn dn_be_rope_row xoff ulong ct ulong nh ulong hd ulong to void
+row_w = mul nh hd
+for t ulong ct
+  tb = add xoff mul t row_w
+  for h ulong nh
+    dn_be_rope_vec add tb mul h hd t hd
+  end
+end
+end
+
+fn dn_be_dot_act qb ulong kb ulong to f64
+sc = 0.0f64
+for c ulong get dn_st 4
+  qa = get dn_act add qb c
+  ka = get dn_act add kb c
+  sc = add sc mul qa ka
+end
+ret sc
+end
+
+fn dn_be_attn_scores qoff ulong koff ulong t ulong hi ulong kh ulong to f64
+qb = add qoff add mul t get dn_st 13 mul hi get dn_st 4
+k0 = add koff mul kh get dn_st 4
+invsq = div 1.0f64 fsqrt f64 get dn_st 4
+mx = -1.0e300f64
+for j ulong add t 1
+  kb = add k0 mul j get dn_st 14
+  sc = mul dn_be_dot_act qb kb invsq
+  put dn_tmp j sc
+  if gt sc mx
+    mx = sc
+  end
+end
+ret mx
+end
+
+fn dn_be_attn_accum ob ulong vb ulong pw f64 to void
+for c ulong get dn_st 4
+  cur = get dn_act add ob c
+  vv = get dn_act add vb c
+  put dn_act add ob c add cur mul pw vv
+end
+end
+
+fn dn_be_attn_smx t ulong mx f64 to f64
+sm = 0.0f64
+for j ulong add t 1
+  w = ufexp sub get dn_tmp j mx
+  put dn_tmp j w
+  sm = add sm w
+end
+ret div 1.0f64 sm
+end
+
+fn dn_be_attn_val v0 ulong ob ulong t ulong invs f64 to void
+for c ulong get dn_st 4
+  put dn_act add ob c 0.0f64
+end
+for j2 ulong add t 1
+  pw = mul get dn_tmp j2 invs
+  dn_be_attn_accum ob add v0 mul j2 get dn_st 14 pw
+end
+end
+
+fn dn_be_attn_pos qoff ulong koff ulong voff ulong ooff ulong t ulong hi ulong to void
+kh = div hi div get dn_st 2 get dn_st 3
+invs = dn_be_attn_smx t dn_be_attn_scores qoff koff t hi kh
+ob = add ooff add mul t get dn_st 13 mul hi get dn_st 4
+v0 = add voff mul kh get dn_st 4
+dn_be_attn_val v0 ob t invs
+end
+
+fn dn_be_attn qoff ulong koff ulong voff ulong ooff ulong ct ulong to void
+hh = get dn_st 2
+for hi ulong hh
+  for t ulong ct
+    dn_be_attn_pos qoff koff voff ooff t hi
+  end
+end
+end
+
+fn dn_be_swiglu goff ulong uoff ulong n ulong to void
+for i ulong n
+  g = get dn_act add goff i
+  u = get dn_act add uoff i
+  val = mul mul g ufsig g u
+  put dn_act add goff i val
+end
+end
+
+fn dn_be_lay_qkv b ulong ct ulong to void
+d = get dn_st 1
+qd = get dn_st 13
+kvd = get dn_st 14
+aa = mul ct mul d 2
+dn_be_rms 0 get dn_woff b aa ct d
+qa = mul ct mul d 3
+dn_be_mat aa get dn_woff add b 1 qa ct d qd
+qa = add qa mul ct qd
+dn_be_mat aa get dn_woff add b 2 qa ct d kvd
+qa = add qa mul ct kvd
+dn_be_mat aa get dn_woff add b 3 qa ct d kvd
+end
+
+fn dn_be_lay_qkr b ulong ct ulong to void
+qa = mul ct mul get dn_st 1 3
+ka = add qa mul ct get dn_st 13
+wo = get dn_woff add b 5
+dn_be_qkn_row qa wo ct get dn_st 2 get dn_st 4
+wo = get dn_woff add b 6
+dn_be_qkn_row ka wo ct get dn_st 3 get dn_st 4
+dn_be_rope_row qa ct get dn_st 2 get dn_st 4
+dn_be_rope_row ka ct get dn_st 3 get dn_st 4
+end
+
+fn dn_be_lay_attn b ulong ct ulong to void
+dn_be_lay_qkv b ct
+dn_be_lay_qkr b ct
+qa = mul ct mul get dn_st 1 3
+ka = add qa mul ct get dn_st 13
+va = add ka mul ct get dn_st 14
+oa = add va mul ct get dn_st 14
+dn_be_attn qa ka va oa ct
+dn_be_mat_add oa get dn_woff add b 4 0 ct get dn_st 13 get dn_st 1
+end
+
+fn dn_be_lay_ffn b ulong ct ulong to void
+d = get dn_st 1
+f = get dn_st 5
+aa = mul ct mul d 2
+qw = add mul d 3 mul get dn_st 13 2
+qw = add qw mul get dn_st 14 2
+ga = mul ct qw
+ua = add ga mul ct f
+dn_be_rms 0 get dn_woff add b 7 aa ct d
+dn_be_mat aa get dn_woff add b 8 ga ct d f
+dn_be_mat aa get dn_woff add b 9 ua ct d f
+dn_be_swiglu ga ua mul ct f
+dn_be_mat_add ga get dn_woff add b 10 0 ct f d
+end
+
+fn dn_be_emb ct ulong to void
+d = get dn_st 1
+eo = get dn_woff 0
+for t ulong ct
+  tok = get dn_toks t
+  tb = mul t d
+  eb = mul tok d
+  for j ulong d
+    wv = dn_be_bf16 eo add eb j
+    put dn_act add tb j wv
+  end
+end
+end
+
+fn dn_be_trunk_z ct ulong zoff ulong to void
+dn_be_emb ct
+for l ulong get dn_st 6
+  b = add 8 mul l 24
+  dn_be_lay_attn b ct
+  dn_be_lay_ffn b ct
+end
+dn_be_rms 0 get dn_woff 2 zoff ct get dn_st 1
+end
+
+fn dn_be_logits_fill zb ulong lb ulong v ulong d ulong to f64
+lmw = dn_lmw_off
+mx = -1.0e300f64
+best = ulong 0
+for c ulong v
+  acc = dn_be_dot_bf16 zb lmw mul c d d
+  put dn_cpul add lb c acc
+  if or eq c 0 gt acc mx
+    mx = acc
+    best = c
+  end
+end
+put dn_tmp 0 f64 best
+ret mx
+end
+
+fn dn_be_lm_res_add rb ulong lmw ulong cr ulong d ulong rv f64 to void
+for j ulong d
+  cur = get dn_rbuf add rb j
+  wv = dn_be_bf16 lmw add cr j
+  put dn_rbuf add rb j add cur mul rv wv
+end
+end
+
+fn dn_be_lm_res t ulong v ulong d ulong to void
+lmw = dn_lmw_off
+lb = mul t v
+yt = get dn_tgts t
+rb = mul t d
+for j ulong d
+  put dn_rbuf add rb j 0.0f64
+end
+for c ulong v
+  rv = sub 0.0f64 get dn_cpup add lb c
+  if eq c yt
+    rv = add rv 1.0f64
+  end
+  if gt fabs rv 1.0e-12
+    dn_be_lm_res_add rb lmw mul c d d rv
+  end
+end
+end
+
+fn dn_be_smx_norm lb ulong v ulong mx f64 to f64
+sm = 0.0f64
+for c ulong v
+  w = ufexp sub get dn_cpul add lb c mx
+  put dn_cpup add lb c w
+  sm = add sm w
+end
+invs = div 1.0f64 sm
+for c2 ulong v
+  pv = mul get dn_cpup add lb c2 invs
+  put dn_cpup add lb c2 pv
+end
+ret sm
+end
+
+fn dn_be_logits_row zoff ulong t ulong need_res bool to void
+v = get dn_st 0
+d = get dn_st 1
+lb = mul t v
+mx = dn_be_logits_fill add zoff mul t d lb v d
+best = ulong long get dn_tmp 0
+sm = dn_be_smx_norm lb v mx
+yt = get dn_tgts t
+ly = get dn_cpul add lb yt
+lsm = uflog sm
+loss = sub add mx lsm ly
+put dn_bl t loss
+if eq best yt
+  put dn_bh t 1
+else
+  put dn_bh t 0
+end
+if need_res
+  dn_be_lm_res t v d
+end
+end
+
+fn dn_be_copy_act_to_z zoff ulong ct ulong d ulong to void
+for t ulong ct
+  zb = add zoff mul t d
+  ob = mul t d
+  for j ulong d
+    zv = get dn_act add zb j
+    put dn_zbuf add ob j zv
+  end
+end
+end
+
+fn dn_be_copy_z_to_act zoff ulong ct ulong d ulong to void
+for t ulong ct
+  zb = add zoff mul t d
+  ib = mul t d
+  for j ulong d
+    zv = get dn_zbuf add ib j
+    put dn_act add zb j zv
+  end
+end
+end
+
+fn dn_be_win_run need_res bool to void
+ct = get dn_st 10
+d = get dn_st 1
+zoff = mul ct mul d 3
+dn_be_trunk_z ct zoff
+dn_be_copy_act_to_z zoff ct d
+for t ulong ct
+  dn_be_logits_row zoff t need_res
+end
+end
+
+fn dn_be_lm_bwd_scale n ulong d ulong to void
+for t ulong n
+  rb = mul t d
+  for j ulong d
+    rv = div sub 0.0f64 get dn_rbuf add rb j f64 n
+    put dn_rbuf add rb j rv
+  end
+end
+end
+
+fn dn_be_lm_bwd n ulong want_grad bool to f64
+d = get dn_st 1
+zoff = mul n mul d 3
+dn_be_copy_z_to_act zoff n d
+for t ulong n
+  dn_be_logits_row zoff t want_grad
+end
+ls = 0.0f64
+for t2 ulong n
+  ls = add ls get dn_bl t2
+end
+if want_grad
+  dn_be_lm_bwd_scale n d
+end
+ret div ls f64 n
+end
+
+fn dn_be_guard_fill zb ulong d ulong v ulong to f64
+lmw = dn_lmw_off
+mx = -1.0e300f64
+best = ulong 0
+for c ulong v
+  acc = dn_be_dot_bf16 zb lmw mul c d d
+  put dn_tmp c acc
+  if or eq c 0 gt acc mx
+    mx = acc
+    best = c
+  end
+end
+put dn_st 25 best
+ret mx
+end
+
+fn dn_be_guard_jsd lb ulong v ulong invs f64 to f64
+jsd = 0.0f64
+for c ulong v
+  p0 = get dn_cpup add lb c
+  p1 = mul get dn_tmp c invs
+  pm = mul 0.5f64 add p0 p1
+  if gt p0 1.0e-30f64
+    r0 = uflog div p0 pm
+    k0 = mul 0.5f64 mul p0 r0
+    jsd = add jsd k0
+  end
+  if gt p1 1.0e-30f64
+    r1 = uflog div p1 pm
+    k1 = mul 0.5f64 mul p1 r1
+    jsd = add jsd k1
+  end
+end
+if lt jsd 0.0f64
+  jsd = 0.0f64
+end
+ret jsd
+end
+
+fn dn_be_guard_tok zoff ulong t ulong d ulong v ulong to void
+mx = dn_be_guard_fill add zoff mul t d d v
+sm = 0.0f64
+for c ulong v
+  w = ufexp sub get dn_tmp c mx
+  put dn_tmp c w
+  sm = add sm w
+end
+invs = div 1.0f64 sm
+yt = get dn_tgts t
+pyt = mul get dn_tmp yt invs
+if lt pyt 1.0e-30f64
+  pyt = 1.0e-30f64
+end
+loss = sub 0.0f64 uflog pyt
+put dn_gl t loss
+if eq get dn_st 25 yt
+  put dn_gh t 1
+else
+  put dn_gh t 0
+end
+if eq get dn_active t 0
+  put dn_jsd t 0.0f64
+else
+  put dn_jsd t dn_be_guard_jsd mul t v v invs
+end
+end
+
+fn dn_be_guard_eval_win ct ulong any_act bool to void
+if not any_act
+  for t ulong ct
+    put dn_gl t get dn_bl t
+    put dn_gh t get dn_bh t
+    put dn_jsd t 0.0f64
+  end
+  ret
+end
+d = get dn_st 1
+v = get dn_st 0
+zoff = mul ct mul d 3
+dn_be_copy_z_to_act zoff ct d
+for t ulong ct
+  dn_be_guard_tok zoff t d v
+end
+end
+
+fn dn_be_gemm_dot ab ulong bb ulong k ulong to f64
+acc = 0.0f64
+for j ulong k
+  av = get dn_mm_a add ab j
+  bv = get dn_mm_b add bb j
+  acc = add acc mul av bv
+end
+ret acc
+end
+
+fn dn_be_gemm_abT m ulong n ulong k ulong to void
+for i ulong m
+  ab = mul i k
+  cb = mul i n
+  for o ulong n
+    dp = dn_be_gemm_dot ab mul o k k
+    put dn_mm_c add cb o dp
+  end
+end
+end

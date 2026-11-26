@@ -1,0 +1,802 @@
+note SPDX-License-Identifier: Apache-2.0
+note native/gpu/bf_dna.om: GB10 SM121 GPU backend for ollm-dna (TARGET=dna-gb10).
+note Zero CUDA/libc; implements dn_be_* over gk.om / bf_kernels.om / batch.om.
+
+global bf_st ulong 32
+note bf_st: 0=mw_id, 1=wbase_va, 2=gpu_open, 3=batch_mode
+global bf_ao ulong 32
+note bf_ao byte offsets inside arena (gbmem 5):
+note 0=H 1=XN 2=Q 3=K 4=V 5=O 6=G 7=U 8=Z 9=DZ 10=COS 11=SIN 12=TOKS 13=TGTS 14=ST0 15=ST1 16=JSD 17=DL 18=LB 19=LG 20=SCR 21=SCR_CAP 22=GRP_SH
+
+fn gbpre to void
+end
+
+fn gbpost to bool
+ret true
+end
+
+fn dn_be_is_gpu to bool
+ret true
+end
+
+fn dn_be_dump_kernels path_len ulong to bool
+ret bf_dump_kernels_file path_len
+end
+
+fn bf_fail_stop code ulong to void
+c = nvstop
+exit code
+end
+
+fn bf_u32_to_io o ulong v ulong to void
+put dn_io o uchar and v 255
+put dn_io add o 1 uchar and shr v 8 255
+put dn_io add o 2 uchar and shr v 16 255
+put dn_io add o 3 uchar and shr v 24 255
+end
+
+fn bf_u16_to_io o ulong v ulong to void
+put dn_io o uchar and v 255
+put dn_io add o 1 uchar and shr v 8 255
+end
+
+fn bf_io_u32 o ulong to ulong
+v = ulong get dn_io o
+v = or v shl ulong get dn_io add o 1 8
+v = or v shl ulong get dn_io add o 2 16
+ret or v shl ulong get dn_io add o 3 24
+end
+
+fn bf_io_u16 o ulong to ulong
+v = ulong get dn_io o
+ret or v shl ulong get dn_io add o 1 8
+end
+
+fn bf_aptr idx ulong to ulong
+ret add gkbase get bf_ao idx
+end
+
+fn bf_wptr sl ulong to ulong
+ret add get bf_st 1 get dn_woff sl
+end
+
+fn bf_pt s uint addr ulong to void
+put gkarg s gblo addr
+put gkarg add s 1 gbhi addr
+end
+
+fn bf_launch id uint na uint gx ulong gy ulong to void
+put gkna 0 na
+if not gklaunch id uint gx uint gy 1
+  bf_fail_stop add 1100 ulong id
+end
+end
+
+fn bf_al4k v ulong to ulong
+ret mul div add v 4095 4096 4096
+end
+
+fn bf_plan_arena to ulong
+v = get dn_st 0
+d = get dn_st 1
+qd = get dn_st 13
+kvd = get dn_st 14
+f = get dn_st 5
+he = div get dn_st 4 2
+p = ulong 0
+put bf_ao 0 p
+p = add p bf_al4k mul 256 d
+put bf_ao 1 p
+p = add p bf_al4k mul 256 d
+put bf_ao 2 p
+p = add p bf_al4k mul 256 qd
+put bf_ao 3 p
+p = add p bf_al4k mul 256 kvd
+put bf_ao 4 p
+p = add p bf_al4k mul 256 kvd
+put bf_ao 5 p
+p = add p bf_al4k mul 256 qd
+put bf_ao 6 p
+p = add p bf_al4k mul 256 f
+put bf_ao 7 p
+p = add p bf_al4k mul 256 f
+put bf_ao 8 p
+p = add p bf_al4k mul 256 d
+put bf_ao 9 p
+p = add p bf_al4k mul 256 d
+put bf_ao 10 p
+p = add p bf_al4k mul 512 he
+put bf_ao 11 p
+p = add p bf_al4k mul 512 he
+put bf_ao 12 p
+p = add p 4096
+put bf_ao 13 p
+p = add p 4096
+put bf_ao 14 p
+p = add p 4096
+put bf_ao 15 p
+p = add p 4096
+put bf_ao 16 p
+p = add p 4096
+put bf_ao 17 p
+p = add p bf_al4k mul 256 v
+put bf_ao 18 p
+p = add p bf_al4k mul 512 v
+put bf_ao 19 p
+p = add p bf_al4k mul 512 v
+put bf_ao 20 p
+sc_cap = ulong 33554432
+if ge v 32768
+  sc_cap = 167772160
+end
+put bf_ao 21 sc_cap
+p = add p sc_cap
+grp = div get dn_st 2 get dn_st 3
+gsh = ulong 0
+if eq grp 2
+  gsh = 1
+end
+if eq grp 4
+  gsh = 2
+end
+if eq grp 8
+  gsh = 3
+end
+if eq grp 16
+  gsh = 4
+end
+put bf_ao 22 gsh
+ret p
+end
+
+fn bf_upload_weights fd int pb ulong to void
+mw = nvalloc pb true
+if le mw 0
+  exit 70
+end
+put bf_st 0 ulong mw
+put bf_st 1 mapaddr mw
+pos = ulong 256
+remb = pb
+while gt remb 0 bound 9223372036854775807
+  cn = remb
+  if gt cn DN_CHUNK
+    cn = DN_CHUNK
+  end
+  dn_pread_all fd pos cn
+  rw = mapwrite mw sub pos 256 dn_io 0 cn
+  if ne rw long cn
+    bf_fail_stop 70
+  end
+  pos = add pos cn
+  remb = sub remb cn
+end
+end
+
+fn bf_io_f64 o ulong to f64
+u = uint bf_io_u32 o
+f = bitcast f32 u
+ret f64 f
+end
+
+fn bf_upload_rope_chunk ao_idx ulong is_sin bool pos ulong cnt ulong to void
+for i ulong cnt
+  v = get dn_rcos add pos i
+  if is_sin
+    v = get dn_rsin add pos i
+  end
+  b = mul i 4
+  u = uint bitcast uint f32 v
+  bf_u32_to_io b ulong u
+end
+nb = mul cnt 4
+dst = add get bf_ao ao_idx mul pos 4
+r = mapwrite get gbmem 5 dst dn_io 0 nb
+if ne r long nb
+  bf_fail_stop 70
+end
+end
+
+fn bf_upload_rope to void
+he = div get dn_st 4 2
+tot = mul 128 he
+pos = ulong 0
+while lt pos tot bound 9223372036854775807
+  cnt = sub tot pos
+  if gt cnt 262144
+    cnt = 262144
+  end
+  bf_upload_rope_chunk 10 false pos cnt
+  bf_upload_rope_chunk 11 true pos cnt
+  pos = add pos cnt
+end
+end
+
+fn dn_be_open to void
+asz = bf_plan_arena
+if not gkopen asz
+  bf_fail_stop 70
+end
+if not gbbopen
+  bf_fail_stop 70
+end
+if not gkallh
+  bf_fail_stop 70
+end
+if not bf_emit_all
+  bf_fail_stop 70
+end
+rc = mapwrite get gbmem 4 0 gkcode 0 1572864
+if ne rc long 1572864
+  bf_fail_stop 70
+end
+bf_upload_weights int get dn_st 18 get dn_st 12
+bf_upload_rope
+put gkinv 0 1
+put bf_st 2 1
+end
+
+fn dn_be_close to void
+if ne get bf_st 2 0
+  r = nvstop
+  put bf_st 2 0
+end
+end
+
+fn bf_gemmh_tt m ulong n ulong k ulong a_va ulong b_va ulong c_va ulong to void
+gkoph 0 a_va uint mul k 2 2 0 0
+gkoph 1 b_va uint mul k 2 2 0 0
+gkopc c_va uint mul n 2 2 0 0 f32 1.0f64
+if not gkmmh uint m uint n uint k 1 0 2
+  bf_fail_stop 99
+end
+end
+
+fn bf_gemmh_tt_add m ulong n ulong k ulong a_va ulong b_va ulong c_va ulong to void
+gkoph 0 a_va uint mul k 2 2 0 0
+gkoph 1 b_va uint mul k 2 2 0 0
+gkopc c_va uint mul n 2 2 0 0 f32 1.0f64
+if not gkmmh uint m uint n uint k 1 0 3
+  bf_fail_stop 99
+end
+end
+
+fn bf_gemmh_f32 m ulong n ulong k ulong a_va ulong b_va ulong c_va ulong to void
+gkoph 0 a_va uint mul k 2 2 0 0
+gkoph 1 b_va uint mul k 2 2 0 0
+gkopc c_va uint mul n 4 4 0 0 f32 1.0f64
+if not gkmmh uint m uint n uint k 1 0 0
+  bf_fail_stop 99
+end
+end
+
+fn bf_gemmh_bwd_wlm m ulong d ulong v ulong a_va ulong b_va ulong c_va ulong to void
+gkoph 0 a_va uint mul v 2 2 0 0
+gkoph 1 b_va 2 uint mul d 2 0 0
+gkopc c_va uint mul d 2 2 0 0 f32 1.0f64
+if not gkmmh uint m uint d uint v 1 0 2
+  bf_fail_stop 99
+end
+end
+
+fn bf_rec_rms x_va ulong gw_va ulong y_va ulong to void
+put gkarg 0 uint mul 128 32
+bf_pt 2 x_va
+bf_pt 4 gw_va
+bf_pt 6 y_va
+bf_launch 88 8 16 1
+end
+
+fn bf_rec_qkn x_va ulong gw_va ulong nh ulong do_norm bool to void
+bf_pt 2 x_va
+bf_pt 4 gw_va
+bf_pt 6 bf_aptr 10
+bf_pt 8 bf_aptr 11
+put gkarg 10 uint nh
+dn = uint 0
+if do_norm
+  dn = 1
+end
+put gkarg 11 dn
+gx = div add mul nh 32 255 256
+bf_launch 90 12 gx 128
+end
+
+fn bf_rec_layer l ulong to void
+b = add 8 mul l 24
+d = get dn_st 1
+qd = get dn_st 13
+kvd = get dn_st 14
+f = get dn_st 5
+bf_rec_rms bf_aptr 0 bf_wptr b bf_aptr 1
+bf_gemmh_tt 128 qd d bf_aptr 1 bf_wptr add b 1 bf_aptr 2
+bf_gemmh_tt 128 kvd d bf_aptr 1 bf_wptr add b 2 bf_aptr 3
+bf_gemmh_tt 128 kvd d bf_aptr 1 bf_wptr add b 3 bf_aptr 4
+do_qk = ne and get dn_st 7 8 0
+bf_rec_qkn bf_aptr 2 bf_wptr add b 5 get dn_st 2 do_qk
+bf_rec_qkn bf_aptr 3 bf_wptr add b 6 get dn_st 3 do_qk
+bf_pt 0 bf_aptr 2
+bf_pt 2 bf_aptr 3
+bf_pt 4 bf_aptr 4
+bf_pt 6 bf_aptr 5
+bf_launch 91 8 div add mul get dn_st 2 32 255 256 128
+bf_gemmh_tt_add 128 d qd bf_aptr 5 bf_wptr add b 4 bf_aptr 0
+bf_rec_rms bf_aptr 0 bf_wptr add b 7 bf_aptr 1
+bf_gemmh_tt 128 f d bf_aptr 1 bf_wptr add b 8 bf_aptr 6
+bf_gemmh_tt 128 f d bf_aptr 1 bf_wptr add b 9 bf_aptr 7
+nv8 = div mul 128 f 8
+put gkarg 0 uint nv8
+bf_pt 2 bf_aptr 6
+bf_pt 4 bf_aptr 7
+bf_launch 89 6 div add nv8 255 256 1
+bf_gemmh_tt_add 128 d f bf_aptr 6 bf_wptr add b 10 bf_aptr 0
+end
+
+fn bf_bat_beg cnt ulong to void
+if not gbbegin cnt
+  bf_fail_stop 70
+end
+put gkbat 0 1
+end
+
+fn bf_bat_end to void
+put gkbat 0 0
+if not gkbsub
+  bf_fail_stop 70
+end
+end
+
+fn bf_run_trunk_gpu to void
+l = get dn_st 6
+ls = ulong 0
+while lt ls l bound 1024
+  le = add ls 12
+  if gt le l
+    le = l
+  end
+  cnt = mul sub le ls 13
+  if eq ls 0
+    cnt = add cnt 1
+  end
+  if eq le l
+    cnt = add cnt 1
+  end
+  bf_bat_beg cnt
+  if eq ls 0
+    dv8 = div get dn_st 1 8
+    put gkarg 0 uint dv8
+    bf_pt 2 bf_wptr 0
+    bf_pt 4 bf_aptr 12
+    bf_pt 6 bf_aptr 0
+    put gkarg 8 uint mul get dn_st 1 2
+    bf_launch 94 9 div add dv8 255 256 128
+  end
+  for li ulong sub le ls
+    bf_rec_layer add ls li
+  end
+  if eq le l
+    bf_rec_rms bf_aptr 0 bf_wptr 2 bf_aptr 8
+  end
+  bf_bat_end
+  ls = le
+end
+end
+
+fn bf_upload_toks_tgts ct ulong to void
+for t ulong 128
+  tv = ulong 0
+  yv = ulong 0
+  if lt t ct
+    tv = get dn_toks t
+    yv = get dn_tgts t
+  end
+  bf_u32_to_io mul t 4 tv
+  bf_u32_to_io add 512 mul t 4 yv
+end
+r1 = mapwrite get gbmem 5 get bf_ao 12 dn_io 0 512
+r2 = mapwrite get gbmem 5 get bf_ao 13 dn_io 512 512
+if or ne r1 512 ne r2 512
+  bf_fail_stop 70
+end
+put gkinv 0 1
+end
+
+fn bf_dl_bf16_to_f64 ao_idx ulong n_elem ulong dst_id ulong negate bool to void
+pos = ulong 0
+while lt pos n_elem bound 9223372036854775807
+  cnt = sub n_elem pos
+  if gt cnt 524288
+    cnt = 524288
+  end
+  r = mapread get gbmem 5 add get bf_ao ao_idx mul pos 2 dn_io 0 mul cnt 2
+  if ne r long mul cnt 2
+    bf_fail_stop 70
+  end
+  for i ulong cnt
+    v = ubf16_to_f64 bf_io_u16 mul i 2
+    if negate
+      v = sub 0.0f64 v
+    end
+    if eq dst_id 0
+      put dn_zbuf add pos i v
+    else
+      put dn_rbuf add pos i v
+    end
+  end
+  pos = add pos cnt
+end
+end
+
+fn bf_ul_f64_to_bf16 ao_idx ulong n_elem ulong to void
+pos = ulong 0
+while lt pos n_elem bound 9223372036854775807
+  cnt = sub n_elem pos
+  if gt cnt 524288
+    cnt = 524288
+  end
+  for i ulong cnt
+    bf_u16_to_io mul i 2 uf64_to_bf16 get dn_zbuf add pos i
+  end
+  r = mapwrite get gbmem 5 add get bf_ao ao_idx mul pos 2 dn_io 0 mul cnt 2
+  if ne r long mul cnt 2
+    bf_fail_stop 70
+  end
+  pos = add pos cnt
+end
+put gkinv 0 1
+end
+
+fn bf_dl_stats_tok t ulong is_guard bool to void
+bo = mul t 16
+mx = bf_io_f64 bo
+sm = bf_io_f64 add bo 4
+ly = bf_io_f64 add bo 8
+am = bf_io_u32 add bo 12
+ce = sub add mx uflog sm ly
+hit = ulong 0
+if eq am get dn_tgts t
+  hit = 1
+end
+if is_guard
+  put dn_gl t ce
+  put dn_gh t hit
+else
+  put dn_bl t ce
+  put dn_bh t hit
+end
+end
+
+fn bf_dl_jsd ct ulong ao_jsd ulong to void
+r = mapread get gbmem 5 get bf_ao ao_jsd dn_io 0 512
+if ne r 512
+  bf_fail_stop 70
+end
+for t ulong ct
+  jv = bf_io_f64 mul t 4
+  if lt jv 0.0f64
+    jv = 0.0f64
+  end
+  put dn_jsd t jv
+end
+end
+
+fn bf_dl_stats ct ulong ao_st ulong ao_jsd ulong is_guard bool to void
+r = mapread get gbmem 5 get bf_ao ao_st dn_io 0 2048
+if ne r 2048
+  bf_fail_stop 70
+end
+for t ulong ct
+  bf_dl_stats_tok t is_guard
+end
+if is_guard
+  bf_dl_jsd ct ao_jsd
+end
+end
+
+fn bf_rec_lm_ce do_grad bool is_guard bool to void
+v = get dn_st 0
+d = get dn_st 1
+lmw = add get bf_st 1 dn_lmw_off
+lg_ao = bf_aptr 18
+if is_guard
+  lg_ao = bf_aptr 19
+end
+bf_gemmh_f32 128 v d bf_aptr 8 lmw lg_ao
+if is_guard
+  put gkarg 0 uint mul 128 32
+  bf_pt 2 bf_aptr 19
+  bf_pt 4 bf_aptr 18
+  bf_pt 6 bf_aptr 13
+  bf_pt 8 bf_aptr 14
+  bf_pt 10 bf_aptr 15
+  bf_pt 12 bf_aptr 16
+  bf_launch 93 14 16 1
+else
+  put gkarg 0 uint mul 128 32
+  bf_pt 2 bf_aptr 18
+  bf_pt 4 bf_aptr 13
+  bf_pt 6 bf_aptr 14
+  bf_pt 8 bf_aptr 17
+  wdl = uint 0
+  if do_grad
+    wdl = 1
+  end
+  put gkarg 10 wdl
+  bf_launch 92 11 16 1
+  if do_grad
+    bf_gemmh_bwd_wlm 128 d v bf_aptr 17 lmw bf_aptr 9
+  end
+end
+end
+
+fn dn_be_win_run need_res bool to void
+ct = get dn_st 10
+d = get dn_st 1
+bf_upload_toks_tgts ct
+bf_run_trunk_gpu
+cnt = ulong 2
+if need_res
+  cnt = 3
+end
+bf_bat_beg cnt
+bf_rec_lm_ce need_res false
+bf_bat_end
+bf_dl_bf16_to_f64 8 mul ct d 0 false
+bf_dl_stats ct 14 16 false
+if need_res
+  bf_dl_bf16_to_f64 9 mul ct d 1 true
+end
+end
+
+fn bf_scale_rbuf n ulong d ulong to void
+for i ulong mul n d
+  rv = div get dn_rbuf i f64 n
+  put dn_rbuf i rv
+end
+end
+
+fn dn_be_lm_bwd n ulong want_grad bool to f64
+d = get dn_st 1
+for t ulong 128
+  yv = ulong 0
+  if lt t n
+    yv = get dn_tgts t
+  end
+  bf_u32_to_io mul t 4 yv
+end
+r = mapwrite get gbmem 5 get bf_ao 13 dn_io 0 512
+if ne r 512
+  bf_fail_stop 70
+end
+bf_ul_f64_to_bf16 8 mul n d
+cnt = ulong 2
+if want_grad
+  cnt = 3
+end
+bf_bat_beg cnt
+bf_rec_lm_ce want_grad false
+bf_bat_end
+bf_dl_stats n 14 16 false
+ls = 0.0f64
+for t2 ulong n
+  ls = add ls get dn_bl t2
+end
+if want_grad
+  bf_dl_bf16_to_f64 9 mul n d 1 false
+  bf_scale_rbuf n d
+end
+ret div ls f64 n
+end
+
+fn dn_be_guard_eval_win ct ulong any_act bool to void
+if not any_act
+  for t ulong ct
+    put dn_gl t get dn_bl t
+    put dn_gh t get dn_bh t
+    put dn_jsd t 0.0f64
+  end
+  ret
+end
+d = get dn_st 1
+bf_ul_f64_to_bf16 8 mul ct d
+bf_bat_beg 2
+bf_rec_lm_ce false true
+bf_bat_end
+bf_dl_stats ct 15 16 true
+for t2 ulong ct
+  if eq get dn_active t2 0
+    put dn_jsd t2 0.0f64
+  end
+end
+end
+
+note CPU fallback & padded-128 HMMA Slot-86 backend for dn_be_gemm_abT
+fn bf_gemm_cpu_row ab ulong n ulong k ulong cb ulong to void
+for o ulong n
+  bb = mul o k
+  acc = 0.0f64
+  for j ulong k
+    av = get dn_mm_a add ab j
+    bv = get dn_mm_b add bb j
+    acc = add acc mul av bv
+  end
+  put dn_mm_c add cb o acc
+end
+end
+
+fn bf_gemm_cpu m ulong n ulong k ulong to void
+for i ulong m
+  bf_gemm_cpu_row mul i k n k mul i n
+end
+end
+
+fn bf_ul_mm_pad_fill arr_id ulong r ulong rows ulong cols ulong pos ulong cnt ulong to void
+for j ulong cnt
+  v = 0.0f64
+  if lt r rows
+    idx = add mul r cols add pos j
+    if eq arr_id 0
+      v = get dn_mm_a idx
+    else
+      v = get dn_mm_b idx
+    end
+  end
+  h = uf64_to_bf16 v
+  bf_u16_to_io mul j 2 h
+end
+end
+
+fn bf_ul_mm_pad_row arr_id ulong ao_r ulong r ulong rows ulong cols ulong to void
+pos = ulong 0
+while lt pos cols bound 9223372036854775807
+  cnt = sub cols pos
+  if gt cnt 524288
+    cnt = 524288
+  end
+  bf_ul_mm_pad_fill arr_id r rows cols pos cnt
+  dst = add ao_r mul pos 2
+  nb = mul cnt 2
+  rw = mapwrite get gbmem 5 dst dn_io 0 nb
+  if ne rw long nb
+    bf_fail_stop 70
+  end
+  pos = add pos cnt
+end
+end
+
+fn bf_ul_mm_pad arr_id ulong ao_off ulong rows ulong cols ulong p_rows ulong to void
+rs = mul cols 2
+for r ulong p_rows
+  ao_r = add ao_off mul r rs
+  bf_ul_mm_pad_row arr_id ao_r r rows cols
+end
+end
+
+fn bf_ul_mm_chunk_fill rr ulong m ulong k ulong pos ulong cnt ulong to void
+for j ulong cnt
+  v = 0.0f64
+  if lt rr m
+    v = get dn_mm_a add mul rr k add pos j
+  end
+  h = uf64_to_bf16 v
+  bf_u16_to_io mul j 2 h
+end
+end
+
+fn bf_ul_mm_chunk_row ao_r ulong rr ulong m ulong k ulong to void
+pos = ulong 0
+while lt pos k bound 9223372036854775807
+  cnt = sub k pos
+  if gt cnt 524288
+    cnt = 524288
+  end
+  bf_ul_mm_chunk_fill rr m k pos cnt
+  dst = add ao_r mul pos 2
+  nb = mul cnt 2
+  rw = mapwrite get gbmem 5 dst dn_io 0 nb
+  if ne rw long nb
+    bf_fail_stop 70
+  end
+  pos = add pos cnt
+end
+end
+
+fn bf_ul_mm_chunk a_r0 ulong nrp ulong m ulong k ulong ao_off ulong to void
+rs = mul k 2
+for r ulong nrp
+  ao_r = add ao_off mul r rs
+  bf_ul_mm_chunk_row ao_r add a_r0 r m k
+end
+end
+
+fn bf_dl_mm_store ob ulong n ulong pos ulong cnt ulong to void
+for j ulong cnt
+  v = bf_io_f64 mul j 4
+  put dn_mm_c add ob add pos j v
+end
+end
+
+fn bf_dl_mm_row ao_r ulong rr ulong m ulong n ulong to void
+if ge rr m
+  ret
+end
+ob = mul rr n
+pos = ulong 0
+while lt pos n bound 9223372036854775807
+  cnt = sub n pos
+  if gt cnt 262144
+    cnt = 262144
+  end
+  src = add ao_r mul pos 4
+  nb = mul cnt 4
+  rrw = mapread get gbmem 5 src dn_io 0 nb
+  if ne rrw long nb
+    bf_fail_stop 70
+  end
+  bf_dl_mm_store ob n pos cnt
+  pos = add pos cnt
+end
+end
+
+fn bf_dl_mm_chunk c_r0 ulong nrp ulong m ulong n ulong np ulong ao_off ulong to void
+rs = mul np 4
+for r ulong nrp
+  ao_r = add ao_off mul r rs
+  bf_dl_mm_row ao_r add c_r0 r m n
+end
+end
+
+fn bf_gemm_calc_mc n ulong k ulong to ulong
+np = mul div add n 127 128 128
+b_bytes = mul mul np k 2
+min_a = mul mul 128 k 2
+min_c = mul mul 128 np 4
+need = add b_bytes add min_a min_c
+cap = get bf_ao 21
+if ge need cap
+  ret 0
+end
+rem_b = sub cap b_bytes
+row_b = add mul k 2 mul np 4
+ret mul div div rem_b row_b 128 128
+end
+
+fn bf_gemm_step r0 ulong mc ulong m ulong n ulong k ulong np ulong to ulong
+nr = sub m r0
+if gt nr mc
+  nr = mc
+end
+nrp = mul div add nr 127 128 128
+scr = get bf_ao 20
+b_off = scr
+a_off = add b_off mul mul np k 2
+c_off = add a_off mul mul nrp k 2
+bf_ul_mm_chunk r0 nrp m k a_off
+put gkinv 0 1
+bf_bat_beg 1
+bf_gemmh_f32 nrp np k add gkbase a_off add gkbase b_off add gkbase c_off
+bf_bat_end
+bf_dl_mm_chunk r0 nrp m n np c_off
+ret nrp
+end
+
+fn dn_be_gemm_abT m ulong n ulong k ulong to void
+work = mul mul m n k
+if or lt k 128 or ne rem k 128 0 lt work 1048576
+  bf_gemm_cpu m n k
+  ret
+end
+mc = bf_gemm_calc_mc n k
+if eq mc 0
+  bf_gemm_cpu m n k
+  ret
+end
+np = mul div add n 127 128 128
+b_off = get bf_ao 20
+bf_ul_mm_pad 1 b_off n k np
+r0 = ulong 0
+while lt r0 m bound 9223372036854775807
+  nrp = bf_gemm_step r0 mc m n k np
+  r0 = add r0 nrp
+end
+end
