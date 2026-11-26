@@ -347,6 +347,30 @@ oputc 10
 oflush
 end
 
+fn th_cmd_ocs to void
+c_ocs = ocsinit
+mode = oargu 2
+if eq mode 1
+x = ocsg c_ocs
+exit 0
+end
+if eq mode 2
+ocsp c_ocs 1.0f64
+exit 0
+end
+if ne ocsg 100000 0.0f64
+exit 71
+end
+ocsp 0 1.5f64
+ocsp 100000 42.25f64
+if ne ocsg 0 1.5f64
+exit 72
+end
+if ne ocsg 100000 42.25f64
+exit 73
+end
+end
+
 fn ocmd to int
 w = ocmdw
 if eq w __SPFORGE__
@@ -363,6 +387,10 @@ ret 0
 end
 if eq w __TSLEEP__
 th_cmd_sleep
+ret 0
+end
+if eq w __TOCS__
+th_cmd_ocs
 ret 0
 end
 ret ocmd_orig
@@ -384,6 +412,7 @@ def build_solver_harness(out_dir):
         .replace("__TRIDGE__", str(u64_pack_word("tridge")))
         .replace("__TGN__", str(u64_pack_word("tgn")))
         .replace("__TSLEEP__", str(u64_pack_word("tsleep")))
+        .replace("__TOCS__", str(u64_pack_word("tocs")))
     )
     is_mac = platform.system() == "Darwin"
     is_x86 = platform.system() == "Linux" and platform.machine().lower() in ("x86_64", "amd64")
@@ -683,11 +712,22 @@ def test_end_to_end_spforge_and_negative_controls(ollm, harness):
         check(rc_mis_app == 62 and rc_mis_fge == 62, "neg_control_mismatch_base_rc62", f"spapp={rc_mis_app}, spforge={rc_mis_fge}")
 
 
+def test_cold_store_growth_and_bounds(harness):
+    """Verify cold store works when og[8]==0, grows past initial floor preserving data, and traps at OCSN."""
+    rc0, _, _ = run([harness, "tocs", "0"], ok=None)
+    check(rc0 == 0, "cold_store_zero_model_and_dynamic_grow", f"rc={rc0}")
+    rc1, _, _ = run([harness, "tocs", "1"], ok=None)
+    check(rc1 == 103, "cold_store_oob_read_traps_103", f"rc={rc1}")
+    rc2, _, _ = run([harness, "tocs", "2"], ok=None)
+    check(rc2 == 103, "cold_store_oob_write_traps_103", f"rc={rc2}")
+
+
 def main():
     test_cross_target_compile()
     with tempfile.TemporaryDirectory() as td:
         ollm = build_stock_ollm(td)
         harness = build_solver_harness(td)
+        test_cold_store_growth_and_bounds(harness)
         test_linear_algebra_oracle(harness)
         test_end_to_end_spforge_and_negative_controls(ollm, harness)
     print(f"\nSUMMARY: {len(PASSES)} passed, {len(FAILS)} failed")
