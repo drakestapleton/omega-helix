@@ -18,6 +18,7 @@ global ocl_al f64 4
 global ocl_ph ulong 4
 global ocl_wm long 4
 note Dynamic editable spclip recipe, splice, SHA-256, eval, tune & lineage state
+const OSP_SP_AUTO ulong 65535
 global ocl_cfg ulong 16
 global ocl_link ulong 32
 global ocl_sp_s ulong 4
@@ -1447,7 +1448,7 @@ note Works across DIFFERENT init basins (grow + growpro) with zero weight-averag
 
 fn osp_hsnap dst ulong src ulong n ulong to void
 i = ulong 0
-while lt i n bound 1048576
+while lt i n bound 9223372036854775807
 ocsp add dst i get oa add src i
 i = add i 1
 end
@@ -1455,7 +1456,7 @@ end
 
 fn osp_hrest dst ulong src ulong n ulong to void
 i = ulong 0
-while lt i n bound 1048576
+while lt i n bound 9223372036854775807
 put oa add dst i ocsg add src i
 i = add i 1
 end
@@ -2589,12 +2590,18 @@ tl = get ocl_st 3
 cl = osp_clip_load_raw s
 put ocl_raw_sl s cl
 es = get ocl_sp_s s
-if eq es 0
-es = tl
-end
 ee = get ocl_sp_e s
-if eq ee 0
+if and eq es 0 eq ee 0
+es = tl
 ee = cl
+else
+if eq es OSP_SP_AUTO
+es = tl
+put ocl_sp_s s tl
+end
+if or eq es 0 eq ee 0
+exit 2
+end
 end
 gn = get ocl_sp_g s
 osp_clip_chk_sp tl cl es ee gn
@@ -3969,9 +3976,18 @@ end
 osr_eat_kw 10
 put ocl_wm s osr_rd_l 32
 osr_eat_kw 11
-put ocl_sp_s s osr_rd_u 58
-put ocl_sp_e s osr_rd_u 58
-put ocl_sp_g s osr_rd_u 32
+sps = osr_rd_u 58
+spe = osr_rd_u 58
+spg = osr_rd_u 32
+if or gt sps 24 gt spe 24
+exit 60
+end
+if or and eq sps 0 ne spe 0 and ne sps 0 eq spe 0
+exit 60
+end
+put ocl_sp_s s sps
+put ocl_sp_e s spe
+put ocl_sp_g s spg
 osr_eat_kw 12
 ks = osr_rd_u 10
 if or eq ks 0 gt ks 8
@@ -4291,6 +4307,9 @@ end
 note Parse comma-separated signed weights W1,W2[,W3[,W4]] into ocl_wm[0..S)
 fn osp_parse_weights ai ulong to void
 n = oargp ai
+if gt n 128
+exit 2
+end
 ss = get ocl_st 1
 p = ulong 0
 cnt = ulong 0
@@ -4392,9 +4411,12 @@ ret
 end
 end
 v1 = osp_oarg_u lo hi
+if or eq v1 0 gt v1 24
+exit 2
+end
 p = get ocl_rcur 0
 if eq p hi
-put ocl_sp_s s 0
+put ocl_sp_s s OSP_SP_AUTO
 put ocl_sp_e s v1
 put ocl_sp_g s 1000
 ret
@@ -4403,6 +4425,9 @@ if ne ulong get oarg p 58
 exit 2
 end
 v2 = osp_oarg_u add p 1 hi
+if or eq v2 0 gt v2 24
+exit 2
+end
 p = get ocl_rcur 0
 if eq p hi
 put ocl_sp_s s v1
@@ -4424,6 +4449,9 @@ end
 
 fn osp_parse_splice_list ai ulong to void
 n = oargp ai
+if gt n 128
+exit 2
+end
 ss = get ocl_st 1
 p = ulong 0
 cnt = ulong 0
@@ -4500,6 +4528,9 @@ end
 note Parse dynamic clip override flags starting at argv[a0] (allow_edit: 1=edit flags, 2=tune flags, 0=run/eval/create)
 fn osp_parse_dyn_flags a0 ulong allow ulong to void
 na = oargc
+if gt sub na a0 64
+exit 2
+end
 i = a0
 while lt i na bound 64
 if osp_arg_eq_fl i 1
@@ -5069,7 +5100,7 @@ w2_lo = add add wo_hi d mul d get og 4
 ret ge i w2_lo
 end
 
-fn osp_tune_blend_1 k ulong i ulong psum f64 to f64
+fn osp_tune_blend_1 k ulong i ulong psum f64 use_w bool to f64
 ss = get ocl_st 1
 tl = get ocl_st 3
 koff = mul k get og 32
@@ -5078,6 +5109,9 @@ acc = 0.0f64
 for s ulong ss
 if gt sub get ocl_sl s tl k
 al = get ocl_tun_al s
+if use_w
+al = get ocl_w s
+end
 if or is_res gt al 0.0
 acc = add acc mul al ocsg add add get ocl_wo s koff i
 end
@@ -5096,14 +5130,23 @@ if and gt get ocl_w s0 0.0 gt sub get ocl_sl s0 tl k
 psum = add psum get ocl_tun_al s0
 end
 end
+use_w = false
+if le psum 0.0
+use_w = true
+for s1 ulong ss
+if and gt get ocl_w s1 0.0 gt sub get ocl_sl s1 tl k
+psum = add psum get ocl_w s1
+end
+end
 if le psum 0.0
 exit 2
+end
 end
 lstr = get og 32
 dst = add get ocl_st 4 mul k lstr
 i = ulong 0
 while lt i lstr bound 9223372036854775807
-owp add dst i osp_tune_blend_1 k i psum
+owp add dst i osp_tune_blend_1 k i psum use_w
 i = add i 1
 end
 end
@@ -5147,6 +5190,9 @@ end
 
 fn osp_tune_finish_ow child_l ulong need_p ulong to void
 if ne child_l get og 5
+if gt need_p ocsinit
+exit 12
+end
 osp_w2c 0 0 need_p
 put og 5 child_l
 if not ogeom
@@ -5382,6 +5428,11 @@ exit 2
 end
 osp_parse_dyn_flags 8 2
 osp_clip_validate_knobs
+lin_ai = get ocl_cfg 7
+if eq lin_ai 0
+lin_ai = ovp_set_lin 35 5
+put ocl_cfg 7 lin_ai
+end
 osha_file data_ai
 osha_save_dsha
 osp_clip_init
@@ -5407,9 +5458,6 @@ put ocl_exp 15 opw8 40
 osha_file out_ai
 osha_save_csha
 lin_ai = get ocl_cfg 7
-if eq lin_ai 0
-lin_ai = ovp_set_lin 35 5
-end
 if ne lin_ai 999999
 osp_lin_write lin_ai steps lrm get og 6 child_l nspec
 else
@@ -5458,9 +5506,18 @@ put ocl_wm s osr_rd_l 32
 osr_eat_kw 15
 am = osr_rd_l 32
 osr_eat_kw 11
-put ocl_sp_s s osr_rd_u 58
-put ocl_sp_e s osr_rd_u 58
-put ocl_sp_g s osr_rd_u 32
+sps = osr_rd_u 58
+spe = osr_rd_u 58
+spg = osr_rd_u 32
+if or gt sps 24 gt spe 24
+exit 60
+end
+if or and eq sps 0 ne spe 0 and ne sps 0 eq spe 0
+exit 60
+end
+put ocl_sp_s s sps
+put ocl_sp_e s spe
+put ocl_sp_g s spg
 osr_eat_kw 12
 ks = osr_rd_u 10
 if or eq ks 0 gt ks 8

@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -226,7 +228,7 @@ class TestStudioTopology(unittest.TestCase):
         self.assertEqual(t_wsl2["topology"], "wsl2")
         self.assertEqual(t_wsl2["browser_cmd"], ["explorer.exe", "http://127.0.0.1:18420/"])
 
-        # WSL 2 fallback to cmd.exe /c start + optional remote Spark tunnel
+        # WSL 2 fallback to cmd.exe /c start + optional remote Spark tunnel + & escaping + URL safety
         t_wsl3 = studio_topology.detect_topology(
             os_name="Linux",
             arch="x86_64",
@@ -239,6 +241,25 @@ class TestStudioTopology(unittest.TestCase):
         self.assertEqual(t_wsl3["mode"], "remote_tunnel")
         self.assertFalse(t_wsl3["should_skip_ssh_tunnel"])
         self.assertEqual(t_wsl3["browser_cmd"], ["cmd.exe", "/c", "start", "", "http://127.0.0.1:18420/"])
+        act_cmd = studio_topology.open_studio_browser("http://127.0.0.1:18420/?pair=abc&tab=1", t_wsl3, dry_run=True)
+        self.assertEqual(act_cmd["action"], "dry_run_browser")
+        self.assertEqual(act_cmd["cmd"][-1], "http://127.0.0.1:18420/?pair=abc^&tab=1")
+        # Non-http(s) or control-char URLs must fail closed to print_url
+        self.assertEqual(studio_topology.open_studio_browser("javascript:alert(1)", t_wsl3, dry_run=True)["action"], "print_url")
+        self.assertEqual(studio_topology.open_studio_browser("http://127.0.0.1:18420/\ncalc", t_wsl3, dry_run=True)["action"], "print_url")
+
+        # WSL 2 accessed over SSH must print URL instead of popping remote Windows desktop browser
+        t_wsl_ssh = studio_topology.detect_topology(
+            os_name="Linux",
+            arch="x86_64",
+            env={"WSL_DISTRO_NAME": "Ubuntu-24.04", "SSH_CONNECTION": "10.0.0.2 51234 10.0.0.1 22"},
+            proc_version="Linux version 6.6.36.3-microsoft-standard-WSL2",
+            which=_fake_which({"wslview", "explorer.exe", "cmd.exe"}),
+        )
+        self.assertEqual(t_wsl_ssh["topology"], "wsl2")
+        self.assertFalse(t_wsl_ssh["has_display"])
+        self.assertEqual(t_wsl_ssh["open_action"], "print_url")
+        self.assertIsNone(t_wsl_ssh["browser_cmd"])
 
         # Native Windows / PowerShell outside WSL 2 -> never claims .exe exists
         t_win = studio_topology.detect_topology(
@@ -334,6 +355,71 @@ class TestStudioTopology(unittest.TestCase):
         self.assertEqual(d_win["TOPOLOGY"], "windows-powershell")
         self.assertEqual(d_win["NATIVE_EXE"], "0")
         self.assertEqual(d_win["LAUNCH_MODE"], "wsl2-required")
+
+        # 4c. Real probe paths in install.sh --dry-run (no OMEGA_INSTALL_TEST_WSL/BROWSER bypass):
+        #     - /proc/version microsoft detection + real PATH wslview/explorer.exe/cmd.exe fallback
+        #     - WSL 2 over SSH -> print-url
+        #     - Wayland monitor on Spark + real PATH xdg-open + OPTIONAL_TARGETS=gb10
+        with tempfile.TemporaryDirectory(prefix="helix-inst-probe-") as td:
+            pdir = Path(td)
+            pver = pdir / "proc_version"
+            pver.write_text("Linux version 6.6.36.3-microsoft-standard-WSL2\n", encoding="utf-8")
+
+            bin_exp = pdir / "bin_exp"
+            bin_exp.mkdir()
+            (bin_exp / "explorer.exe").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            os.chmod(bin_exp / "explorer.exe", 0o755)
+            d_wsl_real = _run_install_dry_run({
+                "PATH": f"{bin_exp}:/usr/bin:/bin",
+                "OMEGA_INSTALL_TEST_OS": "Linux",
+                "OMEGA_INSTALL_TEST_ARCH": "x86_64",
+                "OMEGA_INSTALL_TEST_GPU": "0",
+                "OMEGA_INSTALL_TEST_SSH": "",
+                "OMEGA_INSTALL_TEST_PROC_VERSION": str(pver),
+            })
+            self.assertEqual(d_wsl_real["TOPOLOGY"], "wsl2")
+            self.assertEqual(d_wsl_real["IS_WSL"], "1")
+            self.assertEqual(d_wsl_real["BROWSER_CMD"], "explorer.exe")
+
+            d_wsl_ssh = _run_install_dry_run({
+                "PATH": f"{bin_exp}:/usr/bin:/bin",
+                "WSL_DISTRO_NAME": "Ubuntu-24.04",
+                "OMEGA_INSTALL_TEST_OS": "Linux",
+                "OMEGA_INSTALL_TEST_ARCH": "x86_64",
+                "OMEGA_INSTALL_TEST_GPU": "0",
+                "OMEGA_INSTALL_TEST_SSH": "10.0.0.2 50000 10.0.0.1 22",
+            })
+            self.assertEqual(d_wsl_ssh["TOPOLOGY"], "wsl2")
+            self.assertEqual(d_wsl_ssh["BROWSER_CMD"], "print-url")
+
+            bin_xdg = pdir / "bin_xdg"
+            bin_xdg.mkdir()
+            (bin_xdg / "xdg-open").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            os.chmod(bin_xdg / "xdg-open", 0o755)
+            d_wl = _run_install_dry_run({
+                "PATH": f"{bin_xdg}:/usr/bin:/bin",
+                "OMEGA_INSTALL_TEST_OS": "Linux",
+                "OMEGA_INSTALL_TEST_ARCH": "aarch64",
+                "OMEGA_INSTALL_TEST_WSL": "0",
+                "OMEGA_INSTALL_TEST_GPU": "1",
+                "OMEGA_INSTALL_TEST_DISPLAY": "",
+                "OMEGA_INSTALL_TEST_WAYLAND": "wayland-0",
+                "OMEGA_INSTALL_TEST_SSH": "",
+            })
+            self.assertEqual(d_wl["TOPOLOGY"], "spark-desktop")
+            self.assertEqual(d_wl["OPTIONAL_TARGETS"], "gb10")
+            self.assertEqual(d_wl["BROWSER_CMD"], "xdg-open")
+
+        # 4d. Live unadorned `sh install.sh --dry-run` MUST actually probe local GB10/WSL hardware
+        d_live = _run_install_dry_run({})
+        if (
+            platform.system() == "Linux"
+            and platform.machine().lower() in ("aarch64", "arm64")
+            and (os.path.exists("/dev/nvidiactl") or os.path.exists("/dev/aien-gpu"))
+        ):
+            self.assertEqual(d_live["GB10"], "1")
+            self.assertIn(d_live["TOPOLOGY"], ("spark-desktop", "spark-headless"))
+            self.assertEqual(d_live["OPTIONAL_TARGETS"], "gb10")
 
     def test_06_studio_cli_dry_run_and_doctor_json(self) -> None:
         # Exercise real `studio --dry-run --json` end-to-end on the live Spark host

@@ -90,6 +90,7 @@ SSH_ENV=${SSH_CONNECTION:-${SSH_CLIENT:-${SSH_TTY:-}}}
 IS_WSL=0
 GB10=0
 TEST_BROWSER=
+PROC_VER_FILE=/proc/version
 
 if [ "$DRY_RUN" = 1 ]; then
   [ -n "${OMEGA_INSTALL_TEST_OS:-}" ] && OS=$OMEGA_INSTALL_TEST_OS
@@ -97,18 +98,21 @@ if [ "$DRY_RUN" = 1 ]; then
   if [ "${OMEGA_INSTALL_TEST_DISPLAY+set}" = set ]; then DISP=$OMEGA_INSTALL_TEST_DISPLAY; fi
   if [ "${OMEGA_INSTALL_TEST_WAYLAND+set}" = set ]; then WAYL=$OMEGA_INSTALL_TEST_WAYLAND; fi
   if [ "${OMEGA_INSTALL_TEST_SSH+set}" = set ]; then SSH_ENV=$OMEGA_INSTALL_TEST_SSH; fi
-  if [ "${OMEGA_INSTALL_TEST_WSL+set}" = set ]; then IS_WSL=$OMEGA_INSTALL_TEST_WSL; fi
-  if [ "${OMEGA_INSTALL_TEST_GPU+set}" = set ]; then GB10=$OMEGA_INSTALL_TEST_GPU; fi
   if [ "${OMEGA_INSTALL_TEST_BROWSER+set}" = set ]; then TEST_BROWSER=$OMEGA_INSTALL_TEST_BROWSER; fi
-else
-  if [ "$OS" = Linux ]; then
-    if [ -n "${WSL_DISTRO_NAME:-}" ] || [ -n "${WSL_INTEROP:-}" ] || grep -qi microsoft /proc/version 2>/dev/null; then
-      IS_WSL=1
-    fi
-    if [ "$IS_WSL" = 0 ] && { [ "$ARCH" = aarch64 ] || [ "$ARCH" = arm64 ]; }; then
-      if [ -e /dev/nvidiactl ] || [ -e /dev/aien-gpu ]; then
-        GB10=1
-      fi
+  if [ "${OMEGA_INSTALL_TEST_PROC_VERSION+set}" = set ]; then PROC_VER_FILE=$OMEGA_INSTALL_TEST_PROC_VERSION; fi
+fi
+
+if [ "$OS" = Linux ]; then
+  if [ "$DRY_RUN" = 1 ] && [ "${OMEGA_INSTALL_TEST_WSL+set}" = set ]; then
+    IS_WSL=$OMEGA_INSTALL_TEST_WSL
+  elif [ -n "${WSL_DISTRO_NAME:-}" ] || [ -n "${WSL_INTEROP:-}" ] || { [ -r "$PROC_VER_FILE" ] && grep -qi microsoft "$PROC_VER_FILE" 2>/dev/null; }; then
+    IS_WSL=1
+  fi
+  if [ "$DRY_RUN" = 1 ] && [ "${OMEGA_INSTALL_TEST_GPU+set}" = set ]; then
+    GB10=$OMEGA_INSTALL_TEST_GPU
+  elif [ "$IS_WSL" = 0 ] && { [ "$ARCH" = aarch64 ] || [ "$ARCH" = arm64 ]; }; then
+    if [ -e /dev/nvidiactl ] || [ -e /dev/aien-gpu ]; then
+      GB10=1
     fi
   fi
 fi
@@ -116,6 +120,7 @@ fi
 TOPOLOGY=unknown
 PLAT="$OS $ARCH"
 TARGETS=
+OPTIONAL_TARGETS=
 SIGN_MODE=sha256
 BROWSER_CMD=print-url
 LAUNCH_MODE=local
@@ -166,10 +171,13 @@ case "$OS/$ARCH" in
       SIGN_MODE="sha256"
       LAUNCH_MODE="local-or-remote"
       SKIP_SSH_TUNNEL=1
-      BROWSER_CMD=$(detect_wsl_browser)
+      if [ -n "$SSH_ENV" ]; then BROWSER_CMD="print-url"; else BROWSER_CMD=$(detect_wsl_browser); fi
     else
       PLAT="Linux aarch64"
-      [ "$GB10" = 1 ] && PLAT="DGX Spark Linux (aarch64, GB10)"
+      if [ "$GB10" = 1 ]; then
+        PLAT="DGX Spark Linux (aarch64, GB10)"
+        OPTIONAL_TARGETS="gb10"
+      fi
       TARGETS="univ interchange openwaldo tok aarch64 wtrain"
       SIGN_MODE="sha256"
       SKIP_SSH_TUNNEL=1
@@ -198,7 +206,7 @@ case "$OS/$ARCH" in
       SIGN_MODE="sha256"
       LAUNCH_MODE="local-or-remote"
       SKIP_SSH_TUNNEL=1
-      BROWSER_CMD=$(detect_wsl_browser)
+      if [ -n "$SSH_ENV" ]; then BROWSER_CMD="print-url"; else BROWSER_CMD=$(detect_wsl_browser); fi
     else
       PLAT="Linux x86_64"
       TARGETS="univ interchange openwaldo tok x86linux"
@@ -246,6 +254,7 @@ if [ "$DRY_RUN" = 1 ]; then
   printf 'IS_WSL=%s\n' "$IS_WSL"
   printf 'GB10=%s\n' "$GB10"
   printf 'TARGETS=%s\n' "$TARGETS"
+  printf 'OPTIONAL_TARGETS=%s\n' "$OPTIONAL_TARGETS"
   printf 'SKIP_BUILD=%s\n' "$SKIP_BUILD"
   printf 'SIGN_MODE=%s\n' "$SIGN_MODE"
   printf 'LAUNCH_MODE=%s\n' "$LAUNCH_MODE"
@@ -330,7 +339,7 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE/bin"
 
 step "Copying sources"
-(cd "$SRC" && tar -cf - --exclude=__pycache__ --exclude='*.pyc' --exclude=.DS_Store \
+(cd "$SRC" && COPYFILE_DISABLE=1 tar -cf - --exclude=__pycache__ --exclude='*.pyc' --exclude=.DS_Store --exclude='._*' \
    native scripts tools docs bin README.md LICENSE 2>/dev/null) | tar -C "$STAGE" -xf -
 chmod +x "$STAGE/bin/omega-helix" "$STAGE/scripts/"*.sh 2>/dev/null || true
 
