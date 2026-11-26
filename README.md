@@ -13,7 +13,7 @@
 
 **Pure-Omega, Zero-CUDA, DNA-Chained LLM Training, Specialist & Serving Engine on Raw Blackwell Silicon.**
 
-Omega Helix (`ollm` / `ollm-gb10`) is an entire end-to-end language model stack BPE tokenizer, transformer pretraining, BF16 Tensor-Core & FP32 SM121 Blackwell GPU kernels, **DNA-style Merkle Specialist Chains (`OLLMSP01` + `spclip`)**, **Looped-Core & Adaptive Neuralese (`OLLMCK03` + `LTP0`)**, KV-cached sampling, and an OpenAI-compatible HTTP server compiled into a **single static binary** with **zero CUDA, zero cuBLAS, zero PyTorch, zero C, and zero `libc`**.
+Omega Helix (`ollm` / `ollm-gb10`) is an entire end-to-end language model stack — BPE tokenizer, transformer pretraining, BF16 Tensor-Core & FP32 SM121 Blackwell GPU kernels, **DNA-style Merkle Specialist Chains (`OLLMSP01` + `spclip`)**, **Looped-Core & Adaptive Neuralese (`OLLMCK03` + `LTP0`)**, KV-cached sampling, and an OpenAI-compatible HTTP server — compiled into a **single static binary** with **zero CUDA, zero cuBLAS, zero PyTorch, zero C, and zero `libc`**.
 
 > **Repo Scope & Language Disclosure:** `omega-helix` is the standalone pure-Omega LLM training, DNA specialist, and serving engine; [`omega-mv`](https://interplane.io/drakestapleton/omega-mv) (`seed/helix/`) holds the bootstrapped `omc` compiler and proof-carrying toolchain. All engine binaries, GPU kernels, tokenizers, and HTTP servers in `native/` are 100% pure Omega (`.om`) with zero Python or C; Python files under `tests/` and `tools/` are strictly the independent `f64` referee oracle (`oracle.py`) and optional local Studio UI/CLI helpers (marked `linguist-vendored` in `.gitattributes`).
 >
