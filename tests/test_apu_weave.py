@@ -89,7 +89,12 @@ class TestApuWeave(unittest.TestCase):
         cls.td = Path(cls._td.name)
         target, _ = select_target_and_bin()
         cls.target = target
-        cls.bin = build_target(cls.td / "bin", target)
+        env_bin = os.environ.get("OLLM_BIN")
+        env_path = Path(env_bin) if env_bin else None
+        if env_path is not None and env_path.is_file() and os.access(env_path, os.X_OK):
+            cls.bin = env_path
+        else:
+            cls.bin = build_target(cls.td / "bin", target)
 
         # Build a clean 4-shard synthetic corpus with distinct domain patterns
         cls.shards_dir = cls.td / "shards"
