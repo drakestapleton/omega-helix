@@ -153,23 +153,14 @@ ret eq get apu_pbuf sub n 1 107
 end
 
 note Probe apu_pbuf[0..tot) when dirent d_type is DT_UNKNOWN (0) or DT_LNK (10):
-note reject directories (getdnts >= 0) and non-seekable special files like FIFOs/sockets (fseek < 0).
-note O_RDONLY | O_NONBLOCK = 2048 on both Linux x86_64 and aarch64 (asm-generic/fcntl.h).
+note stat follows symlinks without opening the target and writes the normalized 128-byte ARM64 layout
+note on both aarch64 and x86linux (st_mode u32 LE at byte offset 16; S_IFMT=61440, S_IFREG=32768).
 fn apu_is_reg_file tot ulong to bool
-fd = int fopen apu_pbuf 0 tot 2048 0
-if lt fd 0
+if ne stat apu_pbuf 0 tot apu_io 0 128 0
   ret false
 end
-sz = fseek fd 0 2
-gd = getdnts fd apu_io 0 256
-rc = fclose fd
-if lt sz 0
-  ret false
-end
-if ge gd 0
-  ret false
-end
-ret true
+mode = apu_get4_io 16
+ret eq and mode 61440 32768
 end
 
 fn apu_build_dir_path q ulong nl ulong dn ulong to ulong
