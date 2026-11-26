@@ -4,6 +4,10 @@ note One explicitly owned context, bounded buffers, channel, submission and comp
 text nvctl "/dev/nvidiactl"
 text nvdev "/dev/nvidia0"
 text nvuvm "/dev/nvidia-uvm"
+text agdev "/dev/aien-gpu"
+text agdrve "OLLM_DRIVER=aien"
+global nvdrv uchar 1
+global agenv uchar 64
 global nvfd int 4
 global nvobj uint 16
 global nvhdr uchar 32
@@ -110,6 +114,265 @@ ret false
 end
 ret true
 end
+fn ag_eq n long to bool
+if ne n long len agdrve
+ret false
+end
+for j ulong len agdrve
+if ne get agenv j get agdrve j
+ret false
+end
+end
+ret true
+end
+fn ag_env to bool
+ec = ulong envcnt
+for i ulong ec bound 4096
+n = envread i agenv 0 64
+if ag_eq n
+ret true
+end
+end
+ret false
+end
+fn ag_want to bool
+if ag_env
+ret true
+end
+r = fopen nvctl 0 len nvctl 524290 0
+if ge r 0
+c = fclose int r
+ret false
+end
+ret true
+end
+fn agos r long v uint c uint to bool
+if ne r 0
+put nverr 0 r
+ret false
+end
+if ne v 1
+if ne c 0
+put nverr 0 long c
+else
+put nverr 0 neg long v
+end
+ret false
+end
+ret true
+end
+fn agfull to bool
+if ne get nvfault 0 0
+put nverr 0 neg long 5
+ret false
+end
+if ne get nvstate 0 0
+put nverr 0 neg long 16
+ret false
+end
+put nvstate 0 1
+put nvdrv 0 1
+put nvnext 0 68719476736
+for i ulong len nvfd
+put nvfd i neg int 1
+end
+for i ulong len nvobj
+put nvobj i 0
+end
+put nverr 0 0
+put nvstage 0 1
+r = fopen agdev 0 len agdev 524290 0
+if lt r 0
+put nverr 0 r
+ret false
+end
+put nvfd 0 int r
+put nvstage 0 2
+npzero
+r = devctl get nvfd 0 uint 2154840336 nvpar 0 112
+if not nvos r 0
+ret false
+end
+if ne npget 0 1
+put nverr 0 neg long 95
+ret false
+end
+if ne npget 4 4
+put nverr 0 neg long 19
+ret false
+end
+put nvid 0 npget 8
+put nvreg 1 1
+put nvstage 0 17
+ret true
+end
+fn agmrel slot ulong to bool
+f = get nvmflag slot
+if ne and f 2 0
+r = mapdrop get nvmmap slot
+if not nvos r 0
+put nvfault 0 1
+ret false
+end
+f = and f 253
+put nvmflag slot f
+end
+if ne and f 1 0
+npzero
+npput 0 get nvmobj slot
+r = devctl get nvfd 0 uint 3222815010 nvpar 0 24
+if not agos r npget 8 npget 12
+put nvfault 0 1
+ret false
+end
+end
+put nvmflag slot 0
+put nvmobj slot 0
+put nvmmap slot 0
+put nvmaddr slot 0
+put nvmlen slot 0
+ret true
+end
+fn agzero m long size ulong to void
+npzero
+off = ulong 0
+while lt off size bound 9223372036854775807
+n = sub size off
+if gt n 16384
+n = ulong 16384
+end
+r = mapwrite m off nvpar 0 n
+off = add off n
+end
+end
+fn agalloc want ulong cached bool to long
+if or eq get nvreg 1 0 ne get nvfault 0 0
+put nverr 0 neg long 5
+ret neg long 1
+end
+if or eq want 0 gt want 68719476736
+put nverr 0 neg long 22
+ret neg long 1
+end
+size = mul div add want 4095 4096 4096
+slot = ulong 96
+for i ulong 96
+if and eq slot 96 eq get nvmflag i 0
+slot = i
+end
+end
+if eq slot 96
+put nverr 0 neg long 24
+ret neg long 1
+end
+put nvstage 0 21
+if gt get nvnext 0 sub 1099511627776 size
+put nverr 0 neg long 75
+put nvfault 0 1
+ret neg long 1
+end
+m = maphold get nvnext 0 size
+if le m 0
+put nverr 0 m
+put nvfault 0 1
+ret neg long 1
+end
+put nvnext 0 add get nvnext 0 size
+va = mapaddr m
+put nvstage 0 22
+npzero
+npp64 0 size
+npp64 8 va
+if not cached
+npput 16 1
+end
+r = devctl get nvfd 0 uint 3224387873 nvpar 0 48
+if not agos r npget 32 npget 36
+d = mapdrop m
+put nvfault 0 1
+ret neg long 1
+end
+put nvmobj slot npget 20
+put nvmlen slot size
+put nvmmap slot m
+put nvmaddr slot va
+put nvmflag slot 3
+put nvstage 0 23
+r = mapbind m get nvfd 0 npg64 24 3
+if ne r 0
+put nverr 0 r
+put nvfault 0 1
+ret neg long 1
+end
+agzero m size
+put nvstage 0 26
+ret m
+end
+fn agchstop to bool
+ok = true
+if ne get nvobj 8 0
+npzero
+npput 0 get nvobj 8
+r = devctl get nvfd 0 uint 3222815012 nvpar 0 24
+if not agos r npget 8 npget 12
+put nvfault 0 1
+ok = false
+end
+put nvobj 8 0
+end
+put nvsched 0 0
+put nvput 0 0
+put nvret 0 0
+put nvfifo 0 0
+put nvnotify 0 0
+ret ok
+end
+fn agchan to bool
+if or eq get nvreg 1 0 ne get nvfault 0 0
+put nverr 0 neg long 16
+ret false
+end
+if ne get nvobj 8 0
+put nverr 0 neg long 16
+ret false
+end
+put nvstage 0 33
+m = agalloc 65536 false
+if le m 0
+ret false
+end
+put nvfifo 0 m
+m = agalloc 4096 false
+if le m 0
+ret false
+end
+put nvnotify 0 m
+put nvstage 0 34
+npzero
+npput 0 get nvmobj nvfind get nvfifo 0
+npput 4 1024
+npp64 8 0
+npput 16 get nvmobj nvfind get nvfifo 0
+npput 20 get nvmobj nvfind get nvnotify 0
+npp64 24 8192
+r = devctl get nvfd 0 uint 3225960739 nvpar 0 72
+if not agos r npget 56 npget 60
+ret false
+end
+put nvtoken 0 npget 36
+put nvobj 8 npget 48
+put nvcls 0 npget 52
+put nvstage 0 35
+m = mapnew get nvfd 0 npg64 40 65536 3 1
+if le m 0
+put nverr 0 m
+ret false
+end
+put nvbar 0 m
+put nvsched 0 1
+put nvstage 0 39
+ret true
+end
 fn nvalc parent uint cls uint n ulong to uint
 nhzero
 nhput 0 get nvobj 0
@@ -172,6 +435,7 @@ else
 put nvbar 0 0
 end
 end
+if eq get nvdrv 0 0
 if ne get nvobj 5 0
 if not nvfree get nvobj 2 get nvobj 5
 ok = false
@@ -223,6 +487,7 @@ if not nvfree get nvobj 0 get nvobj 0
 ok = false
 end
 put nvobj 0 0
+end
 end
 for j ulong len nvfd
 i = sub 3 j
@@ -297,6 +562,7 @@ put nvput 0 0
 put nvret 0 0
 put nvfifo 0 0
 put nvnotify 0 0
+put nvdrv 0 0
 put nvstate 0 0
 ret true
 end
@@ -518,6 +784,9 @@ end
 
 note Release flags change only after confirmed acceptance. Failed entries stay quarantined.
 fn nvmrel slot ulong to bool
+if ne get nvdrv 0 0
+ret agmrel slot
+end
 f = get nvmflag slot
 if ne and f 4 0
 npzero
@@ -628,6 +897,9 @@ put nverr 0 neg long 22
 ret false
 end
 fn nvalloc want ulong cached bool to long
+if ne get nvdrv 0 0
+ret agalloc want cached
+end
 if or eq get nvreg 1 0 ne get nvfault 0 0
 put nverr 0 neg long 5
 ret neg long 1
@@ -747,6 +1019,10 @@ end
 
 note Register this private GPU virtual address space with UVM, no buffers or kernels.
 fn nvfull to bool
+if ag_want
+ret agfull
+end
+put nvdrv 0 0
 if not nvstart
 ret false
 end
@@ -841,6 +1117,9 @@ ret 96
 end
 note Reverse partial channel construction before releasing its buffers or address space.
 fn nvchstop to bool
+if ne get nvdrv 0 0
+ret agchstop
+end
 if ne get nvchreg 0 0
 npuuid
 npput 16 get nvobj 0
@@ -887,6 +1166,9 @@ end
 
 note Empty queue creation and scheduling; this routine submits no command packets.
 fn nvchan to bool
+if ne get nvdrv 0 0
+ret agchan
+end
 if or eq get nvreg 1 0 ne get nvfault 0 0
 put nverr 0 neg long 16
 ret false
