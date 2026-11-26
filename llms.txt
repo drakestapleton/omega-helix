@@ -1,0 +1,64 @@
+# Omega Helix (`omega-helix`) — AI Agent Driver Guide
+
+> Pure-Omega, Zero-CUDA, DNA-Chained LLM & Merkle Specialist Strand Engine (`OLLMSP01` + `spclip`).
+
+## Quick Discovery (Machine-Readable JSON)
+
+```sh
+omega-helix agent --json        # Full system probe, binary readiness, bounds & exact recipes
+omega-helix doctor --json       # Platform, compiler (omc), GPU, OpenWALDO catalog count
+omega-helix catalog --json      # 73+ OpenWALDO corpora + built-in starter presets
+omega-helix runs --json         # List forged runs in workspace
+```
+
+## Non-Interactive Setup & Strand Training
+
+1. **Design + Forge a Hybrid Base + 2 Custom Strands (`Code` + `Docs`) + HF & GGUF Exports:**
+```sh
+omega-helix setup --non-interactive --name my-strands --mode hybrid --tokenizer bpe --V 300 \
+  --T 32 --D 32 --H 4 --L 2 --steps 20 --dataset omega-starter \
+  --strand Code:omega-native:1:15 --strand Docs:omega-docs:1:15 \
+  --export-hf --export-gguf --forge --json
+```
+
+2. **Train Custom Strands on Your Own Folder (Local Markdown, Code, JSONL, or Text):**
+```sh
+omega-helix forge --name custom-strands --mode hybrid --tokenizer bpe --V 300 \
+  --T 32 --D 32 --H 4 --L 2 --steps 20 --dataset /path/to/base_corpus \
+  --strand SkillA:/path/to/skill_a:1:15 --strand SkillB:/path/to/skill_b:1:15 \
+  --export-hf --export-gguf --json
+```
+
+3. **Closed-Form Zero-Backprop Specialist Strand (`spforge`):**
+```sh
+omega-helix forge --name spforge-strands --mode dna --tokenizer bpe --V 300 \
+  --T 32 --D 32 --H 4 --L 2 --steps 20 --dataset omega-starter \
+  --strand Code:omega-native:1:1 --spforge --json
+# Or standalone against any existing base.ck:
+omega-helix spforge <base.ck> <train.bin_or_tok> <out_dir> --windows 8 --json
+```
+
+4. **Blend, Edit, Sample & Audit Strands:**
+```sh
+omega-helix inspect <run_id> --json
+omega-helix sample <run_id> --prompt "fn main" --n-tokens 32 --weights 700,300 --json
+omega-helix spclip create recipe.spclip <base.ck> 2 500 <a.sp> 500 <b.sp> --json
+omega-helix verify --base-ck <base.ck> --pack <strand.sp> --bom <openwaldo-helix-bom.json> --json
+```
+
+## Headless Local HTTP + SSE Studio API
+
+Start without opening a browser:
+```sh
+omega-helix studio --headless --no-open --port 18420 --json
+```
+
+Key endpoints (`127.0.0.1:18420`):
+- `GET /api/system`
+- `GET /api/catalog?q=python`
+- `POST /api/chains/estimate`
+- `POST /api/chains/start`
+- `GET /api/chains/<run_id>` & `GET /api/chains/<run_id>/events` (SSE)
+- `POST /api/chains/<run_id>/sample`
+- `POST /api/runtime/spforge`
+- `GET /api/trust/verify`

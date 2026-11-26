@@ -427,55 +427,107 @@ def _prompt_choice(label: str, default: str) -> str:
     return ans or default
 
 
+def _parse_strand_flags(items: list[str], existing: list[dict[str, Any]] | None = None, *, use_spforge: bool = False) -> list[dict[str, Any]]:
+    strands = list(existing or [])
+    for item in items:
+        parts = item.split(":")
+        sname = parts[0]
+        sds = parts[1] if len(parts) > 1 and parts[1] else "omega-starter"
+        sadd = int(parts[2]) if len(parts) > 2 and parts[2] else 1
+        ssteps = int(parts[3]) if len(parts) > 3 and parts[3] else 15
+        strands.append({
+            "id": f"strand-{chr(97 + (len(strands) % 26))}",
+            "name": sname,
+            "color": runner.STRAND_COLORS[len(strands) % 4],
+            "add_layers": sadd,
+            "growth": "growpro",
+            "use_fcachem": True,
+            "use_spforge": bool(use_spforge),
+            "steps": ssteps,
+            "lr_micro": 2000,
+            "weight": 500,
+            "dataset": {"kind": "preset" if sds in ("omega-starter", "omega-docs", "omega-native") else "local", "value": sds},
+        })
+    return strands
+
+
 def cmd_setup(args: argparse.Namespace) -> int:
-    print_banner("Interactive 4-Strand Helix Chain Wizard")
-    name = _prompt_choice("Chain name", "my-sovereign-helix")
-    mode = _prompt_choice("Mode (dna | universal | hybrid)", "hybrid").lower()
-    if mode not in ("dna", "universal", "hybrid"):
-        mode = "hybrid"
-
-    if mode == "universal":
-        arch = _prompt_choice("Architecture (qwen3 | llama | mistral | gemma | qwen2 | gpt | gelu)", "qwen3").lower()
-        tokenizer = _prompt_choice("Tokenizer (byte | bpe | u32)", "byte").lower()
+    non_interactive = bool(getattr(args, "non_interactive", False) or getattr(args, "json", False))
+    if non_interactive:
+        name = getattr(args, "name", None) or "my-sovereign-helix"
+        mode = (getattr(args, "mode", None) or "hybrid").lower()
+        arch = (getattr(args, "arch", None) or ("qwen3" if mode == "universal" else "gpt")).lower()
+        tokenizer = (getattr(args, "tokenizer", None) or "bpe").lower()
+        V = getattr(args, "V", None)
+        if V is None:
+            V = 256 if tokenizer in ("byte", "omg") else (70000 if tokenizer == "u32" else 300)
+        D = getattr(args, "D", None) or 32
+        H = getattr(args, "H", None) or 4
+        L = getattr(args, "L", None) or 2
+        T = getattr(args, "T", None) or 32
+        base_steps = getattr(args, "steps", None) or 20
+        ds_val = getattr(args, "dataset", None) or "omega-starter"
+        ds_kind = "preset" if ds_val in ("omega-starter", "omega-docs", "omega-native") else "local"
+        use_spforge = bool(getattr(args, "spforge", False))
+        if mode == "universal":
+            strands: list[dict[str, Any]] = []
+        elif getattr(args, "strand", None):
+            strands = _parse_strand_flags(args.strand, use_spforge=use_spforge)
+        else:
+            strands = _parse_strand_flags(["Code:omega-native:1:15", "Docs:omega-docs:1:15"], use_spforge=use_spforge)
+        export_hf = bool(getattr(args, "export_hf", False))
+        export_gguf = bool(getattr(args, "export_gguf", False))
     else:
-        arch = "gpt"
-        tokenizer = _prompt_choice("Tokenizer (byte | bpe)", "byte").lower()
+        print_banner("Interactive 4-Strand Helix Chain Wizard")
+        name = _prompt_choice("Chain name", getattr(args, "name", None) or "my-sovereign-helix")
+        mode = _prompt_choice("Mode (dna | universal | hybrid)", getattr(args, "mode", None) or "hybrid").lower()
+        if mode not in ("dna", "universal", "hybrid"):
+            mode = "hybrid"
 
-    V = 256 if tokenizer == "byte" else (70000 if tokenizer == "u32" else int(_prompt_choice("BPE Vocab size (280..4096)", "300")))
-    D = int(_prompt_choice("Hidden dim D", "32"))
-    H = int(_prompt_choice("Attention heads H", "4"))
-    L = int(_prompt_choice("Base layers L", "2"))
-    T = int(_prompt_choice("Context window T", "32"))
-    base_steps = int(_prompt_choice("Base training steps", "20"))
-    ds_val = _prompt_choice("Base dataset (omega-starter | omega-docs | omega-native | /path/to/data)", "omega-starter")
-    ds_kind = "preset" if ds_val in ("omega-starter", "omega-docs", "omega-native") else "local"
+        if mode == "universal":
+            arch = _prompt_choice("Architecture (qwen3 | llama | mistral | gemma | qwen2 | gpt | gelu)", getattr(args, "arch", None) or "qwen3").lower()
+            tokenizer = _prompt_choice("Tokenizer (byte | bpe | u32)", getattr(args, "tokenizer", None) or "byte").lower()
+        else:
+            arch = "gpt"
+            tokenizer = _prompt_choice("Tokenizer (byte | bpe)", getattr(args, "tokenizer", None) or "byte").lower()
 
-    strands: list[dict[str, Any]] = []
-    if mode in ("dna", "hybrid"):
-        n_strands = int(_prompt_choice("Number of Merkle specialist strands (0..4)", "2"))
-        defaults = [("Code", "omega-native"), ("Docs", "omega-docs"), ("Reasoning", "omega-starter"), ("Custom", "omega-starter")]
-        for i in range(max(0, min(4, n_strands))):
-            dn, dds = defaults[i]
-            print(f"\n  {violet(f'Strand {i + 1}')}")
-            sname = _prompt_choice("  Strand name", dn)
-            sds = _prompt_choice("  Strand dataset (preset or path)", dds)
-            sadd = int(_prompt_choice("  Added residual layers", "1"))
-            ssteps = int(_prompt_choice("  Frozen-core steps", "15"))
-            strands.append({
-                "id": f"strand-{chr(97 + i)}",
-                "name": sname,
-                "color": runner.STRAND_COLORS[i % 4],
-                "add_layers": sadd,
-                "growth": "growpro",
-                "use_fcachem": True,
-                "steps": ssteps,
-                "lr_micro": 2000,
-                "weight": 500,
-                "dataset": {"kind": "preset" if sds in ("omega-starter", "omega-docs", "omega-native") else "local", "value": sds},
-            })
+        V = 256 if tokenizer in ("byte", "omg") else (70000 if tokenizer == "u32" else int(_prompt_choice("BPE Vocab size (280..4096)", str(getattr(args, "V", None) or "300"))))
+        D = int(_prompt_choice("Hidden dim D", str(getattr(args, "D", None) or "32")))
+        H = int(_prompt_choice("Attention heads H", str(getattr(args, "H", None) or "4")))
+        L = int(_prompt_choice("Base layers L", str(getattr(args, "L", None) or "2")))
+        T = int(_prompt_choice("Context window T", str(getattr(args, "T", None) or "32")))
+        base_steps = int(_prompt_choice("Base training steps", str(getattr(args, "steps", None) or "20")))
+        ds_val = _prompt_choice("Base dataset (omega-starter | omega-docs | omega-native | /path/to/data)", getattr(args, "dataset", None) or "omega-starter")
+        ds_kind = "preset" if ds_val in ("omega-starter", "omega-docs", "omega-native") else "local"
 
-    export_hf = _prompt_choice("Export HF Safetensors? (y/n)", "y").lower().startswith("y")
-    export_gguf = _prompt_choice("Export GGUF v3? (y/n)", "y").lower().startswith("y")
+        strands = []
+        use_spforge = bool(getattr(args, "spforge", False))
+        if mode in ("dna", "hybrid"):
+            n_strands = int(_prompt_choice("Number of Merkle specialist strands (0..4)", "2"))
+            defaults = [("Code", "omega-native"), ("Docs", "omega-docs"), ("Reasoning", "omega-starter"), ("Custom", "omega-starter")]
+            for i in range(max(0, min(4, n_strands))):
+                dn, dds = defaults[i]
+                print(f"\n  {violet(f'Strand {i + 1}')}")
+                sname = _prompt_choice("  Strand name", dn)
+                sds = _prompt_choice("  Strand dataset (preset or path)", dds)
+                sadd = int(_prompt_choice("  Added residual layers", "1"))
+                ssteps = int(_prompt_choice("  Frozen-core steps", "15"))
+                strands.append({
+                    "id": f"strand-{chr(97 + i)}",
+                    "name": sname,
+                    "color": runner.STRAND_COLORS[i % 4],
+                    "add_layers": sadd,
+                    "growth": "growpro",
+                    "use_fcachem": True,
+                    "use_spforge": use_spforge,
+                    "steps": ssteps,
+                    "lr_micro": 2000,
+                    "weight": 500,
+                    "dataset": {"kind": "preset" if sds in ("omega-starter", "omega-docs", "omega-native") else "local", "value": sds},
+                })
+
+        export_hf = _prompt_choice("Export HF Safetensors? (y/n)", "y").lower().startswith("y")
+        export_gguf = _prompt_choice("Export GGUF v3? (y/n)", "y").lower().startswith("y")
 
     spec: dict[str, Any] = {
         "name": name,
@@ -490,6 +542,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         "F": max(32, D * 2),
         "L": L,
         "B": 2,
+        "use_spforge": use_spforge,
         "base_steps": base_steps,
         "lr_micro": 3000,
         "base_dataset": {"kind": ds_kind, "value": ds_val},
@@ -501,30 +554,53 @@ def cmd_setup(args: argparse.Namespace) -> int:
     }
 
     est = runner.estimate_chain(spec)
-    print()
     if not est["valid"]:
-        print(red(f"  ✗ Invalid geometry: {est['error']}"))
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": False, "error": est["error"], "estimate": est}, indent=2))
+        else:
+            print(red(f"\n  ✗ Invalid geometry: {est['error']}"))
         return 1
-
-    p_str = f"{est['params']:,}"
-    print(f"  {emerald('✓')} Estimated Parameters : {bold(p_str)} ({est['tok_width']} tokens, ~{est['est_mb']} MB)")
-    print(f"  {violet('◆')} Merkle DAG Nodes     : {' → '.join(n['label'] for n in est['dag']['nodes'])}")
 
     out_path = Path(args.out or "helix-spec.json").resolve()
     out_path.write_text(json.dumps(spec, indent=2) + "\n", encoding="utf-8")
-    print(f"  {cyan('✓')} Saved spec to        : {out_path}")
 
-    launch = _prompt_choice("Forge this chain now? (y/n)", "n").lower().startswith("y")
+    launch = bool(getattr(args, "forge", False))
+    if not non_interactive:
+        print()
+        p_str = f"{est['params']:,}"
+        print(f"  {emerald('✓')} Estimated Parameters : {bold(p_str)} ({est['tok_width']} tokens, ~{est['est_mb']} MB)")
+        print(f"  {violet('◆')} Merkle DAG Nodes     : {' → '.join(n['label'] for n in est['dag']['nodes'])}")
+        print(f"  {cyan('✓')} Saved spec to        : {out_path}")
+        if not launch:
+            launch = _prompt_choice("Forge this chain now? (y/n)", "n").lower().startswith("y")
+
     if launch:
         ns = argparse.Namespace(
             spec=str(out_path), name=None, mode=None, arch=None, tokenizer=None,
             V=None, T=None, D=None, H=None, H_KV=None, F=None, L=None, B=None,
-            steps=None, lr_micro=None, dataset=None, strand=[], export_hf=False,
-            hf_dtype=None, export_gguf=False, workspace_dir=args.workspace_dir,
-            bin_dir=args.bin_dir, json=False,
+            steps=None, lr_micro=None, dataset=None, strand=[], spforge=False,
+            export_hf=False, hf_dtype=None, export_gguf=False,
+            workspace_dir=args.workspace_dir, bin_dir=args.bin_dir,
+            json=bool(getattr(args, "json", False)),
         )
         return cmd_forge(ns)
-    print(f"\n  Run anytime with: {bold(f'omega-helix forge --spec {out_path}')}\n")
+
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "ok": True,
+            "spec_path": str(out_path),
+            "spec": spec,
+            "estimate": {
+                "params": est["params"],
+                "base_params": est["base_params"],
+                "est_mb": est["est_mb"],
+                "tok_width": est["tok_width"],
+                "resolved_cmd_preview": est["resolved_cmd_preview"],
+            },
+            "next_cmd": f"omega-helix forge --spec {out_path} --json",
+        }, indent=2))
+    else:
+        print(f"\n  Run anytime with: {bold(f'omega-helix forge --spec {out_path}')}\n")
     return 0
 
 
@@ -544,31 +620,14 @@ def cmd_forge(args: argparse.Namespace) -> int:
     if args.dataset:
         kind = "preset" if args.dataset in ("omega-starter", "omega-docs", "omega-native") else "local"
         spec["base_dataset"] = {"kind": kind, "value": args.dataset}
+    if getattr(args, "spforge", False):
+        spec["use_spforge"] = True
     if args.export_hf:
         spec["export_hf"] = True
     if args.export_gguf:
         spec["export_gguf"] = True
     if args.strand:
-        strands = list(spec.get("strands", []))
-        for idx, item in enumerate(args.strand):
-            parts = item.split(":")
-            sname = parts[0]
-            sds = parts[1] if len(parts) > 1 and parts[1] else "omega-starter"
-            sadd = int(parts[2]) if len(parts) > 2 and parts[2] else 1
-            ssteps = int(parts[3]) if len(parts) > 3 and parts[3] else 15
-            strands.append({
-                "id": f"strand-{chr(97 + (len(strands) % 26))}",
-                "name": sname,
-                "color": runner.STRAND_COLORS[len(strands) % 4],
-                "add_layers": sadd,
-                "growth": "growpro",
-                "use_fcachem": True,
-                "steps": ssteps,
-                "lr_micro": 2000,
-                "weight": 500,
-                "dataset": {"kind": "preset" if sds in ("omega-starter", "omega-docs", "omega-native") else "local", "value": sds},
-            })
-        spec["strands"] = strands
+        spec["strands"] = _parse_strand_flags(args.strand, spec.get("strands"), use_spforge=bool(spec.get("use_spforge")))
         spec.setdefault("mode", "hybrid" if (spec.get("export_hf") or spec.get("export_gguf")) else "dna")
 
     est = runner.estimate_chain(spec)
@@ -989,6 +1048,193 @@ def cmd_pillars(args: argparse.Namespace) -> int:
     return 0 if res.get("ok") else 1
 
 
+def cmd_runs(args: argparse.Namespace) -> int:
+    mgr = runner.ChainManager(runs_dir=args.workspace_dir, bin_dir=args.bin_dir)
+    runs = mgr.list_runs()
+    if getattr(args, "json", False):
+        print(json.dumps({"ok": True, "runs_dir": str(mgr.runs_dir), "count": len(runs), "runs": runs}, indent=2))
+        return 0
+    print_banner(f"Forged Helix Runs ({len(runs)})")
+    if not runs:
+        print(dim(f"  No runs in {mgr.runs_dir}. Start one with: omega-helix forge --strand Code:omega-native:1:15"))
+        return 0
+    for r in runs:
+        st = emerald(r["status"]) if r["status"] == "done" else amber(r["status"])
+        loss = f"loss={r['latest_loss']:.4f}" if isinstance(r.get("latest_loss"), (int, float)) else "loss=—"
+        print(f"  {cyan('●')} {bold(r['run_id'])}  [{st}]  {r['mode']} · {r['params']:,}p · {r['strands_count']} strands · {loss}")
+    return 0
+
+
+def cmd_inspect(args: argparse.Namespace) -> int:
+    mgr = runner.ChainManager(runs_dir=args.workspace_dir, bin_dir=args.bin_dir)
+    run = mgr.get_run(args.run)
+    if run is None:
+        msg = f"Run not found: {args.run}"
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": False, "error": msg}))
+        else:
+            print(red(f"ERROR: {msg}"), file=sys.stderr)
+        return 1
+    doc = run.to_dict()
+    if getattr(args, "json", False):
+        print(json.dumps({"ok": True, "run": doc}, indent=2))
+        return 0
+    print_banner(f"Run {doc['run_id']} ({doc['status']})")
+    print(f"  Mode       : {doc['spec'].get('mode')} · Arch={doc['spec'].get('arch')} · Tokenizer={doc['spec'].get('tokenizer')} · Params={doc['params']:,}")
+    print(f"  Dir        : {doc['run_dir']}")
+    print(f"  Latest Loss: {doc['latest_loss']} nats (bpb={doc['latest_bpb']})")
+    for s in doc.get("strands", []):
+        print(f"  Strand     : {s['name']} ({s['id']}) L{s['base_L']}->{s['spec_L']} pack={s['pack_path']} sha256={s['pack_sha256'][:16]}…")
+    for a in doc.get("artifacts", []):
+        print(f"  Artifact   : {a['name']:<28} {a['bytes']:>9,} B  sha256={a['sha256'][:16]}…")
+    return 0
+
+
+def cmd_spforge(args: argparse.Namespace) -> int:
+    bins = runner.ensure_binaries(["ollm"], bin_dir=args.bin_dir)
+    ollm = str(bins["ollm"])
+    base_ck = str(Path(args.base_ck).expanduser().resolve())
+    corpus = str(Path(args.corpus).expanduser().resolve())
+    out_dir = Path(args.out_dir).expanduser().resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fc_path = out_dir / "frozen.hc"
+    sp_path = out_dir / "closed.sp"
+    spec_ck = out_dir / "spec.ck"
+
+    r1 = subprocess.run([ollm, "fcache", base_ck, corpus, str(args.windows), str(fc_path)], capture_output=True, text=True, check=False)
+    if r1.returncode != 0:
+        raise RuntimeError(f"fcache failed rc={r1.returncode}: {r1.stderr.strip() or r1.stdout.strip()}")
+    r2 = subprocess.run([ollm, "spforge", base_ck, str(fc_path), str(sp_path), str(args.ridge_milli), str(args.gn_iters)], capture_output=True, text=True, check=False)
+    if r2.returncode != 0:
+        raise RuntimeError(f"spforge failed rc={r2.returncode}: {r2.stderr.strip() or r2.stdout.strip()}")
+    r3 = subprocess.run([ollm, "spapp", base_ck, str(sp_path), str(spec_ck)], capture_output=True, text=True, check=False)
+    if r3.returncode != 0:
+        raise RuntimeError(f"spapp failed rc={r3.returncode}: {r3.stderr.strip() or r3.stdout.strip()}")
+    ev_cmd = [ollm, "speval", base_ck, str(sp_path), corpus, str(args.windows)]
+    if args.merges:
+        ev_cmd.append(str(Path(args.merges).expanduser().resolve()))
+    r4 = subprocess.run(ev_cmd, capture_output=True, text=True, check=False)
+    if r4.returncode != 0:
+        raise RuntimeError(f"speval failed rc={r4.returncode}: {r4.stderr.strip() or r4.stdout.strip()}")
+
+    sp_parts = r2.stdout.strip().split()
+    ev_parts = r4.stdout.strip().split()
+    sp_hdr = runner.read_sp_header(sp_path)
+    out = {
+        "ok": True,
+        "sp_path": str(sp_path),
+        "spec_ck": str(spec_ck),
+        "sp_header": sp_hdr,
+        "loss_before_unats": int(sp_parts[5]) if len(sp_parts) > 5 else 0,
+        "loss_after_unats": int(sp_parts[6]) if len(sp_parts) > 6 else 0,
+        "eval_unats": int(ev_parts[3]) if len(ev_parts) > 3 else 0,
+    }
+    if getattr(args, "json", False):
+        print(json.dumps(out, indent=2))
+    else:
+        print(f"{emerald('✓')} spforge complete: {sp_path} ({sp_hdr['bytes']:,} B, pack_hash={sp_hdr['pack_hash']})")
+        print(f"  loss_before={out['loss_before_unats']} µnats -> loss_after={out['loss_after_unats']} µnats · speval={out['eval_unats']} µnats")
+    return 0
+
+
+def cmd_spclip(args: argparse.Namespace) -> int:
+    bins = runner.ensure_binaries(["ollm"], bin_dir=args.bin_dir)
+    raw_args = list(args.spclip_args)
+    if raw_args and raw_args[0] == "--":
+        raw_args = raw_args[1:]
+    want_json = bool(getattr(args, "json", False))
+    if "--json" in raw_args:
+        want_json = True
+        raw_args = [a for a in raw_args if a != "--json"]
+    if not raw_args:
+        raise ValueError("pass spclip subcommand arguments (e.g. create|edit|verify|inspect|run|eval|tune|vlin ...)")
+    argv = [str(bins["ollm"]), "spclip"] + raw_args
+    proc = subprocess.run(argv, capture_output=True, check=False)
+    stdout_s = proc.stdout.decode("utf-8", errors="replace")
+    stderr_s = proc.stderr.decode("utf-8", errors="replace")
+    ok = proc.returncode == 0
+    if want_json:
+        print(json.dumps({
+            "ok": ok,
+            "returncode": proc.returncode,
+            "argv": argv,
+            "stdout": stdout_s,
+            "stderr": stderr_s,
+        }, indent=2))
+    else:
+        if stdout_s:
+            sys.stdout.write(stdout_s)
+        if stderr_s:
+            sys.stderr.write(stderr_s)
+    return 0 if ok else (proc.returncode or 1)
+
+
+def cmd_agent(args: argparse.Namespace) -> int:
+    info = runner.detect_system(bin_dir=args.bin_dir, runs_dir=Path(args.workspace_dir) if args.workspace_dir else None)
+    cat = studio_catalog.load_catalog()
+    manifest: dict[str, Any] = {
+        "ok": True,
+        "name": "omega-helix",
+        "purpose": "AI-drivable CLI & HTTP Studio for pure-Omega LLM & Merkle DNA strand (OLLMSP01) training, spclip blending, spforge closed-form solving, and HF/GGUF export.",
+        "telemetry": "disabled",
+        "system": {
+            "os": info["os"],
+            "arch": info["arch"],
+            "topology": info.get("topology"),
+            "has_gb10": info["has_gb10"],
+            "omc": info["omc"],
+            "runs_dir": info["runs_dir"],
+            "bin_dir": info["bin_dir"],
+            "binaries_ready": [k for k, v in info["binaries"].items() if v],
+            "starter_presets": [p["id"] for p in info.get("starter_presets", [])],
+            "openwaldo_catalog_count": cat["count"],
+        },
+        "geometry_bounds": {
+            "dna_and_hybrid": {"V": "256..4096", "T": "1..256", "D": "1..1024 (divisible by H)", "H": "1..32", "F": "1..4096", "B": "1..64", "max_total_layers": 24, "max_strands": 4},
+            "universal": {"V": ">=256 (bpe 257..65535, u32 >65535)", "arches": ["qwen3", "llama", "mistral", "gemma", "qwen2", "gpt", "gelu"], "strands": 0},
+        },
+        "recipes": {
+            "1_health_check": "omega-helix doctor --json",
+            "2_non_interactive_setup_and_forge": (
+                "omega-helix setup --non-interactive --name my-strands --mode hybrid --tokenizer bpe --V 300 "
+                "--T 32 --D 32 --H 4 --L 2 --steps 20 --dataset omega-starter "
+                "--strand Code:omega-native:1:15 --strand Docs:omega-docs:1:15 "
+                "--export-hf --export-gguf --forge --json"
+            ),
+            "3_forge_from_local_folder": (
+                "omega-helix forge --name custom-strands --mode hybrid --tokenizer bpe --V 300 "
+                "--T 32 --D 32 --H 4 --L 2 --steps 20 --dataset /path/to/your/corpus "
+                "--strand SkillA:/path/to/skill_a:1:15 --strand SkillB:/path/to/skill_b:1:15 "
+                "--export-hf --export-gguf --json"
+            ),
+            "4_closed_form_spforge_strand": "omega-helix spforge <base.ck> <train.bin_or_tok> <out_dir> --windows 8 --json",
+            "5_sample_and_blend_strands": "omega-helix sample <run_id> --prompt 'fn main' --n-tokens 32 --weights 700,300 --json",
+            "6_editable_spclip_recipe": "omega-helix spclip create recipe.spclip <base.ck> 2 500 <a.sp> 500 <b.sp> --json",
+            "7_list_and_inspect_runs": "omega-helix runs --json && omega-helix inspect <run_id> --json",
+            "8_offline_trust_audit": "omega-helix verify --base-ck <base.ck> --pack <strand.sp> --bom <openwaldo-helix-bom.json> --json",
+            "9_headless_studio_http": "omega-helix studio --headless --no-open --port 18420 --json",
+        },
+        "http_api": {
+            "GET /api/system": "Host topology, binaries, presets",
+            "GET /api/catalog?q=python": "Search 73+ OpenWALDO corpora",
+            "POST /api/chains/estimate": "Validate chain spec & return params + DAG",
+            "POST /api/chains/start": "Launch background training run; returns run_id",
+            "GET /api/chains/<run_id>": "Poll run status, metrics, strands, artifacts",
+            "GET /api/chains/<run_id>/events": "SSE stream of live training metrics",
+            "POST /api/chains/<run_id>/sample": "Blend strands via spclip & generate tokens",
+            "POST /api/runtime/spforge": "One-shot closed-form Ridge/GN strand solver",
+            "GET /api/trust/verify": "Offline Mach-O/ELF + CSP + Merkle + BOM audit",
+        },
+    }
+    if getattr(args, "format", "json") == "md":
+        print(f"# Omega Helix AI Driver Guide\n\n- Topology: `{manifest['system']['topology']}` (`{manifest['system']['os']} {manifest['system']['arch']}`)\n- Compiler: `{manifest['system']['omc']}`\n")
+        for k, v in manifest["recipes"].items():
+            print(f"## {k}\n```sh\n{v}\n```\n")
+    else:
+        print(json.dumps(manifest, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--workspace-dir", default=argparse.SUPPRESS, help="Directory for forged runs")
@@ -1086,8 +1332,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_cat.add_argument("--json", action="store_true")
     p_cat.set_defaults(func=cmd_catalog)
 
-    p_setup = sub.add_parser("setup", parents=[common], help="Interactive 4-strand ANSI wizard to design a Helix chain")
+    p_setup = sub.add_parser("setup", parents=[common], help="4-strand wizard to design & optionally forge a Helix chain (supports --non-interactive --json)")
     p_setup.add_argument("--out", default="helix-spec.json", help="Output spec JSON file")
+    p_setup.add_argument("--non-interactive", dest="non_interactive", action="store_true", help="Skip input() prompts; use flags/defaults")
+    p_setup.add_argument("--name", default=None)
+    p_setup.add_argument("--mode", choices=("dna", "universal", "hybrid"), default=None)
+    p_setup.add_argument("--arch", default=None)
+    p_setup.add_argument("--tokenizer", choices=("byte", "bpe", "u32", "omg"), default=None)
+    p_setup.add_argument("--V", type=int, default=None)
+    p_setup.add_argument("--T", type=int, default=None)
+    p_setup.add_argument("--D", type=int, default=None)
+    p_setup.add_argument("--H", type=int, default=None)
+    p_setup.add_argument("--L", type=int, default=None)
+    p_setup.add_argument("--steps", type=int, default=None)
+    p_setup.add_argument("--dataset", default=None)
+    p_setup.add_argument("--strand", action="append", default=[], help="Add strand NAME[:DATASET[:LAYERS[:STEPS]]]")
+    p_setup.add_argument("--spforge", action="store_true", help="Use one-shot closed-form spforge for 1-layer strands")
+    p_setup.add_argument("--export-hf", dest="export_hf", action="store_true")
+    p_setup.add_argument("--export-gguf", dest="export_gguf", action="store_true")
+    p_setup.add_argument("--forge", action="store_true", help="Forge immediately after writing spec")
+    p_setup.add_argument("--json", action="store_true")
     p_setup.set_defaults(func=cmd_setup)
 
     p_forge = sub.add_parser("forge", parents=[common], help="Forge a DNA, Universal, or Hybrid Helix chain from a spec or flags")
@@ -1095,7 +1359,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_forge.add_argument("--name", default=None)
     p_forge.add_argument("--mode", choices=("dna", "universal", "hybrid"), default=None)
     p_forge.add_argument("--arch", default=None)
-    p_forge.add_argument("--tokenizer", choices=("byte", "bpe", "u32"), default=None)
+    p_forge.add_argument("--tokenizer", choices=("byte", "bpe", "u32", "omg"), default=None)
     p_forge.add_argument("--V", type=int, default=None)
     p_forge.add_argument("--T", type=int, default=None)
     p_forge.add_argument("--D", type=int, default=None)
@@ -1108,11 +1372,42 @@ def build_parser() -> argparse.ArgumentParser:
     p_forge.add_argument("--lr-micro", dest="lr_micro", type=int, default=None)
     p_forge.add_argument("--dataset", default=None)
     p_forge.add_argument("--strand", action="append", default=[], help="Add strand NAME[:DATASET[:LAYERS[:STEPS]]]")
+    p_forge.add_argument("--spforge", action="store_true", help="Use one-shot closed-form spforge for 1-layer strands")
     p_forge.add_argument("--export-hf", dest="export_hf", action="store_true")
     p_forge.add_argument("--hf-dtype", dest="hf_dtype", choices=("f32", "bf16"), default=None)
     p_forge.add_argument("--export-gguf", dest="export_gguf", action="store_true")
     p_forge.add_argument("--json", action="store_true")
     p_forge.set_defaults(func=cmd_forge)
+
+    p_runs = sub.add_parser("runs", parents=[common], help="List forged Helix runs in workspace")
+    p_runs.add_argument("--json", action="store_true")
+    p_runs.set_defaults(func=cmd_runs)
+
+    p_insp = sub.add_parser("inspect", parents=[common], help="Inspect a forged Helix run, strands, artifacts & BOM")
+    p_insp.add_argument("run", help="Run ID or path to run directory")
+    p_insp.add_argument("--json", action="store_true")
+    p_insp.set_defaults(func=cmd_inspect)
+
+    p_spf = sub.add_parser("spforge", parents=[common], help="One-shot closed-form Ridge/Gauss-Newton specialist strand solver")
+    p_spf.add_argument("base_ck")
+    p_spf.add_argument("corpus")
+    p_spf.add_argument("out_dir")
+    p_spf.add_argument("--windows", type=int, default=8)
+    p_spf.add_argument("--ridge-milli", dest="ridge_milli", type=int, default=10000)
+    p_spf.add_argument("--gn-iters", dest="gn_iters", type=int, default=1)
+    p_spf.add_argument("--merges", default=None, help="Optional BPE merges.bin for V > 256")
+    p_spf.add_argument("--json", action="store_true")
+    p_spf.set_defaults(func=cmd_spforge)
+
+    p_spc = sub.add_parser("spclip", parents=[common], help="Run editable .spclip DNA recipe commands (create|edit|verify|inspect|run|eval|tune)")
+    p_spc.add_argument("--json", action="store_true")
+    p_spc.add_argument("spclip_args", nargs=argparse.REMAINDER)
+    p_spc.set_defaults(func=cmd_spclip)
+
+    p_agt = sub.add_parser("agent", aliases=["guide"], parents=[common], help="Machine-readable AI agent manifest, schemas & CLI/HTTP cookbook")
+    p_agt.add_argument("--format", choices=("json", "md"), default="json")
+    p_agt.add_argument("--json", action="store_true", help="Emit JSON (default)")
+    p_agt.set_defaults(func=cmd_agent)
 
     p_samp = sub.add_parser("sample", parents=[common], help="Sample interactively from a forged Helix run")
     p_samp.add_argument("run", help="Run ID or path to run directory")

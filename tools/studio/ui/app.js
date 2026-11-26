@@ -181,8 +181,13 @@
     setTimeout(() => t.remove(), 4200);
   }
 
-  async function api(url, opts) {
-    const res = await fetch(url, opts);
+  async function api(url, opts = {}) {
+    const reqOpts = { ...opts };
+    if (reqOpts.body && typeof reqOpts.body === "object" && !(reqOpts.body instanceof FormData) && !(reqOpts.body instanceof Blob)) {
+      reqOpts.body = JSON.stringify(reqOpts.body);
+      reqOpts.headers = { "Content-Type": "application/json", ...(reqOpts.headers || {}) };
+    }
+    const res = await fetch(url, reqOpts);
     const data = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
     if (!res.ok && data.ok === undefined) data.ok = false;
     return data;
@@ -631,6 +636,7 @@
     $("f-tokenizer").value = s.tokenizer;
     $("f-hfdtype").value = s.hf_dtype;
     $("f-gpu").checked = Boolean(s.use_gpu);
+    if ($("f-spforge")) $("f-spforge").checked = Boolean(s.use_spforge);
     if ($("f-steps-exact")) $("f-steps-exact").value = String(s.base_steps || 15);
     if ($("f-save-every")) $("f-save-every").value = String(s.save_every || 0);
     if ($("f-gpu-prec")) $("f-gpu-prec").value = s.gpu_precision || "bf16";
@@ -1601,6 +1607,7 @@
     $("f-tokenizer").addEventListener("change", () => { state.spec.tokenizer = $("f-tokenizer").value; scheduleEstimate(); });
     $("f-hfdtype").addEventListener("change", () => { state.spec.hf_dtype = $("f-hfdtype").value; scheduleEstimate(); });
     $("f-gpu").addEventListener("change", () => { state.spec.use_gpu = $("f-gpu").checked; scheduleEstimate(); });
+    if ($("f-spforge")) $("f-spforge").addEventListener("change", () => { state.spec.use_spforge = $("f-spforge").checked; scheduleEstimate(); });
     $("f-hf").addEventListener("change", () => { state.spec.export_hf = $("f-hf").checked; scheduleEstimate(); });
     $("f-gguf").addEventListener("change", () => { state.spec.export_gguf = $("f-gguf").checked; scheduleEstimate(); });
 
@@ -1666,10 +1673,12 @@
         sfx.milestone();
         activateTab("tab-forge", false);
         $("spiral-meter-block")?.scrollIntoView({ behavior: "smooth", block: "start" });
-        if ($("sp-base-ck") && !$("sp-base-ck").value) $("sp-base-ck").value = "~/workspace/omega-helix-spiral/run/seed.ck";
-        if ($("sp-shards-src") && !$("sp-shards-src").value) $("sp-shards-src").value = "~/workspace/omega-helix-spiral/data/shards";
-        if ($("sp-apu-out") && !$("sp-apu-out").value) $("sp-apu-out").value = "~/workspace/omega-helix-spiral/run/apu_strands";
-        toast("Full-APU Weave ready — click Full-APU Weave in Forge to launch!", "ok");
+        const baseCk = state.activeRun?.sample_meta?.base_ck || "";
+        if ($("sp-base-ck") && !$("sp-base-ck").value && baseCk) $("sp-base-ck").value = baseCk;
+        if ($("sp-apu-out") && !$("sp-apu-out").value && state.activeRun?.run_dir) {
+          $("sp-apu-out").value = `${state.activeRun.run_dir}/apu_strands`;
+        }
+        toast("Full-APU Weave panel ready — enter seed.ck + shards dir and click Full-APU Weave.", "ok");
       });
     }
     if ($("btn-sp-cryst")) $("btn-sp-cryst").addEventListener("click", runSpiralCryst);
@@ -1901,7 +1910,11 @@
   async function probeSshHost(host, rport) {
     const st = $("ssh-probe-status");
     if (st) st.textContent = `Probing ${host} over SSH…`;
-    const res = await api("/api/remotes/probe", { method: "POST", body: { host, remote_port: rport } });
+    const res = await api("/api/remotes/probe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ host, remote_port: rport }),
+    });
     if (!res.ok) {
       if (st) st.textContent = `Probe failed: ${res.error || "unreachable"}`;
       toast(`SSH probe failed: ${res.error || host}`, "err");
@@ -1922,7 +1935,8 @@
     try {
       const res = await api("/api/remotes/connect", {
         method: "POST",
-        body: { host, remote_port: rport, bootstrap },
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ host, remote_port: rport, bootstrap }),
       });
       if (!res.ok) {
         if (st) st.textContent = `Connect failed: ${res.error || "error"}`;
@@ -1941,7 +1955,11 @@
   }
 
   async function disconnectSshHost(id) {
-    const res = await api("/api/remotes/disconnect", { method: "POST", body: { id } });
+    const res = await api("/api/remotes/disconnect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
     if (res.ok) {
       toast("SSH tunnel disconnected.");
       await refreshRemotes();
@@ -1971,7 +1989,8 @@
     }
     const eps = res.endpoints || [];
     eps.forEach((ep) => {
-      const chip = el("button", { type: "button", class: `probe-chip${ep.reachable ? " on" : ""}` }, `${ep.name} (${ep.reachable ? (ep.models[0] || "online") : "offline"})`);
+      const chip = el("button", `probe-chip${ep.reachable ? " on" : ""}`, `${ep.name} (${ep.reachable ? (ep.models[0] || "online") : "offline"})`);
+      chip.type = "button";
       chip.addEventListener("click", () => {
         $("d-teacher-url").value = ep.base_url;
         if (ep.models && ep.models.length) $("d-teacher-model").value = ep.models[0];
@@ -2040,9 +2059,13 @@
     const sel = $("distill-run-select");
     if (!sel) return;
     const prev = state.activeDistillId || sel.value;
-    sel.replaceChildren(el("option", { value: "" }, "— live / recent runs —"));
+    const opt0 = el("option", "", "— live / recent runs —");
+    opt0.value = "";
+    sel.replaceChildren(opt0);
     (res.runs || []).forEach((r) => {
-      sel.appendChild(el("option", { value: r.run_id }, `${r.run_id} (${r.mode} · ${r.status})`));
+      const opt = el("option", "", `${r.run_id} (${r.mode} · ${r.status})`);
+      opt.value = r.run_id;
+      sel.appendChild(opt);
     });
     if (prev) sel.value = prev;
   }
@@ -2098,7 +2121,11 @@
       prompts: prompts,
       teachers: tUrl ? [{ kind: "openai_compat", base_url: tUrl, model: tMod || "q36-35b" }] : [],
     };
-    const res = await api("/api/distill/runs", { method: "POST", body: spec });
+    const res = await api("/api/distill/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(spec),
+    });
     if (!res.ok) {
       toast(res.error || "Invalid distillation spec", "err");
       sfx.err();

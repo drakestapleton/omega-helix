@@ -955,6 +955,174 @@ class StudioTestCase(unittest.TestCase):
                 srv.server_close()
                 th.join(timeout=3.0)
 
+    def test_bpe_hybrid_dna_strands_eval_and_exports(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="helix-bpe-dna-") as td:
+            mgr = runner.ChainManager(runs_dir=td, bin_dir=self.bin_dir)
+            spec = {
+                "name": "bpe-hybrid-test",
+                "mode": "hybrid",
+                "arch": "gpt",
+                "tokenizer": "bpe",
+                "V": 300,
+                "T": 32,
+                "D": 32,
+                "H": 4,
+                "F": 64,
+                "L": 2,
+                "B": 2,
+                "base_steps": 8,
+                "lr_micro": 3000,
+                "base_dataset": {"kind": "preset", "value": "omega-starter"},
+                "strands": [
+                    {"id": "s-code", "name": "Code", "add_layers": 1, "steps": 6, "dataset": {"kind": "preset", "value": "omega-native"}},
+                    {"id": "s-docs", "name": "Docs", "add_layers": 1, "steps": 6, "dataset": {"kind": "preset", "value": "omega-docs"}},
+                ],
+                "export_hf": True,
+                "hf_dtype": "bf16",
+                "export_gguf": True,
+            }
+            run = mgr.start_chain(spec, wait=True)
+            self.assertEqual(run.status, "done", run.error)
+            self.assertEqual(len(run.strands), 2)
+            for s in run.strands:
+                self.assertIsNotNone(s.get("eval_loss"))
+                self.assertTrue(Path(s["pack_path"]).is_file())
+            self.assertTrue((run.run_dir / "export-hf" / "model.safetensors").is_file())
+            self.assertTrue((run.run_dir / "model.gguf").is_file())
+            samp = mgr.sample_chain(run.run_id, prompt="Omega ", n_tokens=8, temp_milli=0, seed=42)
+            self.assertEqual(samp["mode_used"], "spclip")
+            self.assertTrue(samp["ok"])
+
+    def test_spforge_strand_and_omg_tokenizer(self) -> None:
+        est_omg = runner.estimate_chain({"name": "omg-ok", "mode": "dna", "tokenizer": "omg", "strands": []})
+        self.assertTrue(est_omg["valid"], est_omg.get("error"))
+        self.assertEqual(est_omg["spec"]["V"], 256)
+        with tempfile.TemporaryDirectory(prefix="helix-spforge-chain-") as td:
+            mgr = runner.ChainManager(runs_dir=td, bin_dir=self.bin_dir)
+            spec = {
+                "name": "spforge-dna",
+                "mode": "dna",
+                "tokenizer": "bpe",
+                "V": 300,
+                "T": 32,
+                "D": 32,
+                "H": 4,
+                "F": 64,
+                "L": 2,
+                "B": 2,
+                "base_steps": 8,
+                "use_spforge": True,
+                "base_dataset": {"kind": "preset", "value": "omega-starter"},
+                "strands": [
+                    {"id": "sf-code", "name": "Code", "add_layers": 1, "steps": 1, "dataset": {"kind": "preset", "value": "omega-native"}},
+                ],
+            }
+            run = mgr.start_chain(spec, wait=True)
+            self.assertEqual(run.status, "done", run.error)
+            self.assertEqual(len(run.strands), 1)
+            self.assertTrue(Path(run.strands[0]["pack_path"]).is_file())
+
+    def test_ai_driver_cli_and_ui_sanity(self) -> None:
+        cli_py = str(STUDIO_DIR / "cli.py")
+        r_ag = subprocess.run(
+            [sys.executable, cli_py, "--bin-dir", str(self.bin_dir), "agent", "--json"],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(r_ag.returncode, 0, r_ag.stderr)
+        ag_doc = json.loads(r_ag.stdout)
+        self.assertTrue(ag_doc["ok"])
+        self.assertIn("2_non_interactive_setup_and_forge", ag_doc["recipes"])
+
+        with tempfile.TemporaryDirectory(prefix="helix-ai-cli-") as td:
+            spec_p = Path(td) / "spec.json"
+            ws_dir = Path(td) / "runs"
+            r_set = subprocess.run(
+                [
+                    sys.executable, cli_py, "--workspace-dir", str(ws_dir), "--bin-dir", str(self.bin_dir),
+                    "setup", "--non-interactive", "--out", str(spec_p),
+                    "--name", "ai-strands", "--mode", "dna", "--tokenizer", "bpe", "--V", "300",
+                    "--T", "32", "--D", "32", "--H", "4", "--L", "2", "--steps", "6",
+                    "--strand", "Code:omega-native:1:6", "--strand", "Docs:omega-docs:1:6",
+                    "--spforge", "--forge", "--json",
+                ],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(r_set.returncode, 0, r_set.stderr or r_set.stdout)
+            forge_doc = json.loads(r_set.stdout)
+            self.assertEqual(forge_doc["status"], "done")
+            run_id = forge_doc["run_id"]
+            run_dir = Path(forge_doc["run_dir"])
+
+            r_runs = subprocess.run(
+                [sys.executable, cli_py, "--workspace-dir", str(ws_dir), "--bin-dir", str(self.bin_dir), "runs", "--json"],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(r_runs.returncode, 0)
+            self.assertEqual(json.loads(r_runs.stdout)["count"], 1)
+
+            r_insp = subprocess.run(
+                [sys.executable, cli_py, "--workspace-dir", str(ws_dir), "--bin-dir", str(self.bin_dir), "inspect", run_id, "--json"],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(r_insp.returncode, 0)
+            self.assertEqual(json.loads(r_insp.stdout)["run"]["run_id"], run_id)
+
+            r_spf = subprocess.run(
+                [
+                    sys.executable, cli_py, "--bin-dir", str(self.bin_dir),
+                    "spforge", str(run_dir / "base.ck"),
+                    str(run_dir / "data" / "base" / "train.tok"),
+                    str(Path(td) / "spf_out"), "--windows", "4", "--merges",
+                    str(run_dir / "data" / "base" / "merges300.bin"), "--json",
+                ],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(r_spf.returncode, 0, r_spf.stderr)
+            self.assertTrue(json.loads(r_spf.stdout)["ok"])
+
+            strands = forge_doc["strands"]
+            self.assertEqual(len(strands), 2)
+
+            # Verify trailing --json works on spclip (REMAINDER) and multi-strand parallel verify passes
+            spclip_out = Path(td) / "test.spclip"
+            r_spc = subprocess.run(
+                [
+                    sys.executable, cli_py, "--bin-dir", str(self.bin_dir),
+                    "spclip", "create", str(spclip_out), str(run_dir / "base.ck"),
+                    "--strand", str(strands[0]["pack_path"]),
+                    "--strand", str(strands[1]["pack_path"]),
+                    "--weights", "650,350", "--mode", "1", "--tau", "1000", "--json",
+                ],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(r_spc.returncode, 0, r_spc.stderr or r_spc.stdout)
+            self.assertTrue(json.loads(r_spc.stdout)["ok"])
+            self.assertTrue(spclip_out.is_file())
+
+            r_ver = subprocess.run(
+                [
+                    sys.executable, cli_py, "--bin-dir", str(self.bin_dir),
+                    "verify", "--base-ck", str(run_dir / "base.ck"),
+                    "--pack", str(strands[0]["pack_path"]),
+                    "--pack", str(strands[1]["pack_path"]),
+                    "--bom", str(run_dir / "openwaldo-helix-bom.json"),
+                    "--json",
+                ],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(r_ver.returncode, 0, r_ver.stdout or r_ver.stderr)
+            ver_doc = json.loads(r_ver.stdout)
+            self.assertTrue(ver_doc["ok"], ver_doc)
+            merkle_chk = next(c for c in ver_doc["checks"] if c["name"] == "merkle_sp_chain")
+            self.assertTrue(merkle_chk["detail"].startswith("parallel fork:"), merkle_chk)
+
+        app_js = (STUDIO_DIR / "ui" / "app.js").read_text(encoding="utf-8")
+        self.assertNotIn('el("button", {', app_js)
+        self.assertNotIn('el("option", {', app_js)
+        self.assertNotIn('body: { ', app_js)
+        idx_html = (STUDIO_DIR / "ui" / "index.html").read_text(encoding="utf-8")
+        self.assertNotIn('id="f-rev"', idx_html)
+
 
 if __name__ == "__main__":
     unittest.main()

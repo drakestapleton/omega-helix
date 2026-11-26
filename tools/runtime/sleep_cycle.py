@@ -35,8 +35,11 @@ from distill.verifiers import VerifierPipeline  # noqa: E402
 from .anti_dna import read_sp_pack_hash  # noqa: E402
 
 
-def _run_eval(ollm: str, ck: Path, held_bin: Path, windows: int) -> float:
-    r = subprocess.run([ollm, "eval", str(ck), str(held_bin), str(windows)], capture_output=True, text=True, check=False)
+def _run_eval(ollm: str, ck: Path, held_bin: Path, windows: int, merges_bin: Path | None = None) -> float:
+    cmd = [ollm, "eval", str(ck), str(held_bin), str(windows)]
+    if merges_bin is not None:
+        cmd.append(str(merges_bin))
+    r = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if r.returncode != 0:
         raise RuntimeError(f"ollm eval failed (rc={r.returncode}): {r.stderr.strip()}")
     for ln in r.stdout.splitlines():
@@ -59,6 +62,7 @@ def run_sleep_cycle(
     add_layers: int = 1,
     lr_micro: int = 2000,
     date_tag: str | None = None,
+    merges_bin: str | Path | None = None,
 ) -> dict[str, Any]:
     """Consolidate verifier-passing session traces into a regression-gated daily `.sp` link."""
     ollm = str(Path(ollm_bin).expanduser().resolve())
@@ -96,7 +100,8 @@ def run_sleep_cycle(
     if held_bytes <= T:
         raise ValueError(f"held regression corpus {held} shorter than T={T}")
     eval_w = max(1, min(8, (held_bytes - 1) // T))
-    eval_before = _run_eval(ollm, bck, held, eval_w)
+    merges_p = Path(merges_bin).expanduser().resolve() if merges_bin else None
+    eval_before = _run_eval(ollm, bck, held, eval_w, merges_bin=merges_p)
 
     cand_ck = od / f"day-{tag}.ck"
     cand_hc = od / f"day-{tag}.hc"
@@ -120,7 +125,7 @@ def run_sleep_cycle(
     if r_sp.returncode != 0:
         raise RuntimeError(f"spext failed (rc={r_sp.returncode}): {r_sp.stderr.strip()}")
 
-    eval_after = _run_eval(ollm, cand_ck, held, eval_w)
+    eval_after = _run_eval(ollm, cand_ck, held, eval_w, merges_bin=merges_p)
     delta = eval_after - eval_before
     gate_ok = delta <= float(max_regression_nats)
 

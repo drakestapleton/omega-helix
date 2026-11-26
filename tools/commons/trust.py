@@ -121,15 +121,19 @@ def verify_sovereign_trust(
         except Exception as exc:
             checks.append({"name": "openwaldo_bom", "passed": False, "detail": str(exc)})
 
-    # 4. Optional OLLMSP01 Merkle pack chain verification
+    # 4. Optional OLLMSP01 Merkle pack chain / parallel fork verification
     if packs:
         try:
             metas = [read_sp_meta(p) for p in packs]
             chain_ok = True
             detail_parts = []
+            all_parallel = len(metas) > 1 and all(
+                m["base_L"] == metas[0]["base_L"] and m["base_hash"] == metas[0]["base_hash"]
+                for m in metas
+            )
             for idx, m in enumerate(metas):
                 detail_parts.append(f"L{m['base_L']}->{m['spec_L']}({m['pack_hash'][:10]})")
-                if idx > 0 and metas[idx]["base_L"] != metas[idx - 1]["spec_L"]:
+                if not all_parallel and idx > 0 and metas[idx]["base_L"] != metas[idx - 1]["spec_L"]:
                     chain_ok = False
                     detail_parts.append(f"LAYER_BREAK({metas[idx-1]['spec_L']}!={metas[idx]['base_L']})")
             if base_ck is not None:
@@ -137,10 +141,11 @@ def verify_sovereign_trust(
                 if bhdr["shape"]["L"] != metas[0]["base_L"]:
                     chain_ok = False
                     detail_parts.append(f"BASE_L_MISMATCH({bhdr['shape']['L']}!={metas[0]['base_L']})")
+            prefix = "parallel fork: " if all_parallel else ""
             checks.append({
                 "name": "merkle_sp_chain",
                 "passed": chain_ok,
-                "detail": " -> ".join(detail_parts),
+                "detail": prefix + (" , " if all_parallel else " -> ").join(detail_parts),
             })
         except Exception as exc:
             checks.append({"name": "merkle_sp_chain", "passed": False, "detail": str(exc)})
