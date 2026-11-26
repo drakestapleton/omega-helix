@@ -419,6 +419,7 @@ def main():
             os.path.join(nat_dir, "arboris.om"),
             os.path.join(nat_dir, "sp_solve.om"),
             os.path.join(nat_dir, "spiral.om"),
+            os.path.join(nat_dir, "apu_weave.om"),
             os.path.join(nat_dir, "omg.om"),
             os.path.join(nat_dir, "pillars_cli.om"),
             os.path.join(nat_dir, "cli.om"),
@@ -436,6 +437,8 @@ def main():
             os.path.join(gpu_dir, "gm.om"),
             os.path.join(gpu_dir, "ring.om"),
             os.path.join(gpu_dir, "ejit.om"),
+            os.path.join(nat_dir, "apu_fabric_linux.om"),
+            os.path.join(nat_dir, "apu_fabric_gb10.om"),
         ]
         chunks = ["om2\n"]
         for p in full_parts:

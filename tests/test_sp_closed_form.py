@@ -389,12 +389,14 @@ def build_solver_harness(out_dir):
     is_x86 = platform.system() == "Linux" and platform.machine().lower() in ("x86_64", "amd64")
     plat = "mio.om" if is_mac else "lio.om"
     rev_unit = "norev.om" if is_x86 else "rev.om"
-    units = ["math.om", "data.om", "lpool.om", "model.om", "adam.om", "ckpt.om", "bpe.om", "spec.om", rev_unit, "arboris.om", "sp_solve.om", "spiral.om", "omg.om", "pillars_cli.om"]
+    units = ["math.om", "data.om", "lpool.om", "model.om", "adam.om", "ckpt.om", "bpe.om", "spec.om", rev_unit, "arboris.om", "sp_solve.om", "spiral.om", "apu_weave.om", "omg.om", "pillars_cli.om"]
+    apu_fab = ["apu_fabric_macos.om"] if is_mac else ["apu_fabric_linux.om", "apu_fabric_nogpu.om"]
     cli_txt = read_text(os.path.join(SRC, "cli.om")).replace("fn ocmd to int", "fn ocmd_orig to int", 1)
     src_text = "target a64macos\nom2\n" if is_mac else ("target x86linux\nom2\n" if is_x86 else "om2\n")
     src_text += "\n".join(read_text(os.path.join(SRC, u)) for u in units)
     src_text += "\n" + cli_txt + "\n" + harness_om + "\n" + read_text(os.path.join(SRC, plat))
     src_text += "\n" + read_text(os.path.join(SRC, "noserve.om")) + "\n" + read_text(os.path.join(SRC, "nogpu.om"))
+    src_text += "\n" + "\n".join(read_text(os.path.join(SRC, u)) for u in apu_fab)
     harness_bin = os.path.join(out_dir, "sp_harness")
     compile_om(src_text, harness_bin)
     return harness_bin
@@ -403,9 +405,9 @@ def build_solver_harness(out_dir):
 def test_cross_target_compile():
     """Verify sp_solve.om compiles cleanly with math..spec for host target and gb10 (om2)."""
     with tempfile.TemporaryDirectory() as td:
-        units = ["math.om", "data.om", "lpool.om", "model.om", "adam.om", "ckpt.om", "bpe.om", "spec.om", "rev.om", "arboris.om", "sp_solve.om", "spiral.om", "omg.om", "pillars_cli.om", "cli.om"]
+        units = ["math.om", "data.om", "lpool.om", "model.om", "adam.om", "ckpt.om", "bpe.om", "spec.om", "rev.om", "arboris.om", "sp_solve.om", "spiral.om", "apu_weave.om", "omg.om", "pillars_cli.om", "cli.om"]
         if platform.system() == "Darwin":
-            mac_text = "target a64macos\nom2\n" + "\n".join(read_text(os.path.join(SRC, u)) for u in units + ["mio.om", "noserve.om", "nogpu.om"])
+            mac_text = "target a64macos\nom2\n" + "\n".join(read_text(os.path.join(SRC, u)) for u in units + ["mio.om", "noserve.om", "nogpu.om", "apu_fabric_macos.om"])
             mac_bin = os.path.join(td, "ollm-macos")
             compile_om(mac_text, mac_bin)
             check(os.path.getsize(mac_bin) > 0, "compile_target_a64macos", f"{os.path.getsize(mac_bin)} B")
@@ -415,6 +417,7 @@ def test_cross_target_compile():
             "gpu/context.om", "gpu/vector.om", "gpu/launch.om", "gpu/batch.om",
             "gpu/gk.om", "gpu/gr.om", "gpu/gb.om", "gpu/gg.om",
             "gpu/gt.om", "gpu/gm.om", "gpu/ring.om", "gpu/ejit.om",
+            "apu_fabric_linux.om", "apu_fabric_gb10.om",
         ]
         gb_text = "om2\n" + "\n".join(read_text(os.path.join(SRC, u)) for u in gb_units)
         gb_bin = os.path.join(td, "ollm-gb10")

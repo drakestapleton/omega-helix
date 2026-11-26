@@ -1,0 +1,1314 @@
+note SPDX-License-Identifier: AGPL-3.0-only
+note native/apu_weave.om: Full-APU Simultaneous Co-Execution Fabric core for Spiral-2048 OLLMSP02.
+note Portable pure seeded OM-2 core (compiles on gb10, aarch64, x86linux, and a64macos).
+note Platform fabric backend supplies `apu_fabric_run` (20-core Grace fork/pipe/cpuset + 48-SM Blackwell
+note streaming ring on Linux/GB10; portable single-process driver on macOS).
+note
+note CLI:
+note   ollm[-gb10] apuweave <base.ck> <shard_list_or_dir> <out_dir> <f_exp> <lambda_milli> <max_toks> <quant_bits> [workers=16]
+
+const APU_MAX_SHARDS ulong 2048
+const APU_PATH_STRIDE ulong 256
+const APU_MAX_F ulong 640
+const APU_MAX_D ulong 2048
+const APU_CALN ulong 128
+
+note Direct-array Cholesky + calibration workspace (copy-on-write per forked Grace worker; zero mapget overhead!)
+global apu_g f64 409600
+global apu_b f64 1310720
+global apu_c f64 2048
+global apu_z f64 2048
+global apu_rv f64 2048
+global apu_phi f64 640
+global apu_acti ulong 640
+global apu_actv f64 640
+global apu_calz f64 262144
+global apu_caly ulong 128
+global apu_l0 f64 65536
+global apu_dl f64 65536
+global apu_etav f64 8
+global apu_etas f64 8
+global apu_dz f64 2048
+
+note Shard catalog & output directory buffers
+global apu_spaths uchar 524288
+global apu_slen ulong 2048
+global apu_sids ulong 2048
+global apu_odir uchar 512
+global apu_odirn ulong 1
+global apu_pbuf uchar 1024
+global apu_ptmp uchar 1028
+global apu_pk uchar 2100
+
+note Configuration & aggregate state:
+note apu_cfg: 0=n_shards, 1=f_exp, 2=lam_milli, 3=max_toks, 4=qbits, 5=workers,
+note          6=base_hash, 7=gpu_mode(0=cpu,1=bf16,2=f32), 8=n_pref, 9=n_verif,
+note          10=n_train_win, 11=n_held_win, 12=ncal, 13=gpu_active_ns, 14=cpu_active_ns,
+note          15=total_w4_bytes, 16=tamper_ok, 17=sum_base_eval_u6, 18=sum_wov_eval_u6,
+note          19=t_start_ns, 20=wave_seq, 21=cpu_span_start, 22=cpu_span_end, 23=sum_cal_drop_u6
+global apu_cfg ulong 32
+global apu_io uchar 65536
+global apu_hdr ulong 12
+global apu_tph ulong 1
+global apu_wfd int 1
+
+note ---- Small string/output helpers ----
+
+fn apu_puts s view uchar * to void
+n = len s
+for i ulong n bound 4096
+  oputc ulong get s i
+end
+end
+
+fn apu_put4_io o ulong v uint to void
+put apu_io o uchar and v 255
+put apu_io add o 1 uchar and shr v 8 255
+put apu_io add o 2 uchar and shr v 16 255
+put apu_io add o 3 uchar and shr v 24 255
+end
+
+fn apu_get4_io o ulong to uint
+b0 = uint get apu_io o
+b1 = shl uint get apu_io add o 1 8
+b2 = shl uint get apu_io add o 2 16
+b3 = shl uint get apu_io add o 3 24
+ret or or b0 b1 or b2 b3
+end
+
+fn apu_put8_io o ulong v ulong to void
+for i ulong 8
+  put apu_io add o i uchar and shr v mul i 8 255
+end
+end
+
+fn apu_get8_io o ulong to ulong
+v = ulong 0
+for i ulong 8
+  v = or v shl ulong get apu_io add o i mul i 8
+end
+ret v
+end
+
+fn apu_fnv_io h ulong off ulong n ulong to ulong
+x = h
+for i ulong n bound 65536
+  x = mul xor x ulong get apu_io add off i 1099511628211
+end
+ret x
+end
+
+note ---- Shard path helpers ----
+
+fn apu_spath_set idx ulong s_off ulong slen ulong sid ulong to void
+if or ge idx APU_MAX_SHARDS gt slen sub APU_PATH_STRIDE 1
+  ret
+end
+dst = mul idx APU_PATH_STRIDE
+for i ulong slen bound 256
+  put apu_spaths add dst i get apu_pbuf add s_off i
+end
+put apu_spaths add dst slen 0
+put apu_slen idx slen
+put apu_sids idx sid
+end
+
+fn apu_copy_spath idx ulong to ulong
+n = get apu_slen idx
+src = mul idx APU_PATH_STRIDE
+for i ulong n bound 256
+  put apu_pbuf i get apu_spaths add src i
+end
+put apu_pbuf n 0
+ret n
+end
+
+fn apu_has_tok_ext src ulong end_i ulong base_i ulong to bool
+if lt sub end_i base_i 4
+  ret false
+end
+if ne get apu_spaths add src sub end_i 4 46
+  ret false
+end
+if ne get apu_spaths add src sub end_i 3 116
+  ret false
+end
+if ne get apu_spaths add src sub end_i 2 111
+  ret false
+end
+ret eq get apu_spaths add src sub end_i 1 107
+end
+
+fn apu_find_base src ulong sn ulong to ulong
+last_sl = ulong 0
+has_sl = false
+for j ulong sn bound 256
+  if eq get apu_spaths add src j 47
+    last_sl = j
+    has_sl = true
+  end
+end
+if has_sl
+  ret add last_sl 1
+end
+ret 0
+end
+
+note Build output .sp2 path into apu_pbuf: <out_dir>/<stem>.sp2; returns length.
+fn apu_make_outpath idx ulong to ulong
+p = get apu_odirn 0
+for i ulong p bound 512
+  put apu_pbuf i get apu_odir i
+end
+if gt p 0
+  if ne get apu_pbuf sub p 1 47
+    put apu_pbuf p 47
+    p = add p 1
+  end
+end
+src = mul idx APU_PATH_STRIDE
+sn = get apu_slen idx
+base_i = apu_find_base src sn
+end_i = sn
+if apu_has_tok_ext src end_i base_i
+  end_i = sub end_i 4
+end
+stem_n = sub end_i base_i
+if or eq stem_n 0 gt add p add stem_n 5 1000
+  exit 2
+end
+for k ulong stem_n bound 256
+  put apu_pbuf add p k get apu_spaths add src add base_i k
+end
+p = add p stem_n
+put apu_pbuf p 46
+put apu_pbuf add p 1 115
+put apu_pbuf add p 2 112
+put apu_pbuf add p 3 50
+put apu_pbuf add p 4 0
+ret add p 4
+end
+
+fn apu_skip_ws p ulong lend ulong to ulong
+a = p
+while lt a lend bound 1024
+  c = get apu_io a
+  if and ne c 32 ne c 9
+    break
+  end
+  a = add a 1
+end
+ret a
+end
+
+fn apu_scan_tok p ulong lend ulong to ulong
+b = p
+while lt b lend bound 1024
+  c = get apu_io b
+  if or or eq c 32 eq c 9 or eq c 13 eq c 10
+    break
+  end
+  b = add b 1
+end
+ret b
+end
+
+fn apu_try_num a ulong b ulong to ulong
+n = sub b a
+if or eq n 0 gt n 18
+  ret 0
+end
+v = ulong 0
+for i ulong n bound 20
+  ch = ulong get apu_io add a i
+  if or lt ch 48 gt ch 57
+    ret 0
+  end
+  v = add mul v 10 sub ch 48
+end
+ret v
+end
+
+note Parse a shard list file (fd already open at offset 0).
+note Supports both 1-column (<path.tok>) and 3-column (<sid> <path.tok> <out.sp2>) formats!
+fn apu_parse_list_line lstart ulong lend ulong to void
+a = apu_skip_ws lstart lend
+if ge a lend
+  ret
+end
+if eq get apu_io a 35
+  ret
+end
+b = apu_scan_tok a lend
+sid_v = apu_try_num a b
+if gt sid_v 0
+  a = apu_skip_ws b lend
+  b = apu_scan_tok a lend
+end
+pn = sub b a
+cnt = get apu_cfg 0
+if or eq pn 0 or ge pn APU_PATH_STRIDE ge cnt APU_MAX_SHARDS
+  ret
+end
+for k ulong pn bound 256
+  put apu_pbuf k get apu_io add a k
+end
+if eq sid_v 0
+  sid_v = add cnt 1
+end
+apu_spath_set cnt 0 pn sid_v
+put apu_cfg 0 add cnt 1
+end
+
+fn apu_scan_buf tot ulong eof bool to ulong
+ls = ulong 0
+i = ulong 0
+while lt i tot bound 65536
+  if eq get apu_io i 10
+    apu_parse_list_line ls i
+    ls = add i 1
+  end
+  i = add i 1
+end
+if eof
+  if lt ls tot
+    apu_parse_list_line ls tot
+  end
+  ret 0
+end
+remn = sub tot ls
+for m ulong remn bound 65536
+  put apu_io m get apu_io add ls m
+end
+ret remn
+end
+
+fn apu_load_list_fd fd int to void
+remn = ulong 0
+eof = false
+while not eof bound 1024
+  if ge remn 65536
+    exit 2
+  end
+  r = read fd apu_io remn sub 65536 remn
+  if lt r 0
+    exit 70
+  end
+  if eq r 0
+    eof = true
+  end
+  remn = apu_scan_buf add remn ulong r eof
+end
+end
+
+fn apu_cmp_bytes oi ulong oj ulong mn ulong to int
+for k ulong mn bound 256
+  a = int get apu_spaths add oi k
+  b = int get apu_spaths add oj k
+  if ne a b
+    ret sub a b
+  end
+end
+ret int 0
+end
+
+note Lexicographic compare of shard path i vs j (< 0 if i < j)
+fn apu_cmp_spath i ulong j ulong to int
+ni = get apu_slen i
+nj = get apu_slen j
+mn = ni
+if lt nj mn
+  mn = nj
+end
+r = apu_cmp_bytes mul i APU_PATH_STRIDE mul j APU_PATH_STRIDE mn
+if ne r 0
+  ret r
+end
+if lt ni nj
+  ret int -1
+end
+if gt ni nj
+  ret int 1
+end
+ret int 0
+end
+
+fn apu_swap_bytes oi ulong oj ulong cnt ulong to void
+for k ulong cnt bound 256
+  ti = get apu_spaths add oi k
+  tj = get apu_spaths add oj k
+  put apu_spaths add oi k tj
+  put apu_spaths add oj k ti
+end
+end
+
+fn apu_swap_spath i ulong j ulong to void
+ni = get apu_slen i
+nj = get apu_slen j
+mx = ni
+if gt nj mx
+  mx = nj
+end
+apu_swap_bytes mul i APU_PATH_STRIDE mul j APU_PATH_STRIDE add mx 1
+put apu_slen i nj
+put apu_slen j ni
+end
+
+note Deterministic insertion sort of discovered directory shards + assign 1-based strand IDs
+fn apu_sort_shards to void
+n = get apu_cfg 0
+i = ulong 1
+while lt i n bound 2048
+  j = i
+  while gt j 0 bound 2048
+    if le apu_cmp_spath sub j 1 j 0
+      break
+    end
+    apu_swap_spath sub j 1 j
+    j = sub j 1
+  end
+  i = add i 1
+end
+for s ulong n bound 2048
+  put apu_sids s add s 1
+end
+end
+
+note ---- Fast Direct-Array Sparse ReLU Feature & Gram/RHS Accumulation ----
+
+fn apu_feat_one f ulong d ulong sid ulong to f64
+seed = add mul sid 1000003 mul add f 1 65537
+acc = 0.0f64
+for k ulong 4
+  h = smx add seed mul k 2654435761
+  v = get apu_z rem shr h 1 d
+  if eq and h 1 0
+    acc = add acc v
+  else
+    acc = sub acc v
+  end
+end
+ret mul acc 0.5f64
+end
+
+note Exact same hash-orthogonal ReLU feature formula as native/spiral.om (100% OLLMSP02 parity!)
+note Also builds compact non-zero active index/value lists apu_acti/apu_actv for 4x faster Gram & 2x faster RHS!
+fn apu_feat_z d ulong f_exp ulong sid ulong to ulong
+fm1 = sub f_exp 1
+nact = ulong 0
+for f ulong fm1 bound 640
+  u = apu_feat_one f d sid
+  if gt u 0.0f64
+    put apu_phi f u
+    put apu_acti nact f
+    put apu_actv nact u
+    nact = add nact 1
+  else
+    put apu_phi f 0.0f64
+  end
+end
+put apu_phi fm1 1.0f64
+put apu_acti nact fm1
+put apu_actv nact 1.0f64
+ret add nact 1
+end
+
+fn apu_zero_cryst f_exp ulong d ulong to void
+gg = mul f_exp f_exp
+for i ulong gg bound 409600
+  put apu_g i 0.0f64
+end
+bd = mul f_exp d
+for j ulong bd bound 1310720
+  put apu_b j 0.0f64
+end
+for k ulong d bound 2048
+  put apu_c k 0.0f64
+end
+end
+
+fn apu_acc_gram_row ga ulong wa f64 ia ulong nact ulong to void
+ib = ia
+while lt ib nact bound 640
+  idx = add ga get apu_acti ib
+  dv = mul wa get apu_actv ib
+  put apu_g idx add get apu_g idx dv
+  ib = add ib 1
+end
+end
+
+fn apu_acc_rhs_row ba ulong wa f64 d ulong to void
+for j ulong d bound 2048
+  idx = add ba j
+  dv = mul wa get apu_rv j
+  put apu_b idx add get apu_b idx dv
+end
+end
+
+note Accumulate one token (apu_z[0..d), apu_rv[0..d)) with surprisal weight w_tok into apu_g, apu_b, apu_c.
+fn apu_acc_tok w_tok f64 f_exp ulong d ulong sid ulong to void
+for j ulong d bound 2048
+  put apu_c j add get apu_c j mul w_tok get apu_z j
+end
+nact = apu_feat_z d f_exp sid
+for ia ulong nact bound 640
+  a = get apu_acti ia
+  wa = mul w_tok get apu_actv ia
+  apu_acc_gram_row mul a f_exp wa ia nact
+  apu_acc_rhs_row mul a d wa d
+end
+end
+
+fn apu_norm_cent d ulong to void
+cn = 0.0f64
+for j ulong d bound 2048
+  v = get apu_c j
+  cn = add cn mul v v
+end
+inv = div 1.0f64 fsqrt fmax cn 1.0e-30f64
+for j2 ulong d bound 2048
+  put apu_c j2 mul get apu_c j2 inv
+end
+end
+
+fn apu_sym_reg f_exp ulong lam f64 to void
+for a ulong f_exp bound 640
+  ga = mul a f_exp
+  put apu_g add ga a add get apu_g add ga a lam
+  b = add a 1
+  while lt b f_exp bound 640
+    v = get apu_g add ga b
+    put apu_g add mul b f_exp a v
+    b = add b 1
+  end
+end
+end
+
+note ---- Fast Direct-Array In-Place Cholesky (LL^T) & Multi-RHS Triangular Solve ----
+
+fn apu_chol_diag j ulong m ulong to f64
+row = mul j m
+acc = get apu_g add row j
+for s ulong j bound 640
+  v = get apu_g add row s
+  acc = sub acc mul v v
+end
+if le acc 1.0e-15f64
+  ret 0.0f64
+end
+ret fsqrt acc
+end
+
+fn apu_chol_off i ulong j ulong m ulong invd f64 to void
+ri = mul i m
+rj = mul j m
+acc = get apu_g add ri j
+for s ulong j bound 640
+  vi = get apu_g add ri s
+  vj = get apu_g add rj s
+  acc = sub acc mul vi vj
+end
+put apu_g add ri j mul acc invd
+end
+
+fn apu_chol m ulong to ulong
+for j ulong m bound 640
+  diag = apu_chol_diag j m
+  if le diag 0.0f64
+    ret 1
+  end
+  put apu_g add mul j m j diag
+  invd = div 1.0f64 diag
+  i = add j 1
+  while lt i m bound 640
+    apu_chol_off i j m invd
+    i = add i 1
+  end
+end
+ret 0
+end
+
+fn apu_sub_row_axpy bi ulong bj ulong d ulong sc f64 to void
+for c ulong d bound 2048
+  idx = add bi c
+  vb = get apu_b add bj c
+  cur = get apu_b idx
+  put apu_b idx sub cur mul sc vb
+end
+end
+
+fn apu_scale_row bi ulong d ulong invd f64 to void
+for c ulong d bound 2048
+  idx = add bi c
+  put apu_b idx mul get apu_b idx invd
+end
+end
+
+note Cache-friendly row-major triangular solve across all D columns simultaneously!
+fn apu_fwd_sub_row i ulong m ulong d ulong to void
+rl = mul i m
+bi = mul i d
+for j ulong i bound 640
+  apu_sub_row_axpy bi mul j d d get apu_g add rl j
+end
+apu_scale_row bi d div 1.0f64 get apu_g add rl i
+end
+
+fn apu_bwd_sub_row i ulong m ulong d ulong to void
+bi = mul i d
+j = add i 1
+while lt j m bound 640
+  apu_sub_row_axpy bi mul j d d get apu_g add mul j m i
+  j = add j 1
+end
+apu_scale_row bi d div 1.0f64 get apu_g add mul i m i
+end
+
+fn apu_chol_solve m ulong d ulong to void
+for i ulong m bound 640
+  apu_fwd_sub_row i m d
+end
+idx = m
+while gt idx 0 bound 640
+  idx = sub idx 1
+  apu_bwd_sub_row idx m d
+end
+end
+
+note ---- 4x Faster Linear Step-Size Calibration: L(z + eta*dz) = L_0 + eta * dL ----
+
+note Direct ow access (WTE is at offset 0 of ow, guaranteed < og[34]) + 4x unrolled fused 2-vector dot product!
+fn apu_pair_row r ulong d ulong to void
+w = mul r d
+s0 = 0.0f64
+s1 = 0.0f64
+j = ulong 0
+while le add j 4 d bound 2048
+  wj = get ow add w j
+  s0 = add s0 mul get apu_z j wj
+  s1 = add s1 mul get apu_dz j wj
+  j1 = add j 1
+  wj = get ow add w j1
+  s0 = add s0 mul get apu_z j1 wj
+  s1 = add s1 mul get apu_dz j1 wj
+  j1 = add j 2
+  wj = get ow add w j1
+  s0 = add s0 mul get apu_z j1 wj
+  s1 = add s1 mul get apu_dz j1 wj
+  j1 = add j 3
+  wj = get ow add w j1
+  s0 = add s0 mul get apu_z j1 wj
+  s1 = add s1 mul get apu_dz j1 wj
+  j = add j 4
+end
+while lt j d bound 4
+  wj = get ow add w j
+  s0 = add s0 mul get apu_z j wj
+  s1 = add s1 mul get apu_dz j wj
+  j = add j 1
+end
+put apu_l0 r s0
+put apu_dl r s1
+end
+
+note Compute L_0 = apu_z @ WTE^T into apu_l0 and dL = apu_dz @ WTE^T into apu_dl in ONE fused pass over WTE!
+fn apu_pair_logits v ulong d ulong to void
+for r ulong v bound 65536
+  apu_pair_row r d
+end
+end
+
+fn apu_ce_lin v ulong y ulong eta f64 to f64
+d0 = get apu_dl 0
+mx = add get apu_l0 0 mul eta d0
+for r ulong v bound 65536
+  dr = get apu_dl r
+  x = add get apu_l0 r mul eta dr
+  if gt x mx
+    mx = x
+  end
+end
+sm = 0.0f64
+for r2 ulong v bound 65536
+  dr2 = get apu_dl r2
+  x2 = add get apu_l0 r2 mul eta dr2
+  sm = add sm fexp sub x2 mx
+end
+dy = get apu_dl y
+ly = add get apu_l0 y mul eta dy
+ret sub add mx flog sm ly
+end
+
+fn apu_add_dz_row ba ulong pa f64 d ulong to void
+for j2 ulong d bound 2048
+  vb = get apu_b add ba j2
+  cur = get apu_dz j2
+  put apu_dz j2 add cur mul pa vb
+end
+end
+
+fn apu_eval_dz d ulong f_exp ulong sid ulong to void
+for j ulong d bound 2048
+  put apu_dz j 0.0f64
+end
+nact = apu_feat_z d f_exp sid
+for ia ulong nact bound 640
+  a = get apu_acti ia
+  pa = get apu_actv ia
+  apu_add_dz_row mul a d pa d
+end
+end
+
+fn apu_init_etas to void
+put apu_etav 0 0.0f64
+put apu_etav 1 0.05f64
+put apu_etav 2 0.15f64
+put apu_etav 3 0.35f64
+put apu_etav 4 0.7f64
+put apu_etav 5 1.0f64
+put apu_etav 6 1.5f64
+put apu_etav 7 2.5f64
+for k ulong 8
+  put apu_etas k 0.0f64
+end
+end
+
+fn apu_cal_sample ci ulong f_exp ulong sid ulong to void
+d = get og 2
+zo = mul ci d
+for j ulong d bound 2048
+  vz = get apu_calz add zo j
+  put apu_z j vz
+end
+apu_eval_dz d f_exp sid
+v = get og 0
+apu_pair_logits v d
+yt = get apu_caly ci
+for ei ulong 8
+  ls = apu_ce_lin v yt get apu_etav ei
+  put apu_etas ei add get apu_etas ei ls
+end
+end
+
+note Calibrate best_eta over ncal samples in apu_calz/apu_caly; scales apu_b *= best_eta.
+note Writes base_cal_u6 -> apu_hdr[0], cryst_cal_u6 -> apu_hdr[1].
+fn apu_calibrate ncal ulong f_exp ulong sid ulong to void
+apu_init_etas
+for ci ulong ncal bound 128
+  apu_cal_sample ci f_exp sid
+end
+fn_nc = f64 ncal
+base_l = div get apu_etas 0 fn_nc
+best_l = base_l
+best_eta = 0.0f64
+for ei2 ulong 7
+  cl = div get apu_etas add ei2 1 fn_nc
+  if lt cl best_l
+    best_l = cl
+    best_eta = get apu_etav add ei2 1
+  end
+end
+nw = mul f_exp get og 2
+for wi ulong nw bound 1310720
+  put apu_b wi mul get apu_b wi best_eta
+end
+put apu_hdr 0 ulong rmic base_l
+put apu_hdr 1 ulong rmic best_l
+end
+
+note ---- Canonical OLLMSP02 Atomic Writer (from apu_pbuf path, W4 or f64) ----
+
+fn apu_wopen_pbuf plen ulong to void
+for i ulong plen bound 1024
+  put apu_ptmp i get apu_pbuf i
+end
+put apu_ptmp plen 46
+put apu_ptmp add plen 1 116
+put apu_ptmp add plen 2 109
+put apu_ptmp add plen 3 112
+fd = int fopen apu_ptmp 0 add plen 4 577 420
+if lt fd 0
+  exit 70
+end
+put apu_wfd 0 fd
+end
+
+fn apu_wput pos ulong n ulong to void
+fd = get apu_wfd 0
+p = ulong 0
+while lt p n bound 65536
+  w = pwrite fd apu_io p sub n p long add pos p
+  if le w 0
+    exit 70
+  end
+  p = add p ulong w
+end
+end
+
+fn apu_wend_pbuf plen ulong to void
+fd = get apu_wfd 0
+if ne fsync fd 0
+  exit 70
+end
+if ne fclose fd 0
+  exit 70
+end
+put apu_pk 0 2
+put apu_pk 1 0
+put apu_pk 2 uchar and add plen 4 255
+put apu_pk 3 uchar shr add plen 4 8
+for i ulong add plen 4 bound 1028
+  put apu_pk add 4 i get apu_ptmp i
+end
+q = add 8 plen
+put apu_pk q uchar and plen 255
+put apu_pk add q 1 uchar shr plen 8
+for j ulong plen bound 1024
+  put apu_pk add add q 2 j get apu_pbuf j
+end
+r = renames apu_pk 0 add add q 2 plen 0
+if ne r 0
+  exit 70
+end
+end
+
+fn apu_q4_nib v f64 sc f64 to ulong
+if le sc 0.0f64
+  ret 8
+end
+r = div v sc
+if gt r 7.0f64
+  r = 7.0f64
+end
+if lt r -7.0f64
+  r = -7.0f64
+end
+if ge r 0.0f64
+  ret ulong add 8 long add r 0.5f64
+end
+ret ulong add 8 long sub r 0.5f64
+end
+
+fn apu_q4_pair off ulong cnt ulong p ulong sc f64 to uchar
+q0 = ulong 8
+q1 = ulong 8
+i0 = mul p 2
+if lt i0 cnt
+  q0 = apu_q4_nib get apu_b add off i0 sc
+end
+i1 = add i0 1
+if lt i1 cnt
+  q1 = apu_q4_nib get apu_b add off i1 sc
+end
+ret uchar or and q0 15 shl and q1 15 4
+end
+
+fn apu_q4_blk off ulong cnt ulong bo ulong to void
+mx = 0.0f64
+for i ulong cnt bound 32
+  v = fabs get apu_b add off i
+  if gt v mx
+    mx = v
+  end
+end
+sc32 = f32 div mx 7.0f64
+apu_put4_io bo bitcast uint sc32
+sc = f64 sc32
+for p ulong 16
+  put apu_io add bo add 4 p apu_q4_pair off cnt p sc
+end
+end
+
+fn apu_wr_w4_blk nw ulong bd ulong bcnt ulong to void
+for bi ulong bcnt bound 2048
+  e0 = mul add bd bi 32
+  ec = sub nw e0
+  if gt ec 32
+    ec = ulong 32
+  end
+  apu_q4_blk e0 ec mul bi 20
+end
+end
+
+fn apu_wr_w4 nw ulong pos ulong ph ulong to ulong
+nblk = div add nw 31 32
+bd = ulong 0
+p = pos
+h = ph
+while lt bd nblk bound 65536
+  bcnt = sub nblk bd
+  if gt bcnt 2048
+    bcnt = ulong 2048
+  end
+  apu_wr_w4_blk nw bd bcnt
+  nb = mul bcnt 20
+  h = apu_fnv_io h 0 nb
+  apu_wput p nb
+  p = add p nb
+  bd = add bd bcnt
+end
+put apu_hdr 7 p
+ret h
+end
+
+fn apu_wr_f64_chunk dn ulong cnt ulong to void
+for k ulong cnt bound 4096
+  apu_put8_io mul k 8 bitcast ulong get apu_b add dn k
+end
+end
+
+fn apu_wr_f64 nw ulong pos ulong ph ulong to ulong
+dn = ulong 0
+p = pos
+h = ph
+while lt dn nw bound 65536
+  cnt = sub nw dn
+  if gt cnt 4096
+    cnt = ulong 4096
+  end
+  apu_wr_f64_chunk dn cnt
+  nb = mul cnt 8
+  h = apu_fnv_io h 0 nb
+  apu_wput p nb
+  p = add p nb
+  dn = add dn cnt
+end
+put apu_hdr 7 p
+ret h
+end
+
+fn apu_wr_cent d ulong to ulong
+for j ulong d bound 2048
+  apu_put8_io mul j 8 bitcast ulong get apu_c j
+end
+cb = mul d 8
+ph = apu_fnv_io ulong 14695981039346656037 0 cb
+apu_wput OSP2_HDR cb
+ret ph
+end
+
+note Atomically write OLLMSP02 pack to apu_pbuf[0..plen). Returns total file bytes (80 + payload_bytes).
+fn apu_write_sp2 plen ulong base_h ulong f_exp ulong sid ulong qbits ulong to ulong
+d = get og 2
+apu_wopen_pbuf plen
+ph = apu_wr_cent d
+if eq qbits 64
+  ph = apu_wr_f64 mul f_exp d add OSP2_HDR mul d 8 ph
+else
+  ph = apu_wr_w4 mul f_exp d add OSP2_HDR mul d 8 ph
+end
+apu_put8_io 0 OSP2_MAG
+apu_put8_io 8 base_h
+apu_put8_io 16 get og 5
+apu_put8_io 24 d
+apu_put8_io 32 f_exp
+apu_put8_io 40 sid
+apu_put8_io 48 qbits
+apu_put8_io 56 sub get apu_hdr 7 OSP2_HDR
+apu_put8_io 64 ph
+apu_put8_io 72 apu_fnv_io ulong 14695981039346656037 0 72
+apu_wput 0 OSP2_HDR
+apu_wend_pbuf plen
+ret get apu_hdr 7
+end
+
+note ---- Live Merkle + 1-Bit Tamper (rc=61) + Held-Out W4 Verifier ----
+
+fn apu_rd_exact fd int pos ulong n ulong to bool
+p = ulong 0
+while lt p n bound 65536
+  r = pread fd apu_io p sub n p long add pos p
+  if le r 0
+    ret false
+  end
+  p = add p ulong r
+end
+ret true
+end
+
+fn apu_dq4_pair off ulong cnt ulong p ulong bt ulong sc f64 to void
+i0 = mul p 2
+if lt i0 cnt
+  q0 = f64 sub long and bt 15 8
+  put apu_b add off i0 mul q0 sc
+end
+i1 = add i0 1
+if lt i1 cnt
+  q1 = f64 sub long and shr bt 4 15 8
+  put apu_b add off i1 mul q1 sc
+end
+end
+
+fn apu_dq4_blk bo ulong off ulong cnt ulong to void
+sc = f64 bitcast f32 apu_get4_io bo
+for p ulong 16
+  bt = ulong get apu_io add bo add 4 p
+  apu_dq4_pair off cnt p bt sc
+end
+end
+
+fn apu_vfy_w4_blk nw ulong bd ulong bcnt ulong to void
+for bi ulong bcnt bound 2048
+  e0 = mul add bd bi 32
+  ec = sub nw e0
+  if gt ec 32
+    ec = ulong 32
+  end
+  apu_dq4_blk mul bi 20 e0 ec
+end
+end
+
+fn apu_vfy_read_w4 fd int nw ulong pos ulong ph ulong to ulong
+nblk = div add nw 31 32
+bd = ulong 0
+p = pos
+h = ph
+while lt bd nblk bound 65536
+  bcnt = sub nblk bd
+  if gt bcnt 2048
+    bcnt = ulong 2048
+  end
+  nb = mul bcnt 20
+  if not apu_rd_exact fd p nb
+    put apu_hdr 10 60
+    ret 0
+  end
+  h = apu_fnv_io h 0 nb
+  put apu_tph 0 apu_fnv_io get apu_tph 0 0 nb
+  apu_vfy_w4_blk nw bd bcnt
+  p = add p nb
+  bd = add bd bcnt
+end
+put apu_hdr 7 p
+ret h
+end
+
+fn apu_vfy_f64_chunk dn ulong cnt ulong to void
+for k ulong cnt bound 4096
+  put apu_b add dn k bitcast f64 apu_get8_io mul k 8
+end
+end
+
+fn apu_vfy_read_f64 fd int nw ulong pos ulong ph ulong to ulong
+dn = ulong 0
+p = pos
+h = ph
+while lt dn nw bound 65536
+  cnt = sub nw dn
+  if gt cnt 4096
+    cnt = ulong 4096
+  end
+  nb = mul cnt 8
+  if not apu_rd_exact fd p nb
+    put apu_hdr 10 60
+    ret 0
+  end
+  h = apu_fnv_io h 0 nb
+  put apu_tph 0 apu_fnv_io get apu_tph 0 0 nb
+  apu_vfy_f64_chunk dn cnt
+  p = add p nb
+  dn = add dn cnt
+end
+put apu_hdr 7 p
+ret h
+end
+
+fn apu_vfy_hdr fd int base_h ulong to ulong
+if not apu_rd_exact fd 0 OSP2_HDR
+  ret 60
+end
+if ne apu_get8_io 0 OSP2_MAG
+  ret 60
+end
+if ne apu_fnv_io ulong 14695981039346656037 0 72 apu_get8_io 72
+  ret 61
+end
+for k ulong 10
+  put apu_hdr k apu_get8_io mul k 8
+end
+if ne get apu_hdr 1 base_h
+  ret 62
+end
+if ne get apu_hdr 2 get og 5
+  ret 62
+end
+if ne get apu_hdr 3 get og 2
+  ret 62
+end
+ret 0
+end
+
+fn apu_vfy_cent fd int d ulong to ulong
+cb = mul d 8
+if not apu_rd_exact fd OSP2_HDR cb
+  put apu_hdr 10 60
+  ret 0
+end
+ph = apu_fnv_io ulong 14695981039346656037 0 cb
+orig_b0 = get apu_io 0
+put apu_io 0 uchar xor ulong orig_b0 1
+put apu_tph 0 apu_fnv_io ulong 14695981039346656037 0 cb
+put apu_io 0 orig_b0
+for j ulong d bound 2048
+  put apu_c j bitcast f64 apu_get8_io mul j 8
+end
+ret ph
+end
+
+note Verify Merkle header + full payload + live 1-bit tamper check on apu_pbuf[0..plen).
+note Loads dequantized W_down into apu_b and centroid into apu_c.
+note Returns 0 on full PASS (with apu_hdr[11]=61 proving 1-bit tamper fails closed with rc=61), else error code.
+fn apu_verify_pack plen ulong base_h ulong to ulong
+put apu_hdr 10 0
+put apu_hdr 11 0
+fd = int fopen apu_pbuf 0 plen 0 0
+if lt fd 0
+  ret 60
+end
+rc = apu_vfy_hdr fd base_h
+if ne rc 0
+  c0 = fclose fd
+  ret rc
+end
+d = get og 2
+ph = apu_vfy_cent fd d
+if eq get apu_hdr 10 0
+  nw = mul get apu_hdr 4 d
+  pos = add OSP2_HDR mul d 8
+  if eq get apu_hdr 6 64
+    ph = apu_vfy_read_f64 fd nw pos ph
+  else
+    ph = apu_vfy_read_w4 fd nw pos ph
+  end
+end
+c5 = fclose fd
+if ne get apu_hdr 10 0
+  ret get apu_hdr 10
+end
+if ne ph get apu_hdr 8
+  ret 61
+end
+if ne get apu_tph 0 ph
+  put apu_hdr 11 61
+  ret 0
+end
+put apu_hdr 11 0
+ret 61
+end
+
+fn apu_eval_one hi ulong f_exp ulong sid ulong to void
+d = get og 2
+zo = mul hi d
+for j ulong d bound 2048
+  put apu_z j get apu_calz add zo j
+end
+apu_eval_dz d f_exp sid
+apu_pair_logits get og 0 d
+end
+
+note Evaluate loaded W4/f64 pack (in apu_b) on nheld samples in apu_calz/apu_caly.
+note Writes base_eval_u6 -> apu_hdr[0], woven_eval_u6 -> apu_hdr[1].
+fn apu_eval_loaded nheld ulong f_exp ulong sid ulong to void
+v = get og 0
+bs = 0.0f64
+ws = 0.0f64
+for hi ulong nheld bound 128
+  apu_eval_one hi f_exp sid
+  yt = get apu_caly hi
+  bs = add bs apu_ce_lin v yt 0.0f64
+  ws = add ws apu_ce_lin v yt 1.0f64
+end
+put apu_hdr 0 ulong rmic div bs f64 nheld
+put apu_hdr 1 ulong rmic div ws f64 nheld
+end
+
+note ---- Machine-Readable Telemetry Printers ----
+
+text apu_t_wave "APU_WAVE "
+text apu_t_strand "APU_STRAND "
+text apu_t_sum "APU_SUMMARY "
+text apu_t_ov "APU_OVERLAP "
+
+fn apu_print_wave wid ulong nsh ulong gpu_ms ulong rdep ulong act_c ulong act_v ulong to void
+apu_puts apu_t_wave
+oputu wid
+oputc 32
+oputu nsh
+oputc 32
+oputu gpu_ms
+oputc 32
+oputu rdep
+oputc 32
+oputu act_c
+oputc 32
+oputu act_v
+oputc 32
+oputu get apu_cfg 7
+oputc 10
+oflush
+end
+
+fn apu_print_strand1 sid ulong toks ulong bcal ulong ccal ulong bev ulong wev ulong to void
+apu_puts apu_t_strand
+oputu sid
+oputc 32
+oputu toks
+oputc 32
+oputu bcal
+oputc 32
+oputu ccal
+oputc 32
+oputu bev
+oputc 32
+oputu wev
+end
+
+fn apu_print_strand2 pb ulong gms ulong cms ulong vms ulong trc ulong anov ulong to void
+oputc 32
+oputu pb
+oputc 32
+oputu gms
+oputc 32
+oputu cms
+oputc 32
+oputu vms
+oputc 32
+oputu trc
+oputc 32
+oputu anov
+oputc 10
+oflush
+end
+
+fn apu_print_overlap wall_ms ulong w_eff ulong gpu_ms ulong cpu_ms ulong ov_x1000 ulong to void
+span_ms = ulong 0
+if gt get apu_cfg 22 get apu_cfg 21
+  span_ms = div sub get apu_cfg 22 get apu_cfg 21 1000000
+end
+pipe_ov = div mul add gpu_ms span_ms 1000 w_eff
+apu_puts apu_t_ov
+oputu wall_ms
+oputc 32
+oputu gpu_ms
+oputc 32
+oputu span_ms
+oputc 32
+oputu cpu_ms
+oputc 32
+oputu pipe_ov
+oputc 32
+oputu ov_x1000
+oputc 10
+oflush
+end
+
+fn apu_print_summary wall_ms ulong to void
+ns = get apu_cfg 0
+w_eff = wall_ms
+if eq w_eff 0
+  w_eff = ulong 1
+end
+gpu_ms = div get apu_cfg 13 1000000
+cpu_ms = div get apu_cfg 14 1000000
+ov_x1000 = div mul add gpu_ms cpu_ms 1000 w_eff
+m_bev = ulong 0
+m_wev = ulong 0
+if gt ns 0
+  m_bev = div get apu_cfg 17 ns
+  m_wev = div get apu_cfg 18 ns
+end
+apu_puts apu_t_sum
+oputu ns
+oputc 32
+oputu add get apu_cfg 5 add get apu_cfg 8 get apu_cfg 9
+oputc 32
+oputu wall_ms
+oputc 32
+oputu gpu_ms
+oputc 32
+oputu cpu_ms
+oputc 32
+oputu div mul ns 1000000 w_eff
+oputc 32
+oputu ov_x1000
+oputc 32
+oputu get apu_cfg 15
+oputc 32
+oputu m_bev
+oputc 32
+oputu m_wev
+oputc 32
+oputl sub long m_bev long m_wev
+oputc 32
+oputu get apu_cfg 16
+oputc 32
+oputu get apu_cfg 7
+oputc 10
+apu_print_overlap wall_ms w_eff gpu_ms cpu_ms ov_x1000
+end
+
+fn apu_parse_odir to void
+n = oargp 4
+if gt n 500
+  exit 2
+end
+for i ulong n bound 512
+  put apu_odir i get oarg i
+end
+put apu_odir n 0
+put apu_odirn 0 n
+end
+
+fn apu_parse_cli to void
+na = oargc
+if and ne na 9 ne na 10
+  exit 2
+end
+ockloop 2
+apu_parse_odir
+for k ulong 32
+  put apu_cfg k 0
+end
+f_exp = oargu 5
+max_t = oargu 7
+qbits = oargu 8
+wrk = ulong 16
+if eq na 10
+  wrk = oargu 9
+end
+if or lt f_exp 2 or gt f_exp APU_MAX_F eq max_t 0
+  exit 2
+end
+if or and ne qbits 4 ne qbits 64 or eq wrk 0 gt wrk 16
+  exit 2
+end
+if gt get og 2 APU_MAX_D
+  exit 12
+end
+put apu_cfg 1 f_exp
+put apu_cfg 2 oargu 6
+put apu_cfg 3 max_t
+put apu_cfg 4 qbits
+put apu_cfg 5 wrk
+put apu_cfg 6 osp_basehash get og 5 get og 33
+ntw = div add max_t sub get og 1 1 get og 1
+if eq ntw 0
+  ntw = ulong 1
+end
+if gt ntw 32
+  ntw = ulong 32
+end
+put apu_cfg 10 ntw
+put apu_cfg 11 1
+end
+
+fn cmdapuweave to void
+apu_parse_cli
+put apu_cfg 19 onsnow
+apu_fabric_run
+w_ms = div sub onsnow get apu_cfg 19 1000000
+apu_print_summary w_ms
+if ne get apu_cfg 16 get apu_cfg 0
+  exit 61
+end
+end

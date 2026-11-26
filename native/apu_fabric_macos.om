@@ -1,0 +1,264 @@
+note SPDX-License-Identifier: AGPL-3.0-only
+note native/apu_fabric_macos.om: Portable single-process apuweave fabric for Apple Silicon macOS (target a64macos).
+note Uses only host words supported by target a64macos (fopen, read, pread, pwrite, write, fsync, fclose, fseek, renames, monons).
+
+global apu_mxbuf uchar 65536
+global apu_marb ulong 4096
+global apu_mst ulong 16
+
+fn apu_m_tok1 tw ulong idx ulong to ulong
+if eq tw 1
+  ret ulong get apu_mxbuf idx
+end
+lo = ulong get apu_mxbuf mul idx 2
+hi = ulong get apu_mxbuf add mul idx 2 1
+ret or lo shl hi 8
+end
+
+fn apu_m_calc_win sz ulong to ulong
+tw = ulong 1
+if gt get og 0 256
+  tw = ulong 2
+end
+if ne rem sz tw 0
+  exit 21
+end
+tt = get og 1
+ntok = div sz tw
+if le ntok tt
+  exit 20
+end
+avail_w = div sub ntok 1 tt
+ntw = get apu_cfg 10
+if gt ntw avail_w
+  ntw = avail_w
+end
+nhw = ulong 0
+if gt avail_w ntw
+  nhw = ulong 1
+end
+totw = add ntw nhw
+if gt mul add mul totw tt 1 tw 65536
+  totw = div sub div 65536 tw 1 tt
+  if lt totw ntw
+    ntw = totw
+    nhw = ulong 0
+  else
+    nhw = sub totw ntw
+  end
+end
+put apu_mst 0 tw
+put apu_mst 1 ntw
+put apu_mst 2 nhw
+ret mul add mul add ntw nhw tt 1 tw
+end
+
+fn apu_m_load_shard shrd ulong to void
+plen = apu_copy_spath shrd
+fd = int fopen apu_pbuf 0 plen 0 0
+if lt fd 0
+  exit 70
+end
+sz = fseek fd 0 2
+if lt sz 0
+  c0 = fclose fd
+  exit 70
+end
+need_b = apu_m_calc_win ulong sz
+p = ulong 0
+while lt p need_b bound 65536
+  r = pread fd apu_mxbuf p sub need_b p long p
+  if le r 0
+    c3 = fclose fd
+    exit 70
+  end
+  p = add p ulong r
+end
+c4 = fclose fd
+end
+
+fn apu_m_arboris tw ulong tot_t ulong to ulong
+v = get og 0
+for hi ulong 4096
+  put apu_marb hi 0
+end
+nov = ulong 0
+for i ulong tot_t bound 32768
+  xt = apu_m_tok1 tw i
+  yt = apu_m_tok1 tw add i 1
+  if or ge xt v ge yt v
+    exit 25
+  end
+  h2 = and smx xor shl xt 16 yt 4095
+  if eq get apu_marb h2 0
+    put apu_marb h2 1
+    nov = add nov 1
+  end
+end
+ret div mul nov 1000 tot_t
+end
+
+fn apu_m_acc_tok t2 ulong sid ulong to void
+d = get og 2
+zo = add get og 17 mul t2 d
+yt2 = get oby t2
+surp = sp2_tok_grad zo yt2
+for j ulong d bound 2048
+  put apu_z j get oa add zo j
+  put apu_rv j get sp2_rvec j
+end
+apu_acc_tok add 0.25f64 fmin surp 8.0f64 get apu_cfg 1 d sid
+nc = get apu_mst 3
+if lt nc APU_CALN
+  cz = mul nc d
+  for j2 ulong d bound 2048
+    put apu_calz add cz j2 get apu_z j2
+  end
+  put apu_caly nc yt2
+  put apu_mst 3 add nc 1
+end
+end
+
+fn apu_m_acc_win w ulong sid ulong to void
+tw = get apu_mst 0
+tt = get og 1
+for t ulong tt bound 512
+  o = add mul w tt t
+  put obx t apu_m_tok1 tw o
+  put oby t apu_m_tok1 tw add o 1
+end
+dl = ofwd 0
+for t2 ulong tt bound 512
+  apu_m_acc_tok t2 sid
+end
+end
+
+fn apu_m_copy_held_row th2 ulong d ulong to void
+zoh = add get og 17 mul th2 d
+czh = mul th2 d
+for jh ulong d bound 2048
+  v = get oa add zoh jh
+  put apu_calz add czh jh v
+end
+put apu_caly th2 get oby th2
+end
+
+fn apu_m_prep_held ntw ulong nhw ulong to ulong
+if eq nhw 0
+  ret get apu_mst 3
+end
+tw = get apu_mst 0
+tt = get og 1
+for th ulong tt bound 512
+  oh = add mul ntw tt th
+  put obx th apu_m_tok1 tw oh
+  put oby th apu_m_tok1 tw add oh 1
+end
+dlh = ofwd 0
+nheld = tt
+if gt nheld APU_CALN
+  nheld = APU_CALN
+end
+d = get og 2
+for th2 ulong nheld bound 128
+  apu_m_copy_held_row th2 d
+end
+ret nheld
+end
+
+fn apu_m_solve_pack shrd ulong sid ulong to void
+f_exp = get apu_cfg 1
+apu_norm_cent get og 2
+apu_sym_reg f_exp fmax div f64 get apu_cfg 2 1000.0f64 0.0001f64
+if ne apu_chol f_exp 0
+  exit 43
+end
+apu_chol_solve f_exp get og 2
+apu_calibrate get apu_mst 3 f_exp sid
+put apu_mst 6 get apu_hdr 0
+put apu_mst 7 get apu_hdr 1
+olen = apu_make_outpath shrd
+fb = apu_write_sp2 olen get apu_cfg 6 f_exp sid get apu_cfg 4
+put apu_mst 8 fb
+put apu_mst 9 olen
+end
+
+fn apu_m_emit_s1 sid ulong ntw ulong to void
+toks = mul ntw get og 1
+bc = get apu_mst 6
+cc = get apu_mst 7
+bev = get apu_hdr 0
+wev = get apu_hdr 1
+apu_print_strand1 sid toks bc cc bev wev
+end
+
+fn apu_m_emit_s2 trc ulong t_end ulong to void
+fb = get apu_mst 8
+cms = div sub get apu_mst 12 get apu_mst 11 1000000
+vms = div sub t_end get apu_mst 12 1000000
+nov = get apu_mst 4
+apu_print_strand2 fb 0 cms vms trc nov
+end
+
+fn apu_m_emit_rec sid ulong ntw ulong trc ulong t_end ulong to void
+wid = add get apu_cfg 20 1
+put apu_cfg 20 wid
+w_ms = div sub get apu_mst 11 get apu_mst 10 1000000
+apu_print_wave wid 1 w_ms 0 1 1
+apu_m_emit_s1 sid ntw
+apu_m_emit_s2 trc t_end
+end
+
+fn apu_m_run_one shrd ulong to void
+put apu_mst 10 onsnow
+apu_m_load_shard shrd
+ntw = get apu_mst 1
+nhw = get apu_mst 2
+put apu_mst 4 apu_m_arboris get apu_mst 0 mul add ntw nhw get og 1
+sid = get apu_sids shrd
+apu_zero_cryst get apu_cfg 1 get og 2
+put apu_mst 3 0
+for w ulong ntw bound 32
+  apu_m_acc_win w sid
+end
+put apu_mst 11 onsnow
+apu_m_solve_pack shrd sid
+put apu_mst 12 onsnow
+vrc = apu_verify_pack get apu_mst 9 get apu_cfg 6
+trc = get apu_hdr 11
+if ne vrc 0
+  exit int vrc
+end
+apu_eval_loaded apu_m_prep_held ntw nhw get apu_cfg 1 sid
+t_end = onsnow
+put apu_cfg 14 add get apu_cfg 14 sub t_end get apu_mst 10
+put apu_cfg 15 add get apu_cfg 15 get apu_mst 8
+if eq trc 61
+  put apu_cfg 16 add get apu_cfg 16 1
+end
+put apu_cfg 17 add get apu_cfg 17 get apu_hdr 0
+put apu_cfg 18 add get apu_cfg 18 get apu_hdr 1
+apu_m_emit_rec sid ntw trc t_end
+end
+
+fn apu_fabric_run to void
+pl = oargp 3
+fd = int fopen oarg 0 pl 0 0
+if lt fd 0
+  exit 70
+end
+apu_load_list_fd fd
+c = fclose fd
+if eq get apu_cfg 0 0
+  exit 20
+end
+put apu_cfg 5 1
+put apu_cfg 8 0
+put apu_cfg 9 0
+put apu_cfg 7 0
+put apu_cfg 21 onsnow
+for s ulong get apu_cfg 0 bound 2048
+  apu_m_run_one s
+end
+put apu_cfg 22 onsnow
+end

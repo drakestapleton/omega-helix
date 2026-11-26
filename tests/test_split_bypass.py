@@ -885,6 +885,7 @@ def main():
                 "native/rev.om",
                 "native/sp_solve.om",
                 "native/spiral.om",
+                "native/apu_weave.om",
                 "native/omg.om",
                 "native/pillars_cli.om",
                 "native/cli.om",
@@ -893,7 +894,7 @@ def main():
         if is_mac:
             full_mac = compile_src(
                 omc,
-                "target a64macos\nom2\n" + arb_src + full_core + ring_src + read_text("native/mio.om") + read_text("native/noserve.om") + read_text("native/nogpu.om"),
+                "target a64macos\nom2\n" + arb_src + full_core + ring_src + read_text("native/mio.om") + read_text("native/noserve.om") + read_text("native/nogpu.om") + read_text("native/apu_fabric_macos.om"),
                 None,
                 "a64macos",
             )
@@ -913,6 +914,8 @@ def main():
                 "native/gpu/gt.om",
                 "native/gpu/gm.om",
                 "native/gpu/ejit.om",
+                "native/apu_fabric_linux.om",
+                "native/apu_fabric_gb10.om",
             )
         )
         full_gb10_om = (
