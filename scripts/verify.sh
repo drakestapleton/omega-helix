@@ -23,6 +23,12 @@ echo "=== Omega Helix Independent Verification ($OS $ARCH) ==="
 echo "--- 1. Build native CPU, universal zero-cap engine, interchange & OpenWALDO ingestor ---"
 if [ "$OS" = Darwin ]; then
   OUT="$OUT" TARGET=macos sh "$here/scripts/build.sh"
+  if [ "$ARCH" = arm64 ] && { command -v ng >/dev/null 2>&1 || [ -x "${NG:-}" ] || [ -x "$HOME/.local/bin/ng" ] || [ -f "${OMEGA_MV:-$HOME/workspace/omega-mv-macos}/seed/ng/src/ir.om" ] || [ -f "$here/../omega-mv/seed/ng/src/ir.om" ] || [ -f "$here/../omega-mv-macos/seed/ng/src/ir.om" ]; }; then
+    OUT="$OUT" TARGET=macos-metal sh "$here/scripts/build.sh"
+    METAL_BIN="$OUT/ollm-metal"
+  else
+    METAL_BIN=""
+  fi
   OUT="$OUT" TARGET=tok sh "$here/scripts/build.sh"
   OUT="$OUT" TARGET=openwaldo sh "$here/scripts/build.sh"
   OUT="$OUT" TARGET=univ sh "$here/scripts/build.sh"
@@ -109,6 +115,8 @@ python3 -W error::ResourceWarning "$here/tests/test_split_bypass.py"
 python3 -W error::ResourceWarning "$here/tests/test_evo_jit.py"
 python3 -W error::ResourceWarning "$here/tests/test_sp_closed_form.py"
 python3 -W error::ResourceWarning "$here/tests/test_omg_graph.py"
+OLLM_BIN="$BIN" OLLM_METAL_BIN="${METAL_BIN:-}" \
+  python3 -W error::ResourceWarning "$here/tests/test_gpu_metal_macos.py" -v
 
 echo "--- 3f. Spiral-2048 Razor MoE, Full-APU Co-Execution Fabric & GB10 Scaling Suites ---"
 OLLM_BIN="$BIN" python3 -W error::ResourceWarning "$here/tests/test_spiral_weave.py" -v

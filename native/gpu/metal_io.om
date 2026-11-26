@@ -1,0 +1,617 @@
+note SPDX-License-Identifier: AGPL-3.0-only
+note native/gpu/metal_io.om: Pure-Omega macOS ARM64 Mach-O platform unit for @ng a64 macho.
+note Implements all ollm platform hooks (oargc, oargr, onsnow, oflush, ocwopen/put/end,
+note ofsz, ocsinit/grow/g/p, ogradw, odread, owflush/open/close, ooffrd, oprd, obmsave, main)
+note using strictly non-variadic libSystem calls through libfn/libptr/libcall.
+
+text mio_s_argc "_NSGetArgc"
+text mio_s_argv "_NSGetArgv"
+text mio_s_clk "clock_gettime_nsec_np"
+text mio_s_fopen "fopen"
+text mio_s_fclose "fclose"
+text mio_s_fseeko "fseeko"
+text mio_s_ftello "ftello"
+text mio_s_fread "fread"
+text mio_s_creat "creat"
+text mio_s_pwrite "pwrite"
+text mio_s_fsync "fsync"
+text mio_s_close "close"
+text mio_s_rename "rename"
+text mio_s_memcpy "memcpy"
+text mio_s_strlen "strlen"
+text mio_s_getenv "getenv"
+text mio_s_rb "rb"
+text mio_s_mut "OLLM_METAL_MUTANT"
+
+global mio_rg uchar 128
+global mio_nm uchar 512
+global mio_p1 uchar 2100
+global mio_p2 uchar 2100
+global mio_b8 uchar 16
+global mio_sym ulong 32
+global mio_inited ulong 1
+global mio_cfd int 1
+global mio_cfp ulong 1
+global mio_wfd int 2
+
+note Cold store for macos-metal: 3 x 8,388,608 f64s = 192 MiB total (up to P = 8,388,608).
+const OCSC ulong 8388608
+const OCSN ulong 25165824
+global ocs0 f64 8388608
+global ocs1 f64 8388608
+global ocs2 f64 8388608
+
+fn mio_p64 o ulong v ulong to void
+for i ulong 8
+put mio_rg add o i uchar and shr v mul i 8 255
+end
+end
+
+fn mio_g64 o ulong to ulong
+v = ulong 0
+for i ulong 8
+v = or v shl ulong get mio_rg add o i mul i 8
+end
+ret v
+end
+
+fn mio_b8_u32 o ulong to ulong
+v = ulong 0
+for i ulong 4
+v = or v shl ulong get mio_b8 add o i mul i 8
+end
+ret v
+end
+
+fn mio_b8_u64 o ulong to ulong
+v = ulong 0
+for i ulong 8
+v = or v shl ulong get mio_b8 add o i mul i 8
+end
+ret v
+end
+
+fn mio_i32neg x ulong to bool
+ret ge and x 4294967295 2147483648
+end
+
+fn mio_nm_set s view uchar * to ulong
+n = len s
+if ge n 512
+exit 2
+end
+for i ulong n bound 512
+put mio_nm i get s i
+end
+put mio_nm n 0
+ret n
+end
+
+fn mio_dlopen s view uchar * to ulong
+n = mio_nm_set s
+mio_p64 0 ulong libptr mio_nm 0 512
+mio_p64 8 2
+r = libcall ulong libfn 0 mio_rg 0 128
+ret mio_g64 0
+end
+
+fn mio_sym_load s view uchar * to ulong
+n = mio_nm_set s
+mio_p64 0 18446744073709551614
+mio_p64 8 ulong libptr mio_nm 0 512
+r = libcall ulong libfn 1 mio_rg 0 128
+ret mio_g64 0
+end
+
+fn mio_sym_req idx ulong s view uchar * to void
+a = mio_sym_load s
+if eq a 0
+exit 70
+end
+put mio_sym idx a
+end
+
+fn mio_init_syms to void
+if ne get mio_inited 0 0
+ret
+end
+mio_sym_req 0 mio_s_argc
+mio_sym_req 1 mio_s_argv
+mio_sym_req 2 mio_s_clk
+mio_sym_req 3 mio_s_fopen
+mio_sym_req 4 mio_s_fclose
+mio_sym_req 5 mio_s_fseeko
+mio_sym_req 6 mio_s_ftello
+mio_sym_req 7 mio_s_fread
+mio_sym_req 8 mio_s_creat
+mio_sym_req 9 mio_s_pwrite
+mio_sym_req 10 mio_s_fsync
+mio_sym_req 11 mio_s_close
+mio_sym_req 12 mio_s_rename
+mio_sym_req 13 mio_s_memcpy
+mio_sym_req 14 mio_s_strlen
+mio_sym_req 15 mio_s_getenv
+put mio_inited 0 1
+end
+
+fn mio_memcpy dst ulong src ulong n ulong to void
+if eq n 0
+ret
+end
+mio_p64 0 dst
+mio_p64 8 src
+mio_p64 16 n
+r = libcall get mio_sym 13 mio_rg 0 128
+end
+
+fn mio_strlen ptr ulong to ulong
+if eq ptr 0
+ret 0
+end
+mio_p64 0 ptr
+r = libcall get mio_sym 14 mio_rg 0 128
+ret mio_g64 0
+end
+
+fn mio_getenv s view uchar * to ulong
+n = mio_nm_set s
+mio_p64 0 ulong libptr mio_nm 0 512
+r = libcall get mio_sym 15 mio_rg 0 128
+ret mio_g64 0
+end
+
+fn mio_mut_flag to ulong
+p = mio_getenv mio_s_mut
+if eq p 0
+ret 0
+end
+mio_memcpy ulong libptr mio_b8 0 16 p 1
+c = ulong get mio_b8 0
+if and ge c 48 le c 57
+ret sub c 48
+end
+ret 0
+end
+
+fn mio_fopen_rb ai ulong to ulong
+n = oargp ai
+if gt n 2048
+exit 2
+end
+for i ulong n bound 2049
+put mio_p1 i get oarg i
+end
+put mio_p1 n 0
+nx = mio_nm_set mio_s_rb
+mio_p64 0 ulong libptr mio_p1 0 2100
+mio_p64 8 ulong libptr mio_nm 0 512
+r = libcall get mio_sym 3 mio_rg 0 128
+fp = mio_g64 0
+if eq fp 0
+exit 70
+end
+ret fp
+end
+
+fn mio_fclose fp ulong to void
+mio_p64 0 fp
+r = libcall get mio_sym 4 mio_rg 0 128
+if mio_i32neg mio_g64 0
+exit 70
+end
+end
+
+fn mio_fseeko fp ulong off long wh ulong to void
+mio_p64 0 fp
+mio_p64 8 ulong off
+mio_p64 16 wh
+r = libcall get mio_sym 5 mio_rg 0 128
+if mio_i32neg mio_g64 0
+exit 70
+end
+end
+
+fn mio_ftello fp ulong to ulong
+mio_p64 0 fp
+r = libcall get mio_sym 6 mio_rg 0 128
+sz = long mio_g64 0
+if lt sz 0
+exit 70
+end
+ret ulong sz
+end
+
+fn mio_fread fp ulong dst ulong n ulong to ulong
+if eq n 0
+ret 0
+end
+mio_p64 0 dst
+mio_p64 8 1
+mio_p64 16 n
+mio_p64 24 fp
+r = libcall get mio_sym 7 mio_rg 0 128
+ret mio_g64 0
+end
+
+fn oargc to ulong
+mio_init_syms
+r = libcall get mio_sym 0 mio_rg 0 128
+ap = mio_g64 0
+if eq ap 0
+ret 0
+end
+mio_memcpy ulong libptr mio_b8 0 16 ap 4
+ret mio_b8_u32 0
+end
+
+fn oargr i ulong to long
+ac = oargc
+if ge i ac
+ret -1
+end
+r = libcall get mio_sym 1 mio_rg 0 128
+avp = mio_g64 0
+if eq avp 0
+ret -1
+end
+mio_memcpy ulong libptr mio_b8 0 16 avp 8
+av = mio_b8_u64 0
+mio_memcpy ulong libptr mio_b8 0 16 add av mul i 8 8
+sptr = mio_b8_u64 0
+if eq sptr 0
+ret -1
+end
+sl = mio_strlen sptr
+if gt sl 4096
+mio_memcpy ulong libptr oarg 0 4100 sptr 4096
+ret -105
+end
+mio_memcpy ulong libptr oarg 0 4100 sptr sl
+ret long sl
+end
+
+fn main to int
+mio_init_syms
+if lt oargc 2
+exit 2
+end
+ret ocmd
+end
+
+fn onsnow to ulong
+mio_p64 0 8
+r = libcall get mio_sym 2 mio_rg 0 128
+ret mio_g64 0
+end
+
+fn oflush to void
+n = get oon 0
+p = ulong 0
+while lt p n bound 4097
+w = write 1 oout p sub n p
+if le w 0
+exit 70
+end
+p = add p ulong w
+end
+put oon 0 0
+end
+
+fn mio_mkp_tmp ai ulong to ulong
+pl = oargp ai
+if gt pl 2000
+exit 2
+end
+for i ulong pl bound 2001
+c = get oarg i
+put mio_p1 i c
+put mio_p2 i c
+end
+put mio_p1 pl 0
+put mio_p2 pl 46
+put mio_p2 add pl 1 116
+put mio_p2 add pl 2 109
+put mio_p2 add pl 3 112
+put mio_p2 add pl 4 0
+ret pl
+end
+
+fn ocwopen ai ulong to void
+pl = mio_mkp_tmp ai
+mio_p64 0 ulong libptr mio_p2 0 2100
+mio_p64 8 420
+r = libcall get mio_sym 8 mio_rg 0 128
+fdv = mio_g64 0
+if mio_i32neg fdv
+exit 70
+end
+put mio_cfd 0 int and fdv 4294967295
+end
+
+fn ocwput pos ulong n ulong to void
+fd = get mio_cfd 0
+p = ulong 0
+while lt p n bound 999999
+mio_p64 0 ulong fd
+mio_p64 8 ulong libptr ock p sub n p
+mio_p64 16 sub n p
+mio_p64 24 add pos p
+r = libcall get mio_sym 9 mio_rg 0 128
+w = long mio_g64 0
+if le w 0
+exit 70
+end
+p = add p ulong w
+end
+end
+
+fn ocwend ai ulong to void
+fd = get mio_cfd 0
+mio_p64 0 ulong fd
+r1 = libcall get mio_sym 10 mio_rg 0 128
+if mio_i32neg mio_g64 0
+exit 70
+end
+mio_p64 0 ulong fd
+r2 = libcall get mio_sym 11 mio_rg 0 128
+if mio_i32neg mio_g64 0
+exit 70
+end
+pl = mio_mkp_tmp ai
+mio_p64 0 ulong libptr mio_p2 0 2100
+mio_p64 8 ulong libptr mio_p1 0 2100
+r3 = libcall get mio_sym 12 mio_rg 0 128
+if mio_i32neg mio_g64 0
+exit 70
+end
+end
+
+fn ofsz ai ulong to ulong
+fp = mio_fopen_rb ai
+mio_fseeko fp 0 2
+sz = mio_ftello fp
+mio_fclose fp
+ret sz
+end
+
+fn ocsinit to ulong
+if gt mul 3 get og 8 OCSN
+exit 70
+end
+ret OCSN
+end
+
+fn ocsgrow need ulong to bool
+ret le need OCSN
+end
+
+fn ocsg i ulong to f64
+if lt i OCSC
+ret get ocs0 i
+end
+j = sub i OCSC
+if lt j OCSC
+ret get ocs1 j
+end
+ret get ocs2 sub j OCSC
+end
+
+fn ocsp i ulong v f64 to void
+if lt i OCSC
+put ocs0 i v
+ret
+end
+j = sub i OCSC
+if lt j OCSC
+put ocs1 j v
+ret
+end
+put ocs2 sub j OCSC v
+end
+
+fn ogradw to f64
+k = get og 45
+if gt k 1
+exit 70
+end
+ret ograd
+end
+
+fn odread i ulong to ulong
+fp = mio_fopen_rb i
+p = ulong 0
+dn = false
+while not dn bound 64
+got = ulong 0
+if lt p ODHALF
+want = sub ODHALF p
+if gt want 1048576
+want = 1048576
+end
+got = mio_fread fp ulong libptr od0 p want want
+else
+if lt p ODCAP
+want2 = sub ODCAP p
+if gt want2 1048576
+want2 = 1048576
+end
+got = mio_fread fp ulong libptr od1 sub p ODHALF want2 want2
+else
+got = mio_fread fp ulong libptr ochk 0 1 1
+end
+end
+if eq got 0
+dn = true
+else
+p = add p got
+if gt p ODCAP
+mio_fclose fp
+exit 21
+end
+end
+end
+mio_fclose fp
+put odn 0 p
+ret p
+end
+
+fn owflush k ulong to void
+n = get owbn k
+fd = get mio_wfd k
+p = ulong 0
+while lt p n bound 65537
+w = long 0
+if eq k 0
+w = write fd owb0 p sub n p
+else
+w = write fd owb1 p sub n p
+end
+if le w 0
+exit 70
+end
+p = add p ulong w
+end
+put owbn k 0
+end
+
+fn owopen k ulong i ulong to void
+n = oargp i
+if gt n 2048
+exit 2
+end
+for j ulong n bound 2049
+put mio_p1 j get oarg j
+end
+put mio_p1 n 0
+mio_p64 0 ulong libptr mio_p1 0 2100
+mio_p64 8 420
+r = libcall get mio_sym 8 mio_rg 0 128
+fdv = mio_g64 0
+if mio_i32neg fdv
+exit 70
+end
+put mio_wfd k int and fdv 4294967295
+put owbn k 0
+end
+
+fn owclose k ulong to void
+owflush k
+fd = get mio_wfd k
+mio_p64 0 ulong fd
+r1 = libcall get mio_sym 10 mio_rg 0 128
+if mio_i32neg mio_g64 0
+exit 70
+end
+mio_p64 0 ulong fd
+r2 = libcall get mio_sym 11 mio_rg 0 128
+if mio_i32neg mio_g64 0
+exit 70
+end
+end
+
+fn ooffrd ai ulong to void
+fp = mio_fopen_rb ai
+p = ulong 0
+dn = false
+while not dn bound 128
+got = mio_fread fp ulong libptr ochk p sub 65536 p sub 65536 p
+if eq got 0
+dn = true
+else
+p = add p got
+if ge p 65536
+mio_fclose fp
+exit 21
+end
+end
+end
+mio_fclose fp
+if ne p mul 8 get og 6
+exit 21
+end
+end
+
+fn oprd ai ulong pos ulong off ulong n ulong to ulong
+fp = mio_fopen_rb ai
+mio_fseeko fp long pos 0
+p = ulong 0
+dn = false
+while and not dn lt p n bound 64
+want = sub n p
+got = mio_fread fp ulong libptr opw add off p want want
+if eq got 0
+dn = true
+else
+p = add p got
+end
+end
+mio_fclose fp
+ret p
+end
+
+fn obmsave ai ulong n ulong to void
+pl = mio_mkp_tmp ai
+mio_p64 0 ulong libptr mio_p2 0 2100
+mio_p64 8 420
+r = libcall get mio_sym 8 mio_rg 0 128
+fdv = mio_g64 0
+if mio_i32neg fdv
+exit 70
+end
+fd = int and fdv 4294967295
+p = ulong 0
+while lt p n bound 999999
+w = write fd obm p sub n p
+if le w 0
+exit 70
+end
+p = add p ulong w
+end
+mio_p64 0 ulong fd
+r1 = libcall get mio_sym 10 mio_rg 0 128
+if mio_i32neg mio_g64 0
+exit 70
+end
+mio_p64 0 ulong fd
+r2 = libcall get mio_sym 11 mio_rg 0 128
+if mio_i32neg mio_g64 0
+exit 70
+end
+mio_p64 0 ulong libptr mio_p2 0 2100
+mio_p64 8 ulong libptr mio_p1 0 2100
+r3 = libcall get mio_sym 12 mio_rg 0 128
+if mio_i32neg mio_g64 0
+exit 70
+end
+end
+
+fn cmdspforge to void
+exit 2
+end
+fn cmdspcryst to void
+exit 2
+end
+fn cmdspweval to void
+exit 2
+end
+fn cmdspwsamp to void
+exit 2
+end
+fn cmdapuweave to void
+exit 2
+end
+fn sp2_is_sp2 ai ulong to bool
+ret false
+end
+fn cmdomg to void
+exit 2
+end
+fn cmdomg_cli to void
+exit 2
+end
+fn cmdarboris to void
+exit 2
+end
+fn cmdarboris_cli to void
+exit 2
+end

@@ -1,0 +1,20 @@
+note SPDX-License-Identifier: AGPL-3.0-only
+note native/gpu/mpool.om: static bank-B stub for macos-metal (@ng a64 macho).
+note Keeps total static globals well under the Mach-O 1 GiB limit while all
+note CONTRACT-V2 models (P <= OWC = 15833472) run natively in Bank A.
+const OWWN ulong 1
+global oww f64 1
+const OGBN ulong 1
+global ogb f64 1
+const OABN ulong 1
+global oab f64 1
+const OPABN ulong 1
+global opab f64 1
+
+fn olp_grow w ulong g ulong a ulong to bool
+ret and le w OWWN and le g OGBN le a OABN
+end
+
+fn olp_grow_pa pa ulong to bool
+ret eq pa 0
+end

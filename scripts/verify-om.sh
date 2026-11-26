@@ -16,6 +16,12 @@ echo "=== Omega Helix Pure-Omega Zero-Python Gate ($OS $ARCH) ==="
 if [ "$OS" = Darwin ]; then
   OUT="$OUT" TARGET=macos sh "$here/scripts/build.sh"
   BIN="$OUT/ollm-macos"
+  if [ "$ARCH" = arm64 ] && { command -v ng >/dev/null 2>&1 || [ -x "${NG:-}" ] || [ -x "$HOME/.local/bin/ng" ] || [ -f "${OMEGA_MV:-$HOME/workspace/omega-mv-macos}/seed/ng/src/ir.om" ] || [ -f "$here/../omega-mv/seed/ng/src/ir.om" ] || [ -f "$here/../omega-mv-macos/seed/ng/src/ir.om" ]; }; then
+    OUT="$OUT" TARGET=macos-metal sh "$here/scripts/build.sh"
+    METAL_BIN="$OUT/ollm-metal"
+  else
+    METAL_BIN=""
+  fi
   BT_HDR='target a64macos
 om2'
   BT_POOL="lpool.om"
@@ -248,5 +254,21 @@ else
   test -f "$work/a64/ollm"
 fi
 echo "SERVE_SCALING_OM_PASS"
+
+if [ -n "${METAL_BIN:-}" ] && [ -x "${METAL_BIN:-}" ]; then
+  echo "=== 14. Apple Silicon Metal GPU Pure-Omega Gate (mdev -> mops -> gcmp) ==="
+  mdev_rc=0
+  "$METAL_BIN" mdev || mdev_rc=$?
+  if [ "$mdev_rc" -eq 0 ]; then
+    "$METAL_BIN" mops
+    "$METAL_BIN" gcmp "$work/base.ck" "$work/corpus.txt" 0
+    echo "METAL_GPU_OM_PASS"
+  elif [ "$mdev_rc" -eq 75 ]; then
+    echo "METAL_GPU_SKIP (no Metal GPU device on headless macOS host)"
+  else
+    echo "FAIL: ollm-metal mdev exited $mdev_rc" >&2
+    exit "$mdev_rc"
+  fi
+fi
 
 echo "OMEGA_HELIX_PURE_OM_PASS"
