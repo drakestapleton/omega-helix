@@ -33,6 +33,7 @@ for _p in (str(STUDIO_DIR), str(OPENWALDO_DIR)):
 import catalog as studio_catalog  # noqa: E402
 import omega_helix_backend as univ_backend  # noqa: E402
 import openwaldo_bridge as ow_bridge  # noqa: E402
+import topology as studio_topology  # noqa: E402
 
 LN2 = math.log(2.0)
 STRAND_COLORS = ["#22d3ee", "#a78bfa", "#34d399", "#fbbf24"]
@@ -207,7 +208,10 @@ def detect_system(bin_dir: str | Path | None = None, runs_dir: Path | None = Non
     bins = resolve_binaries(bin_dir=bin_dir)
     omc = find_omc()
     has_nvidia = os.path.exists("/dev/nvidiactl")
-    has_gb10 = bool(has_nvidia and (bins.get("ollm_gb10") is not None or (platform.system() == "Linux" and platform.machine().lower() in ("aarch64", "arm64"))))
+    has_aien_gpu = os.path.exists("/dev/aien-gpu")
+    has_gpu_dev = bool(has_nvidia or has_aien_gpu)
+    has_gb10 = bool(has_gpu_dev and (bins.get("ollm_gb10") is not None or (platform.system() == "Linux" and platform.machine().lower() in ("aarch64", "arm64"))))
+    topo = studio_topology.detect_topology(has_nvidia_dev=has_nvidia, has_aien_gpu_dev=has_aien_gpu)
     bin_info: dict[str, str] = {}
     bin_detail: dict[str, Any] = {}
     first_dir = ""
@@ -231,6 +235,8 @@ def detect_system(bin_dir: str | Path | None = None, runs_dir: Path | None = Non
         "python": platform.python_version(),
         "has_gb10": has_gb10,
         "has_nvidia_dev": has_nvidia,
+        "has_aien_gpu_dev": has_aien_gpu,
+        "topology": topo,
         "has_waldo_cli": bool(shutil.which("waldo")),
         "omc": str(omc) if omc else "",
         "runs_dir": str(runs_dir or default_runs_dir()),

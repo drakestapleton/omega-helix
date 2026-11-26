@@ -17,6 +17,89 @@ global ocl_ent f64 4
 global ocl_al f64 4
 global ocl_ph ulong 4
 global ocl_wm long 4
+note Dynamic editable spclip recipe, splice, SHA-256, eval, tune & lineage state
+global ocl_cfg ulong 16
+global ocl_link ulong 32
+global ocl_sp_s ulong 4
+global ocl_sp_e ulong 4
+global ocl_sp_g ulong 4
+global ocl_raw_sl ulong 4
+global ocl_bsha uchar 32
+global ocl_lsha uchar 1024
+global ocl_lph ulong 32
+global ocl_rsha uchar 32
+global ocl_csha uchar 32
+global ocl_dsha uchar 32
+global ocl_tsha uchar 32
+global ocl_rec uchar 65536
+global ocl_rlen ulong 1
+global ocl_rcur ulong 1
+global ocl_exp ulong 16
+global ocl_tun_ls f64 4
+global ocl_tun_al f64 4
+global osha_k uint 64
+global osha_h uint 8
+global osha_v uint 8
+global osha_w uint 64
+global osha_b uchar 64
+global osha_d uchar 32
+global osha_n ulong 1
+global osha_ready ulong 1
+
+text ot_sub_cr "create"
+text ot_sub_ed "edit"
+text ot_sub_vr "verify"
+text ot_sub_in "inspect"
+text ot_sub_rn "run"
+text ot_sub_ev "eval"
+text ot_sub_tn "tune"
+text ot_sub_vl "verify-lineage"
+text ot_fl_str "--strand"
+text ot_fl_wts "--weights"
+text ot_fl_sw "--set-weight"
+text ot_fl_mod "--mode"
+text ot_fl_tau "--tau"
+text ot_fl_spl "--splice"
+text ot_fl_ss "--set-splice"
+text ot_fl_out "--out"
+text ot_fl_bat "--batch"
+text ot_fl_add "--add-layers"
+text ot_fl_trl "--trunk-link"
+text ot_fl_lin "--lineage"
+text ot_fl_nln "--no-lineage"
+text ot_kw_all "all"
+text ot_rec_mag "OLLMSPCLIP01\n"
+text ot_lin_mag "OLLMSPLIN01\n"
+text ot_k_base "base "
+text ot_k_bsha "base_sha256 "
+text ot_k_bl "base_L "
+text ot_k_bh "base_hash "
+text ot_k_mode "mode "
+text ot_k_tau "tau "
+text ot_k_strs "strands "
+text ot_k_str "strand "
+text ot_k_wt "weight "
+text ot_k_alm "alpha_micro "
+text ot_k_spl "splice "
+text ot_k_lnks "links "
+text ot_k_lnk "link "
+text ot_k_rsha "recipe_sha256 "
+text ot_k_chld "child "
+text ot_k_csha "child_sha256 "
+text ot_k_cbl "child_base_L "
+text ot_k_csl "child_spec_L "
+text ot_k_cbh "child_base_hash "
+text ot_k_cph "child_pack_hash "
+text ot_k_cns "child_nspec "
+text ot_k_tl "trunk_L "
+text ot_k_prsh "parent_recipe_sha256 "
+text ot_k_dsha "data_sha256 "
+text ot_k_stp "steps "
+text ot_k_lrm "lr_micro "
+text ot_k_bat "batch "
+text ot_k_ls0 "loss_start_micro "
+text ot_k_ls1 "loss_end_micro "
+text ot_k_lsha "lineage_sha256 "
 
 note ---- 1. Frozen-Core Residual Specialist Training ----
 note trainf CK TOKS UNTIL EVERY FREEZE_LAYERS [BATCH]
@@ -1763,6 +1846,467 @@ end
 ret get og 15
 end
 
+note Reset dynamic spclip config defaults (called before legacy spclip, spguard, and subcommands)
+fn osp_clip_defaults to void
+for i ulong 16
+put ocl_cfg i 0
+end
+put ocl_cfg 0 1000
+put ocl_cfg 1 2
+for s ulong 4
+put ocl_sp_s s 0
+put ocl_sp_e s 0
+put ocl_sp_g s 1000
+put ocl_raw_sl s 0
+put ocl_wm s 1000
+put ocl_w s 1.0f64
+end
+end
+
+fn osp_link_ai s ulong j ulong to ulong
+if ne get ocl_cfg 2 0
+ret get ocl_link add mul s 8 j
+end
+ret add get ocl_a0 s j
+end
+
+fn osp_clip_validate_knobs to void
+md = get ocl_st 0
+ss = get ocl_st 1
+tm = get ocl_cfg 0
+if or gt md 1 or lt ss 2 gt ss 4
+exit 2
+end
+if or eq tm 0 gt tm 100000
+exit 2
+end
+sw = 0.0f64
+ac = ulong 0
+for s ulong ss
+wi = get ocl_wm s
+if or lt wi -5000 gt wi 5000
+exit 2
+end
+if and eq md 1 lt wi 0
+exit 2
+end
+if gt get ocl_sp_g s 2000
+exit 2
+end
+ws = div f64 wi 1000.0
+put ocl_w s ws
+if gt ws 0.0
+sw = add sw ws
+end
+if lt wi 0
+ac = add ac 1
+end
+end
+if le sw 0.0
+exit 2
+end
+put ocl_st 13 ac
+end
+
+note ---- 10A. FIPS 180-4 SHA-256 (OM-1 compatible, low register pressure) ----
+fn osha_rotr x uint n uint to uint
+ret or shr x n shl x sub 32 n
+end
+
+fn osha_initk to void
+if ne get osha_ready 0 0
+ret
+end
+put osha_k 0 1116352408
+put osha_k 1 1899447441
+put osha_k 2 3049323471
+put osha_k 3 3921009573
+put osha_k 4 961987163
+put osha_k 5 1508970993
+put osha_k 6 2453635748
+put osha_k 7 2870763221
+put osha_k 8 3624381080
+put osha_k 9 310598401
+put osha_k 10 607225278
+put osha_k 11 1426881987
+put osha_k 12 1925078388
+put osha_k 13 2162078206
+put osha_k 14 2614888103
+put osha_k 15 3248222580
+put osha_k 16 3835390401
+put osha_k 17 4022224774
+put osha_k 18 264347078
+put osha_k 19 604807628
+put osha_k 20 770255983
+put osha_k 21 1249150122
+put osha_k 22 1555081692
+put osha_k 23 1996064986
+put osha_k 24 2554220882
+put osha_k 25 2821834349
+put osha_k 26 2952996808
+put osha_k 27 3210313671
+put osha_k 28 3336571891
+put osha_k 29 3584528711
+put osha_k 30 113926993
+put osha_k 31 338241895
+put osha_k 32 666307205
+put osha_k 33 773529912
+put osha_k 34 1294757372
+put osha_k 35 1396182291
+put osha_k 36 1695183700
+put osha_k 37 1986661051
+put osha_k 38 2177026350
+put osha_k 39 2456956037
+put osha_k 40 2730485921
+put osha_k 41 2820302411
+put osha_k 42 3259730800
+put osha_k 43 3345764771
+put osha_k 44 3516065817
+put osha_k 45 3600352804
+put osha_k 46 4094571909
+put osha_k 47 275423344
+put osha_k 48 430227734
+put osha_k 49 506948616
+put osha_k 50 659060556
+put osha_k 51 883997877
+put osha_k 52 958139571
+put osha_k 53 1322822218
+put osha_k 54 1537002063
+put osha_k 55 1747873779
+put osha_k 56 1955562222
+put osha_k 57 2024104815
+put osha_k 58 2227730452
+put osha_k 59 2361852424
+put osha_k 60 2428436474
+put osha_k 61 2756734187
+put osha_k 62 3204031479
+put osha_k 63 3329325298
+put osha_ready 0 1
+end
+
+fn osha_init to void
+osha_initk
+put osha_h 0 1779033703
+put osha_h 1 3144134277
+put osha_h 2 1013904242
+put osha_h 3 2773480762
+put osha_h 4 1359893119
+put osha_h 5 2600822924
+put osha_h 6 528734635
+put osha_h 7 1541459225
+put osha_n 0 0
+end
+
+fn osha_sched to void
+for i ulong 16
+q = mul i 4
+x = uint get osha_b q
+x = or shl x 8 uint get osha_b add q 1
+x = or shl x 8 uint get osha_b add q 2
+put osha_w i or shl x 8 uint get osha_b add q 3
+end
+for j ulong 48
+x = get osha_w add j 1
+s0 = xor xor osha_rotr x 7 osha_rotr x 18 shr x 3
+y = get osha_w add j 14
+s1 = xor xor osha_rotr y 17 osha_rotr y 19 shr y 10
+put osha_w add j 16 add add add get osha_w j s0 get osha_w add j 9 s1
+end
+end
+
+fn osha_t1 i ulong to uint
+e = get osha_v 4
+s1 = xor xor osha_rotr e 6 osha_rotr e 11 osha_rotr e 25
+ch = xor get osha_v 6 and e xor get osha_v 5 get osha_v 6
+t1 = add add get osha_v 7 s1 ch
+ret add add t1 get osha_k i get osha_w i
+end
+
+fn osha_t2 to uint
+a = get osha_v 0
+b = get osha_v 1
+c = get osha_v 2
+s0 = xor xor osha_rotr a 2 osha_rotr a 13 osha_rotr a 22
+mj = or and a b and c or a b
+ret add s0 mj
+end
+
+fn osha_round i ulong to void
+t1 = osha_t1 i
+t2 = osha_t2
+put osha_v 7 get osha_v 6
+put osha_v 6 get osha_v 5
+put osha_v 5 get osha_v 4
+put osha_v 4 add get osha_v 3 t1
+put osha_v 3 get osha_v 2
+put osha_v 2 get osha_v 1
+put osha_v 1 get osha_v 0
+put osha_v 0 add t1 t2
+end
+
+fn osha_comp to void
+osha_sched
+for i ulong 8
+put osha_v i get osha_h i
+end
+for r ulong 64
+osha_round r
+end
+for j ulong 8
+put osha_h j add get osha_h j get osha_v j
+end
+end
+
+fn osha_byte c uchar to void
+n = get osha_n 0
+put osha_b and n 63 c
+n = add n 1
+put osha_n 0 n
+if eq and n 63 0
+osha_comp
+end
+end
+
+fn osha_fin to void
+nb = get osha_n 0
+bits = shl nb 3
+osha_byte uchar 128
+while ne and get osha_n 0 63 56 bound 64
+osha_byte uchar 0
+end
+for k ulong 8
+b = and shr bits mul sub 7 k 8 255
+osha_byte uchar b
+end
+for i ulong 8
+w = get osha_h i
+q = mul i 4
+put osha_d q uchar and shr w 24 255
+put osha_d add q 1 uchar and shr w 16 255
+put osha_d add q 2 uchar and shr w 8 255
+put osha_d add q 3 uchar and w 255
+end
+end
+
+fn osha_file ai ulong to void
+osha_init
+sz = ofsz ai
+pos = ulong 0
+while lt pos sz bound 9223372036854775807
+cnt = sub sz pos
+if gt cnt 524288
+cnt = ulong 524288
+end
+if ne oprd ai pos 0 cnt cnt
+exit 60
+end
+j = ulong 0
+while lt j cnt bound 524288
+osha_byte get opw j
+j = add j 1
+end
+pos = add pos cnt
+end
+osha_fin
+end
+
+fn osha_buf_ocl n ulong to void
+osha_init
+i = ulong 0
+while lt i n bound 65536
+osha_byte get ocl_rec i
+i = add i 1
+end
+osha_fin
+end
+
+fn osha_save_bsha to void
+for i ulong 32
+put ocl_bsha i get osha_d i
+end
+end
+
+fn osha_eq_bsha to bool
+for i ulong 32
+if ne get ocl_bsha i get osha_d i
+ret false
+end
+end
+ret true
+end
+
+fn osha_save_lsha idx ulong to void
+bo = mul idx 32
+for i ulong 32
+put ocl_lsha add bo i get osha_d i
+end
+end
+
+fn osha_eq_lsha idx ulong to bool
+bo = mul idx 32
+for i ulong 32
+if ne get ocl_lsha add bo i get osha_d i
+ret false
+end
+end
+ret true
+end
+
+fn osha_save_rsha to void
+for i ulong 32
+put ocl_rsha i get osha_d i
+end
+end
+
+fn osha_eq_rsha to bool
+for i ulong 32
+if ne get ocl_rsha i get osha_d i
+ret false
+end
+end
+ret true
+end
+
+fn osha_save_csha to void
+for i ulong 32
+put ocl_csha i get osha_d i
+end
+end
+
+fn osha_eq_csha to bool
+for i ulong 32
+if ne get ocl_csha i get osha_d i
+ret false
+end
+end
+ret true
+end
+
+fn osha_save_dsha to void
+for i ulong 32
+put ocl_dsha i get osha_d i
+end
+end
+
+fn osha_save_tsha to void
+for i ulong 32
+put ocl_tsha i get osha_d i
+end
+end
+
+fn osha_eq_tsha to bool
+for i ulong 32
+if ne get ocl_tsha i get osha_d i
+ret false
+end
+end
+ret true
+end
+
+fn oput_sha_d to void
+for i ulong 32
+b = ulong get osha_d i
+hi = shr b 4
+lo = and b 15
+if lt hi 10
+oputc add hi 48
+else
+oputc add hi 87
+end
+if lt lo 10
+oputc add lo 48
+else
+oputc add lo 87
+end
+end
+end
+
+fn oput_sha_rsha to void
+for i ulong 32
+put osha_d i get ocl_rsha i
+end
+oput_sha_d
+end
+
+fn oput_sha_csha to void
+for i ulong 32
+put osha_d i get ocl_csha i
+end
+oput_sha_d
+end
+
+fn oput_sha_tsha to void
+for i ulong 32
+put osha_d i get ocl_tsha i
+end
+oput_sha_d
+end
+
+fn oput_sha_bsha to void
+for i ulong 32
+put osha_d i get ocl_bsha i
+end
+oput_sha_d
+end
+
+fn oput_sha_lsha idx ulong to void
+bo = mul idx 32
+for i ulong 32
+put osha_d i get ocl_lsha add bo i
+end
+oput_sha_d
+end
+
+note Verify or capture base + all link SHA-256 digests according to ocl_cfg[3] (0=skip, 1=verify, 2=capture)
+fn osp_clip_hash_pass to void
+hm = get ocl_cfg 3
+if eq hm 0
+ret
+end
+bai = get ocl_cfg 1
+osha_file bai
+if eq hm 1
+if not osha_eq_bsha
+exit 62
+end
+else
+osha_save_bsha
+end
+ss = get ocl_st 1
+for s ulong ss
+ks = get ocl_k s
+for j ulong ks
+idx = add mul s 8 j
+ai = osp_link_ai s j
+osha_file ai
+if eq hm 1
+if not osha_eq_lsha idx
+exit 61
+end
+else
+osha_save_lsha idx
+end
+if lt ofsz ai 48
+exit 60
+end
+if ne oprd ai 0 0 48 48
+exit 60
+end
+if ne opw8 0 OSPMAG
+exit 60
+end
+ph = opw8 40
+if eq hm 1
+if ne ph get ocl_lph idx
+exit 61
+end
+else
+put ocl_lph idx ph
+end
+end
+end
+end
+
 note Parse spclip or spguard CLI strand arguments starting at ss_arg
 fn osp_clip_parse_at md ulong ss_arg ulong to void
 na = oargc
@@ -1841,13 +2385,13 @@ end
 note True iff all ss strands share an identical valid pack at link index j on top of current ow
 fn osp_clip_same j ulong ss ulong to bool
 bh = osp_basehash get og 5 get og 33
-osp_rdhdr add get ocl_a0 0 j get og 5 bh
+osp_rdhdr osp_link_ai 0 j get og 5 bh
 sl0 = get ottt_st 1
 ns0 = get ottt_st 3
 ph0 = get ottt_st 4
 s = ulong 1
 while lt s ss bound 4
-osp_rdhdr add get ocl_a0 s j get og 5 bh
+osp_rdhdr osp_link_ai s j get og 5 bh
 if ne get ottt_st 1 sl0
 ret false
 end
@@ -1861,7 +2405,7 @@ s = add s 1
 end
 s = ulong 1
 while lt s ss bound 4
-osp_chkpay add get ocl_a0 s j ns0 ph0
+osp_chkpay osp_link_ai s j ns0 ph0
 s = add s 1
 end
 ret true
@@ -1882,13 +2426,14 @@ for j ulong mink
 if not osp_clip_same j ss
 break
 end
-osp_chain_link add get ocl_a0 0 j
+osp_chain_link osp_link_ai 0 j
 phc = osp_mix64 phc get ottt_st 4
 comm = add comm 1
 end
 put ocl_st 3 get og 5
 put ocl_st 4 get og 33
 put ocl_st 6 comm
+put ocl_exp 14 osp_basehash get og 5 get og 33
 for s2 ulong ss
 put ocl_ph s2 phc
 end
@@ -1905,7 +2450,7 @@ ml = get ocl_st 3
 for s ulong ss
 ks = get ocl_k s
 if gt ks comm
-ai = add get ocl_a0 s sub ks 1
+ai = osp_link_ai s sub ks 1
 if lt ofsz ai 48
 exit 60
 end
@@ -1953,7 +2498,7 @@ j = get ocl_st 6
 ks = get ocl_k s
 ph = get ocl_ph s
 while lt j ks bound 16
-sl = osp_clip_1link add get ocl_a0 s j cur_l cur_fz
+sl = osp_clip_1link osp_link_ai s j cur_l cur_fz
 ph = osp_mix64 ph get ottt_st 4
 cur_l = sl
 cur_fz = add get og 31 mul sl get og 32
@@ -1963,53 +2508,124 @@ put ocl_ph s ph
 ret cur_l
 end
 
-note Verify & store strand s's remaining layer weights + gf into ocs
-fn osp_clip_strand s ulong to void
-comm = get ocl_st 6
-ks = get ocl_k s
-tl = get ocl_st 3
-fzt = get ocl_st 4
-oc = get ocl_st 8
-d = get og 2
-cap = ocsinit
-if eq ks comm
-if gt add oc d cap
-exit 12
+note Shift active spliced layers down in ow when eff_s > tl
+fn osp_clip_shift dst ulong src ulong n ulong to void
+i = ulong 0
+while lt i n bound 9223372036854775807
+owp add dst i owg add src i
+i = add i 1
 end
-for g ulong d
-ocsp add oc g get odl2 g
-end
-put ocl_sl s tl
-put ocl_wo s oc
-put ocl_wn s 0
-put ocl_st 8 add oc d
-ret
-end
-cl = osp_clip_slinks s
-wn = mul sub cl tl get og 32
-ntot = add wn d
-if gt add oc ntot cap
-exit 12
-end
-osp_w2c oc fzt ntot
-put ocl_sl s cl
-put ocl_wo s oc
-put ocl_wn s wn
-put ocl_st 8 add oc ntot
 end
 
-note Initialize spclip: load BASE.ck, common trunk, grow to max_L, store all S strand suffixes in ocs
+note Load strand s raw unspliced layers into ow[fzt..) and save gf_s into odl1[0..d); returns raw depth cl
+fn osp_clip_load_raw s ulong to ulong
+tl = get ocl_st 3
+d = get og 2
+if eq get ocl_k s get ocl_st 6
+for g ulong d
+put odl1 g get odl2 g
+end
+ret tl
+end
+cl = osp_clip_slinks s
+gf_off = add get ocl_st 4 mul sub cl tl get og 32
+for g2 ulong d
+put odl1 g2 owg add gf_off g2
+end
+ret cl
+end
+
+fn osp_clip_chk_sp tl ulong cl ulong es ulong ee ulong gn ulong to void
+if lt es tl
+exit 2
+end
+if gt es cl
+exit 2
+end
+if lt ee tl
+exit 2
+end
+if gt ee cl
+exit 2
+end
+if gt es ee
+exit 2
+end
+if gt gn 2000
+exit 2
+end
+end
+
+fn osp_clip_store_br s ulong es ulong nact ulong gn ulong to void
+tl = get ocl_st 3
+wn = mul nact get og 32
+oc = get ocl_st 8
+d = get og 2
+if gt add oc add wn d ocsinit
+exit 12
+end
+if gt nact 0
+fzt = get ocl_st 4
+if gt es tl
+osp_clip_shift fzt add fzt mul sub es tl get og 32 wn
+end
+if ne gn 1000
+osp_sclays tl nact div f64 gn 1000.0
+end
+osp_w2c oc fzt wn
+end
+for g3 ulong d
+ocsp add add oc wn g3 get odl1 g3
+end
+put ocl_sl s add tl nact
+put ocl_wo s oc
+put ocl_wn s wn
+put ocl_st 8 add oc add wn d
+end
+
+note Verify & store strand s's spliced active layer weights + gf into ocs
+fn osp_clip_strand s ulong to void
+tl = get ocl_st 3
+cl = osp_clip_load_raw s
+put ocl_raw_sl s cl
+es = get ocl_sp_s s
+if eq es 0
+es = tl
+end
+ee = get ocl_sp_e s
+if eq ee 0
+ee = cl
+end
+gn = get ocl_sp_g s
+osp_clip_chk_sp tl cl es ee gn
+osp_clip_store_br s es sub ee es gn
+end
+
+note Initialize spclip: verify/capture hashes, load BASE.ck, common trunk, grow to max_L, store all S strand suffixes in ocs
 fn osp_clip_init to void
 c = ocsinit
-ockloop 2
+osp_clip_hash_pass
+ockloop get ocl_cfg 1
+bh = osp_basehash get og 5 get og 33
 put ocl_st 2 get og 5
-put ocl_st 11 osp_basehash get og 5 get og 33
+put ocl_st 11 bh
+put ocl_exp 12 get og 33
+if eq get ocl_cfg 3 1
+if or ne get og 5 get ocl_exp 0 ne bh get ocl_exp 1
+exit 62
+end
+end
 osp_clip_trunk
 ml = osp_clip_maxl
+addl = get ocl_cfg 5
+ml_alloc = add ml addl
+if gt ml_alloc 24
+exit 12
+end
 put ocl_st 5 ml
-if gt ml get ocl_st 3
+if gt ml_alloc get ocl_st 3
 ogrowsnap get og 8
-put og 5 ml
+put og 5 ml_alloc
 if not ogeom
 exit 12
 end
@@ -2086,11 +2702,44 @@ end
 osp_clip_head s nc
 end
 
-note Fuse S strands' log-probs in ocs into TMP[0..V) using MODE=0 (signed PoE) or MODE=1 (entropy-gated)
-fn osp_clip_fuse to void
+note Compute stabilized entropy-gated unnormalized weights for MODE=1 with tau != 1.0
+fn osp_clip_wt_tau ss ulong tau f64 to f64
+lmin = bitcast f64 ulong 9218868437227405312
+for s0 ulong ss
+if gt get ocl_w s0 0.0
+ls0 = flog add get ocl_ent s0 0.001
+if lt ls0 lmin
+lmin = ls0
+end
+end
+end
+su = 0.0f64
+for s ulong ss
+u = get ocl_w s
+if gt u 0.0
+ls = flog add get ocl_ent s 0.001
+u = mul u fexp div sub lmin ls tau
+end
+put ocl_al s u
+if gt u 0.0
+su = add su u
+end
+end
+ret su
+end
+
+note Compute normalized fusion weights ocl_al[0..S) using MODE=0/1 and tau_milli
+fn osp_clip_calc_al to void
 md = get ocl_st 0
 ss = get ocl_st 1
+tm = get ocl_cfg 0
+if eq tm 0
+tm = ulong 1000
+end
 su = 0.0f64
+if and eq md 1 ne tm 1000
+su = osp_clip_wt_tau ss div f64 tm 1000.0
+else
 for s ulong ss
 u = get ocl_w s
 if and eq md 1 gt u 0.0
@@ -2101,16 +2750,31 @@ if gt u 0.0
 su = add su u
 end
 end
+end
 for s2 ulong ss
 put ocl_al s2 div get ocl_al s2 su
 end
-pr = get og 27
-v = get og 0
-lo = get ocl_st 9
-for j ulong v
+end
+
+fn osp_clip_fuse_v j ulong ss ulong v ulong lo ulong to f64
 acc = 0.0f64
 for s3 ulong ss
 acc = add acc mul get ocl_al s3 ocsg add lo add mul s3 v j
+end
+ret acc
+end
+
+note Fuse S strands' log-probs in ocs into TMP[0..V) using MODE=0 (signed PoE) or MODE=1 (entropy-gated) + tau
+fn osp_clip_fuse to void
+osp_clip_calc_al
+sc_on = and eq get ocl_st 0 0 and ne get ocl_cfg 0 0 ne get ocl_cfg 0 1000
+tau = div f64 get ocl_cfg 0 1000.0
+pr = get og 27
+v = get og 0
+for j ulong v
+acc = osp_clip_fuse_v j get ocl_st 1 v get ocl_st 9
+if sc_on
+acc = div acc tau
 end
 put oa add pr j acc
 end
@@ -2313,6 +2977,7 @@ end
 
 note spguard BASE.ck DISAGREE_MILLI MAX_EXTRA PROMPT N TEMPMILLI SEED MERGES S W1 K1 A1..AK1 ...
 fn cmdspguard to void
+osp_clip_defaults
 dm = oargu 3
 mx = oargu 4
 if gt mx 4
@@ -2380,7 +3045,2596 @@ end
 oflush
 end
 
-fn cmdspclip to void
+note ---- 11. Canonical .spclip Recipe & OLLMSPLIN01 Lineage Buffer Helpers ----
+fn osr_reset to void
+put ocl_rlen 0 0
+end
+
+fn osr_putc c ulong to void
+p = get ocl_rlen 0
+if ge p 65536
+exit 60
+end
+put ocl_rec p uchar and c 255
+put ocl_rlen 0 add p 1
+end
+
+fn osr_putu v ulong to void
+d = new uchar 24 0
+n = ulong 0
+x = v
+while true bound 21
+put d n uchar add rem x 10 48
+n = add n 1
+x = div x 10
+if eq x 0
+break
+end
+end
+for i ulong n
+osr_putc ulong get d sub sub n 1 i
+end
+end
+
+fn osr_putl v long to void
+if lt v 0
+osr_putc 45
+if eq v -9223372036854775808
+osr_putu 9223372036854775808
+else
+osr_putu ulong neg v
+end
+else
+osr_putu ulong v
+end
+end
+
+fn osr_putx64 v ulong to void
+for i ulong 16
+h = and shr v mul sub 15 i 4 15
+if lt h 10
+osr_putc add h 48
+else
+osr_putc add h 87
+end
+end
+end
+
+fn osr_putsha_d to void
+for i ulong 32
+b = ulong get osha_d i
+hi = shr b 4
+lo = and b 15
+if lt hi 10
+osr_putc add hi 48
+else
+osr_putc add hi 87
+end
+if lt lo 10
+osr_putc add lo 48
+else
+osr_putc add lo 87
+end
+end
+end
+
+fn osr_putslot sl ulong to void
+n = ovp_len sl
+if eq n 0
+exit 60
+end
+for i ulong n
+osr_putc ulong ovp_getb sl i
+end
+end
+
+fn osr_putkw kw ulong to void
+if eq kw 0
+for i ulong len ot_rec_mag
+osr_putc ulong get ot_rec_mag i
+end
+ret
+end
+if eq kw 1
+for i ulong len ot_lin_mag
+osr_putc ulong get ot_lin_mag i
+end
+ret
+end
+if eq kw 2
+for i ulong len ot_k_base
+osr_putc ulong get ot_k_base i
+end
+ret
+end
+if eq kw 3
+for i ulong len ot_k_bsha
+osr_putc ulong get ot_k_bsha i
+end
+ret
+end
+if eq kw 4
+for i ulong len ot_k_bl
+osr_putc ulong get ot_k_bl i
+end
+ret
+end
+if eq kw 5
+for i ulong len ot_k_bh
+osr_putc ulong get ot_k_bh i
+end
+ret
+end
+if eq kw 6
+for i ulong len ot_k_mode
+osr_putc ulong get ot_k_mode i
+end
+ret
+end
+if eq kw 7
+for i ulong len ot_k_tau
+osr_putc ulong get ot_k_tau i
+end
+ret
+end
+if eq kw 8
+for i ulong len ot_k_strs
+osr_putc ulong get ot_k_strs i
+end
+ret
+end
+if eq kw 9
+for i ulong len ot_k_str
+osr_putc ulong get ot_k_str i
+end
+ret
+end
+if eq kw 10
+for i ulong len ot_k_wt
+osr_putc ulong get ot_k_wt i
+end
+ret
+end
+if eq kw 11
+for i ulong len ot_k_spl
+osr_putc ulong get ot_k_spl i
+end
+ret
+end
+if eq kw 12
+for i ulong len ot_k_lnks
+osr_putc ulong get ot_k_lnks i
+end
+ret
+end
+if eq kw 13
+for i ulong len ot_k_lnk
+osr_putc ulong get ot_k_lnk i
+end
+ret
+end
+if eq kw 14
+for i ulong len ot_k_rsha
+osr_putc ulong get ot_k_rsha i
+end
+ret
+end
+if eq kw 15
+for i ulong len ot_k_alm
+osr_putc ulong get ot_k_alm i
+end
+ret
+end
+if eq kw 16
+for i ulong len ot_k_chld
+osr_putc ulong get ot_k_chld i
+end
+ret
+end
+if eq kw 17
+for i ulong len ot_k_csha
+osr_putc ulong get ot_k_csha i
+end
+ret
+end
+if eq kw 18
+for i ulong len ot_k_cbl
+osr_putc ulong get ot_k_cbl i
+end
+ret
+end
+if eq kw 19
+for i ulong len ot_k_csl
+osr_putc ulong get ot_k_csl i
+end
+ret
+end
+if eq kw 20
+for i ulong len ot_k_cbh
+osr_putc ulong get ot_k_cbh i
+end
+ret
+end
+if eq kw 21
+for i ulong len ot_k_cph
+osr_putc ulong get ot_k_cph i
+end
+ret
+end
+if eq kw 22
+for i ulong len ot_k_cns
+osr_putc ulong get ot_k_cns i
+end
+ret
+end
+if eq kw 23
+for i ulong len ot_k_tl
+osr_putc ulong get ot_k_tl i
+end
+ret
+end
+if eq kw 24
+for i ulong len ot_k_prsh
+osr_putc ulong get ot_k_prsh i
+end
+ret
+end
+if eq kw 25
+for i ulong len ot_k_dsha
+osr_putc ulong get ot_k_dsha i
+end
+ret
+end
+if eq kw 26
+for i ulong len ot_k_stp
+osr_putc ulong get ot_k_stp i
+end
+ret
+end
+if eq kw 27
+for i ulong len ot_k_lrm
+osr_putc ulong get ot_k_lrm i
+end
+ret
+end
+if eq kw 28
+for i ulong len ot_k_bat
+osr_putc ulong get ot_k_bat i
+end
+ret
+end
+if eq kw 29
+for i ulong len ot_k_ls0
+osr_putc ulong get ot_k_ls0 i
+end
+ret
+end
+if eq kw 30
+for i ulong len ot_k_ls1
+osr_putc ulong get ot_k_ls1 i
+end
+ret
+end
+if eq kw 31
+for i ulong len ot_k_lsha
+osr_putc ulong get ot_k_lsha i
+end
+end
+end
+
+fn osr_flush_file dst_ai ulong to void
+n = get ocl_rlen 0
+for i ulong n
+put ock i get ocl_rec i
+end
+ocwopen dst_ai
+ocwput 0 n
+ocwend dst_ai
+end
+
+fn osr_read_file src_ai ulong to void
+sz = ofsz src_ai
+if or eq sz 0 gt sz 65536
+exit 60
+end
+if ne oprd src_ai 0 0 sz sz
+exit 60
+end
+for i ulong sz
+put ocl_rec i get opw i
+end
+put ocl_rlen 0 sz
+put ocl_rcur 0 0
+end
+
+fn osr_hexnib c ulong to ulong
+if and ge c 48 le c 57
+ret sub c 48
+end
+if and ge c 97 le c 102
+ret add 10 sub c 97
+end
+ret 255
+end
+
+fn osr_eat_byte b ulong to void
+p = get ocl_rcur 0
+if ge p get ocl_rlen 0
+exit 60
+end
+if ne ulong get ocl_rec p b
+exit 60
+end
+put ocl_rcur 0 add p 1
+end
+
+fn osr_eat_kw kw ulong to void
+p = get ocl_rcur 0
+n = get ocl_rlen 0
+if eq kw 0
+if gt add p len ot_rec_mag n
+exit 60
+end
+for i ulong len ot_rec_mag
+if ne get ocl_rec add p i get ot_rec_mag i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_rec_mag
+ret
+end
+if eq kw 1
+if gt add p len ot_lin_mag n
+exit 60
+end
+for i ulong len ot_lin_mag
+if ne get ocl_rec add p i get ot_lin_mag i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_lin_mag
+ret
+end
+if eq kw 2
+if gt add p len ot_k_base n
+exit 60
+end
+for i ulong len ot_k_base
+if ne get ocl_rec add p i get ot_k_base i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_base
+ret
+end
+if eq kw 3
+if gt add p len ot_k_bsha n
+exit 60
+end
+for i ulong len ot_k_bsha
+if ne get ocl_rec add p i get ot_k_bsha i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_bsha
+ret
+end
+if eq kw 4
+if gt add p len ot_k_bl n
+exit 60
+end
+for i ulong len ot_k_bl
+if ne get ocl_rec add p i get ot_k_bl i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_bl
+ret
+end
+if eq kw 5
+if gt add p len ot_k_bh n
+exit 60
+end
+for i ulong len ot_k_bh
+if ne get ocl_rec add p i get ot_k_bh i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_bh
+ret
+end
+if eq kw 6
+if gt add p len ot_k_mode n
+exit 60
+end
+for i ulong len ot_k_mode
+if ne get ocl_rec add p i get ot_k_mode i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_mode
+ret
+end
+if eq kw 7
+if gt add p len ot_k_tau n
+exit 60
+end
+for i ulong len ot_k_tau
+if ne get ocl_rec add p i get ot_k_tau i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_tau
+ret
+end
+if eq kw 8
+if gt add p len ot_k_strs n
+exit 60
+end
+for i ulong len ot_k_strs
+if ne get ocl_rec add p i get ot_k_strs i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_strs
+ret
+end
+if eq kw 9
+if gt add p len ot_k_str n
+exit 60
+end
+for i ulong len ot_k_str
+if ne get ocl_rec add p i get ot_k_str i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_str
+ret
+end
+if eq kw 10
+if gt add p len ot_k_wt n
+exit 60
+end
+for i ulong len ot_k_wt
+if ne get ocl_rec add p i get ot_k_wt i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_wt
+ret
+end
+if eq kw 11
+if gt add p len ot_k_spl n
+exit 60
+end
+for i ulong len ot_k_spl
+if ne get ocl_rec add p i get ot_k_spl i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_spl
+ret
+end
+if eq kw 12
+if gt add p len ot_k_lnks n
+exit 60
+end
+for i ulong len ot_k_lnks
+if ne get ocl_rec add p i get ot_k_lnks i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_lnks
+ret
+end
+if eq kw 13
+if gt add p len ot_k_lnk n
+exit 60
+end
+for i ulong len ot_k_lnk
+if ne get ocl_rec add p i get ot_k_lnk i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_lnk
+ret
+end
+if eq kw 14
+if gt add p len ot_k_rsha n
+exit 60
+end
+for i ulong len ot_k_rsha
+if ne get ocl_rec add p i get ot_k_rsha i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_rsha
+ret
+end
+if eq kw 15
+if gt add p len ot_k_alm n
+exit 60
+end
+for i ulong len ot_k_alm
+if ne get ocl_rec add p i get ot_k_alm i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_alm
+ret
+end
+osr_eat_kw2 kw
+end
+
+fn osr_eat_kw2 kw ulong to void
+p = get ocl_rcur 0
+n = get ocl_rlen 0
+if eq kw 16
+if gt add p len ot_k_chld n
+exit 60
+end
+for i ulong len ot_k_chld
+if ne get ocl_rec add p i get ot_k_chld i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_chld
+ret
+end
+if eq kw 17
+if gt add p len ot_k_csha n
+exit 60
+end
+for i ulong len ot_k_csha
+if ne get ocl_rec add p i get ot_k_csha i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_csha
+ret
+end
+if eq kw 18
+if gt add p len ot_k_cbl n
+exit 60
+end
+for i ulong len ot_k_cbl
+if ne get ocl_rec add p i get ot_k_cbl i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_cbl
+ret
+end
+if eq kw 19
+if gt add p len ot_k_csl n
+exit 60
+end
+for i ulong len ot_k_csl
+if ne get ocl_rec add p i get ot_k_csl i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_csl
+ret
+end
+if eq kw 20
+if gt add p len ot_k_cbh n
+exit 60
+end
+for i ulong len ot_k_cbh
+if ne get ocl_rec add p i get ot_k_cbh i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_cbh
+ret
+end
+if eq kw 21
+if gt add p len ot_k_cph n
+exit 60
+end
+for i ulong len ot_k_cph
+if ne get ocl_rec add p i get ot_k_cph i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_cph
+ret
+end
+if eq kw 22
+if gt add p len ot_k_cns n
+exit 60
+end
+for i ulong len ot_k_cns
+if ne get ocl_rec add p i get ot_k_cns i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_cns
+ret
+end
+if eq kw 23
+if gt add p len ot_k_tl n
+exit 60
+end
+for i ulong len ot_k_tl
+if ne get ocl_rec add p i get ot_k_tl i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_tl
+ret
+end
+if eq kw 24
+if gt add p len ot_k_prsh n
+exit 60
+end
+for i ulong len ot_k_prsh
+if ne get ocl_rec add p i get ot_k_prsh i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_prsh
+ret
+end
+if eq kw 25
+if gt add p len ot_k_dsha n
+exit 60
+end
+for i ulong len ot_k_dsha
+if ne get ocl_rec add p i get ot_k_dsha i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_dsha
+ret
+end
+if eq kw 26
+if gt add p len ot_k_stp n
+exit 60
+end
+for i ulong len ot_k_stp
+if ne get ocl_rec add p i get ot_k_stp i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_stp
+ret
+end
+if eq kw 27
+if gt add p len ot_k_lrm n
+exit 60
+end
+for i ulong len ot_k_lrm
+if ne get ocl_rec add p i get ot_k_lrm i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_lrm
+ret
+end
+if eq kw 28
+if gt add p len ot_k_bat n
+exit 60
+end
+for i ulong len ot_k_bat
+if ne get ocl_rec add p i get ot_k_bat i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_bat
+ret
+end
+if eq kw 29
+if gt add p len ot_k_ls0 n
+exit 60
+end
+for i ulong len ot_k_ls0
+if ne get ocl_rec add p i get ot_k_ls0 i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_ls0
+ret
+end
+if eq kw 30
+if gt add p len ot_k_ls1 n
+exit 60
+end
+for i ulong len ot_k_ls1
+if ne get ocl_rec add p i get ot_k_ls1 i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_ls1
+ret
+end
+if eq kw 31
+if gt add p len ot_k_lsha n
+exit 60
+end
+for i ulong len ot_k_lsha
+if ne get ocl_rec add p i get ot_k_lsha i
+exit 60
+end
+end
+put ocl_rcur 0 add p len ot_k_lsha
+ret
+end
+exit 60
+end
+
+fn osr_rd_u delim ulong to ulong
+p = get ocl_rcur 0
+n = get ocl_rlen 0
+v = ulong 0
+d = ulong 0
+while lt p n bound 32
+c = ulong get ocl_rec p
+if eq c delim
+break
+end
+if or lt c 48 gt c 57
+exit 60
+end
+if ge d 19
+exit 60
+end
+v = add mul v 10 sub c 48
+d = add d 1
+p = add p 1
+end
+if or eq d 0 ge p n
+exit 60
+end
+if ne ulong get ocl_rec p delim
+exit 60
+end
+put ocl_rcur 0 add p 1
+ret v
+end
+
+fn osr_rd_l delim ulong to long
+p = get ocl_rcur 0
+n = get ocl_rlen 0
+if ge p n
+exit 60
+end
+negf = ulong 0
+if eq ulong get ocl_rec p 45
+negf = ulong 1
+p = add p 1
+put ocl_rcur 0 p
+end
+v = osr_rd_u delim
+if eq negf 1
+if gt v 9223372036854775807
+exit 60
+end
+ret neg long v
+end
+if gt v 9223372036854775807
+exit 60
+end
+ret long v
+end
+
+fn osr_rd_x64 delim ulong to ulong
+p = get ocl_rcur 0
+if gt add p 17 get ocl_rlen 0
+exit 60
+end
+v = ulong 0
+for i ulong 16
+h = osr_hexnib ulong get ocl_rec add p i
+if gt h 15
+exit 60
+end
+v = or shl v 4 h
+end
+if ne ulong get ocl_rec add p 16 delim
+exit 60
+end
+put ocl_rcur 0 add p 17
+ret v
+end
+
+fn osr_rd_sha_d delim ulong to void
+p = get ocl_rcur 0
+if gt add p 65 get ocl_rlen 0
+exit 60
+end
+for i ulong 32
+hi = osr_hexnib ulong get ocl_rec add p mul i 2
+lo = osr_hexnib ulong get ocl_rec add p add mul i 2 1
+if or gt hi 15 gt lo 15
+exit 60
+end
+put osha_d i uchar or shl hi 4 lo
+end
+if ne ulong get ocl_rec add p 64 delim
+exit 60
+end
+put ocl_rcur 0 add p 65
+end
+
+fn osr_rd_path sl ulong delim ulong to ulong
+p = get ocl_rcur 0
+n = get ocl_rlen 0
+k = ulong 0
+while lt p n bound 1025
+c = ulong get ocl_rec p
+if eq c delim
+break
+end
+if or lt c 33 gt c 126
+exit 60
+end
+if ge k OVARG_STR
+exit 60
+end
+ovp_putb sl k uchar c
+k = add k 1
+p = add p 1
+end
+if or eq k 0 ge p n
+exit 60
+end
+if ne ulong get ocl_rec p delim
+exit 60
+end
+ovp_setlen sl k
+put ocl_rcur 0 add p 1
+ret add OVARG_BASE sl
+end
+
+note Write canonical OLLMSPCLIP01 recipe to dst_ai and store recipe_sha256 in ocl_rsha
+fn osp_rec_write dst_ai ulong to void
+osr_reset
+osr_putkw 0
+osr_putkw 2
+osr_putslot 0
+osr_putc 10
+osr_putkw 3
+for i ulong 32
+put osha_d i get ocl_bsha i
+end
+osr_putsha_d
+osr_putc 10
+osr_putkw 4
+osr_putu get ocl_st 2
+osr_putc 10
+osr_putkw 5
+osr_putx64 get ocl_st 11
+osr_putc 10
+osr_putkw 6
+osr_putu get ocl_st 0
+osr_putc 10
+osr_putkw 7
+osr_putu get ocl_cfg 0
+osr_putc 10
+osr_putkw 8
+osr_putu get ocl_st 1
+osr_putc 10
+ss = get ocl_st 1
+for s ulong ss
+osr_putkw 9
+osr_putu s
+osr_putc 32
+osr_putkw 10
+osr_putl get ocl_wm s
+osr_putc 32
+osr_putkw 11
+osr_putu get ocl_sp_s s
+osr_putc 58
+osr_putu get ocl_sp_e s
+osr_putc 58
+osr_putu get ocl_sp_g s
+osr_putc 32
+osr_putkw 12
+osr_putu get ocl_k s
+osr_putc 10
+for j ulong get ocl_k s
+idx = add mul s 8 j
+osr_putkw 13
+osr_putu s
+osr_putc 32
+osr_putu j
+osr_putc 32
+osr_putslot add 1 idx
+osr_putc 32
+bo = mul idx 32
+for b ulong 32
+put osha_d b get ocl_lsha add bo b
+end
+osr_putsha_d
+osr_putc 32
+osr_putx64 get ocl_lph idx
+osr_putc 10
+end
+end
+osha_buf_ocl get ocl_rlen 0
+osha_save_rsha
+osr_putkw 14
+osr_putsha_d
+osr_putc 10
+osr_flush_file dst_ai
+end
+
+fn osp_rec_rd_strand s ulong to void
+osr_eat_kw 9
+if ne osr_rd_u 32 s
+exit 60
+end
+osr_eat_kw 10
+put ocl_wm s osr_rd_l 32
+osr_eat_kw 11
+put ocl_sp_s s osr_rd_u 58
+put ocl_sp_e s osr_rd_u 58
+put ocl_sp_g s osr_rd_u 32
+osr_eat_kw 12
+ks = osr_rd_u 10
+if or eq ks 0 gt ks 8
+exit 60
+end
+put ocl_k s ks
+for j ulong ks
+osr_eat_kw 13
+if ne osr_rd_u 32 s
+exit 60
+end
+if ne osr_rd_u 32 j
+exit 60
+end
+idx = add mul s 8 j
+ai = osr_rd_path add 1 idx 32
+put ocl_link idx ai
+osr_rd_sha_d 32
+osha_save_lsha idx
+put ocl_lph idx osr_rd_x64 10
+end
+end
+
+note Load and strictly verify OLLMSPCLIP01 recipe from rec_ai (exits 60 malformed, 61 tampered hash, 2 bad knobs)
+fn osp_rec_load rec_ai ulong to void
+osp_clip_defaults
+osr_read_file rec_ai
+osr_eat_kw 0
+osr_eat_kw 2
+put ocl_cfg 1 osr_rd_path 0 10
+osr_eat_kw 3
+osr_rd_sha_d 10
+osha_save_bsha
+osr_eat_kw 4
+put ocl_exp 0 osr_rd_u 10
+osr_eat_kw 5
+put ocl_exp 1 osr_rd_x64 10
+osr_eat_kw 6
+put ocl_st 0 osr_rd_u 10
+osr_eat_kw 7
+put ocl_cfg 0 osr_rd_u 10
+osr_eat_kw 8
+ss = osr_rd_u 10
+if or lt ss 2 gt ss 4
+exit 60
+end
+put ocl_st 1 ss
+for s ulong ss
+osp_rec_rd_strand s
+end
+seal_end = get ocl_rcur 0
+osr_eat_kw 14
+osr_rd_sha_d 10
+osha_save_rsha
+if ne get ocl_rcur 0 get ocl_rlen 0
+exit 60
+end
+osha_buf_ocl seal_end
+if not osha_eq_rsha
+exit 61
+end
+put ocl_cfg 2 1
+put ocl_cfg 3 1
+osp_clip_validate_knobs
+end
+
+note ---- 12. CLI Subcommand & Dynamic Flag Parsing Helpers ----
+fn osp_arg_eq_sub ai ulong kind ulong to bool
+r = oargr ai
+if le r 0
+ret false
+end
+n = ulong r
+if eq kind 0
+if ne n len ot_sub_cr
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_sub_cr i
+ret false
+end
+end
+ret true
+end
+if eq kind 1
+if ne n len ot_sub_ed
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_sub_ed i
+ret false
+end
+end
+ret true
+end
+if eq kind 2
+if ne n len ot_sub_vr
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_sub_vr i
+ret false
+end
+end
+ret true
+end
+if eq kind 3
+if ne n len ot_sub_in
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_sub_in i
+ret false
+end
+end
+ret true
+end
+if eq kind 4
+if ne n len ot_sub_rn
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_sub_rn i
+ret false
+end
+end
+ret true
+end
+if eq kind 5
+if ne n len ot_sub_ev
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_sub_ev i
+ret false
+end
+end
+ret true
+end
+if eq kind 6
+if ne n len ot_sub_tn
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_sub_tn i
+ret false
+end
+end
+ret true
+end
+if eq kind 7
+if ne n len ot_sub_vl
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_sub_vl i
+ret false
+end
+end
+ret true
+end
+ret false
+end
+
+fn osp_arg_eq_fl ai ulong kind ulong to bool
+r = oargr ai
+if le r 0
+ret false
+end
+n = ulong r
+if eq kind 0
+if ne n len ot_fl_str
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_fl_str i
+ret false
+end
+end
+ret true
+end
+if eq kind 1
+if ne n len ot_fl_wts
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_fl_wts i
+ret false
+end
+end
+ret true
+end
+if eq kind 2
+if ne n len ot_fl_sw
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_fl_sw i
+ret false
+end
+end
+ret true
+end
+if eq kind 3
+if ne n len ot_fl_mod
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_fl_mod i
+ret false
+end
+end
+ret true
+end
+if eq kind 4
+if ne n len ot_fl_tau
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_fl_tau i
+ret false
+end
+end
+ret true
+end
+if eq kind 5
+if ne n len ot_fl_spl
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_fl_spl i
+ret false
+end
+end
+ret true
+end
+if eq kind 6
+if ne n len ot_fl_ss
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_fl_ss i
+ret false
+end
+end
+ret true
+end
+if eq kind 7
+if ne n len ot_fl_out
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_fl_out i
+ret false
+end
+end
+ret true
+end
+if eq kind 8
+if ne n len ot_fl_bat
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_fl_bat i
+ret false
+end
+end
+ret true
+end
+if eq kind 9
+if ne n len ot_fl_add
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_fl_add i
+ret false
+end
+end
+ret true
+end
+if eq kind 10
+if ne n len ot_fl_trl
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_fl_trl i
+ret false
+end
+end
+ret true
+end
+if eq kind 11
+if ne n len ot_fl_lin
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_fl_lin i
+ret false
+end
+end
+ret true
+end
+if eq kind 12
+if ne n len ot_fl_nln
+ret false
+end
+for i ulong n
+if ne get oarg i get ot_fl_nln i
+ret false
+end
+end
+ret true
+end
+ret false
+end
+
+note Parse comma-separated signed weights W1,W2[,W3[,W4]] into ocl_wm[0..S)
+fn osp_parse_weights ai ulong to void
+n = oargp ai
+ss = get ocl_st 1
+p = ulong 0
+cnt = ulong 0
+while lt p n bound 128
+if ge cnt ss
+exit 2
+end
+negf = ulong 0
+if eq ulong get oarg p 45
+negf = ulong 1
+p = add p 1
+end
+v = ulong 0
+d = ulong 0
+while lt p n bound 32
+c = ulong get oarg p
+if eq c 44
+break
+end
+if or lt c 48 gt c 57
+exit 2
+end
+if ge d 10
+exit 2
+end
+v = add mul v 10 sub c 48
+d = add d 1
+p = add p 1
+end
+if eq d 0
+exit 2
+end
+w = long v
+if eq negf 1
+w = neg long v
+end
+put ocl_wm cnt w
+cnt = add cnt 1
+if lt p n
+p = add p 1
+if eq p n
+exit 2
+end
+end
+end
+if ne cnt ss
+exit 2
+end
+end
+
+note Parse unsigned decimal from oarg[p..end) stopping at colon or end; returns new p via ocl_rcur[0]
+fn osp_oarg_u p ulong lim ulong to ulong
+v = ulong 0
+d = ulong 0
+while lt p lim bound 32
+c = ulong get oarg p
+if eq c 58
+break
+end
+if or lt c 48 gt c 57
+exit 2
+end
+if ge d 10
+exit 2
+end
+v = add mul v 10 sub c 48
+d = add d 1
+p = add p 1
+end
+if eq d 0
+exit 2
+end
+put ocl_rcur 0 p
+ret v
+end
+
+fn osp_is_kw_all lo ulong to bool
+if ne ulong get oarg lo 97
+ret false
+end
+if ne ulong get oarg add lo 1 108
+ret false
+end
+ret eq ulong get oarg add lo 2 108
+end
+
+note Parse one splice spec from oarg[lo..hi) into ocl_sp_s/e/g[s]: "all" | END | START:END | START:END:SCALE
+fn osp_parse_1splice lo ulong hi ulong s ulong to void
+ln = sub hi lo
+if eq ln 0
+exit 2
+end
+if eq ln 3
+if osp_is_kw_all lo
+put ocl_sp_s s 0
+put ocl_sp_e s 0
+put ocl_sp_g s 1000
+ret
+end
+end
+v1 = osp_oarg_u lo hi
+p = get ocl_rcur 0
+if eq p hi
+put ocl_sp_s s 0
+put ocl_sp_e s v1
+put ocl_sp_g s 1000
+ret
+end
+if ne ulong get oarg p 58
+exit 2
+end
+v2 = osp_oarg_u add p 1 hi
+p = get ocl_rcur 0
+if eq p hi
+put ocl_sp_s s v1
+put ocl_sp_e s v2
+put ocl_sp_g s 1000
+ret
+end
+if ne ulong get oarg p 58
+exit 2
+end
+v3 = osp_oarg_u add p 1 hi
+if ne get ocl_rcur 0 hi
+exit 2
+end
+put ocl_sp_s s v1
+put ocl_sp_e s v2
+put ocl_sp_g s v3
+end
+
+fn osp_parse_splice_list ai ulong to void
+n = oargp ai
+ss = get ocl_st 1
+p = ulong 0
+cnt = ulong 0
+while lt p n bound 128
+if ge cnt ss
+exit 2
+end
+lo = p
+while lt p n bound 128
+if eq ulong get oarg p 44
+break
+end
+p = add p 1
+end
+osp_parse_1splice lo p cnt
+cnt = add cnt 1
+if lt p n
+p = add p 1
+if eq p n
+exit 2
+end
+end
+end
+if ne cnt ss
+exit 2
+end
+end
+
+note Parse --strand P1.sp[,P2.sp,...] from argv[ai] into strand s links
+fn osp_parse_strand_arg ai ulong s ulong to void
+n = oargp ai
+p = ulong 0
+j = ulong 0
+while lt p n bound 16
+if ge j 8
+exit 2
+end
+sl = add 1 add mul s 8 j
+k = ulong 0
+while lt p n bound 1025
+c = ulong get oarg p
+if eq c 44
+break
+end
+if or lt c 33 gt c 126
+exit 2
+end
+if ge k OVARG_STR
+exit 2
+end
+ovp_putb sl k uchar c
+k = add k 1
+p = add p 1
+end
+if eq k 0
+exit 2
+end
+ovp_setlen sl k
+put ocl_link add mul s 8 j add OVARG_BASE sl
+j = add j 1
+if lt p n
+p = add p 1
+if eq p n
+exit 2
+end
+end
+end
+if eq j 0
+exit 2
+end
+put ocl_k s j
+end
+
+note Parse dynamic clip override flags starting at argv[a0] (allow_edit: 1=edit flags, 2=tune flags, 0=run/eval/create)
+fn osp_parse_dyn_flags a0 ulong allow ulong to void
+na = oargc
+i = a0
+while lt i na bound 64
+if osp_arg_eq_fl i 1
+if ge add i 1 na
+exit 2
+end
+osp_parse_weights add i 1
+i = add i 2
+continue
+end
+if osp_arg_eq_fl i 2
+if ge add i 2 na
+exit 2
+end
+si = oargu add i 1
+if ge si get ocl_st 1
+exit 2
+end
+put ocl_wm si oargs add i 2
+i = add i 3
+continue
+end
+if osp_arg_eq_fl i 3
+if ge add i 1 na
+exit 2
+end
+put ocl_st 0 oargu add i 1
+i = add i 2
+continue
+end
+if osp_arg_eq_fl i 4
+if ge add i 1 na
+exit 2
+end
+put ocl_cfg 0 oargu add i 1
+i = add i 2
+continue
+end
+if osp_arg_eq_fl i 5
+if ge add i 1 na
+exit 2
+end
+osp_parse_splice_list add i 1
+i = add i 2
+continue
+end
+if osp_arg_eq_fl i 6
+if ge add i 2 na
+exit 2
+end
+si2 = oargu add i 1
+if ge si2 get ocl_st 1
+exit 2
+end
+n2 = oargp add i 2
+osp_parse_1splice 0 n2 si2
+i = add i 3
+continue
+end
+if and eq allow 1 osp_arg_eq_fl i 7
+if ge add i 1 na
+exit 2
+end
+put ocl_cfg 8 ovp_from_arg 37 add i 1
+i = add i 2
+continue
+end
+if eq allow 2
+if osp_arg_eq_fl i 8
+if ge add i 1 na
+exit 2
+end
+nb = oargu add i 1
+if or eq nb 0 gt nb 64
+exit 2
+end
+put ocl_cfg 6 nb
+i = add i 2
+continue
+end
+if osp_arg_eq_fl i 9
+if ge add i 1 na
+exit 2
+end
+al = oargu add i 1
+if gt al 8
+exit 2
+end
+put ocl_cfg 5 al
+i = add i 2
+continue
+end
+if osp_arg_eq_fl i 10
+put ocl_cfg 4 1
+i = add i 1
+continue
+end
+if osp_arg_eq_fl i 11
+if ge add i 1 na
+exit 2
+end
+put ocl_cfg 7 ovp_from_arg 35 add i 1
+i = add i 2
+continue
+end
+if osp_arg_eq_fl i 12
+put ocl_cfg 7 999999
+i = add i 1
+continue
+end
+end
+exit 2
+end
+end
+
+note ---- 13. spclip create / edit / verify / inspect / run / eval ----
+
+note spclip create OUT.spclip BASE.ck (--strand ... | S W1 K1 ...) [--weights ...] [--mode M] [--tau T] [--splice ...]
+fn cmdspclip_create to void
+na = oargc
+if lt na 7
+exit 2
+end
+osp_clip_defaults
+out_ai = ovp_from_arg 37 3
+put ocl_cfg 1 ovp_from_arg 0 4
+put ocl_cfg 2 1
+put ocl_cfg 3 2
+put ocl_st 0 1
+if osp_arg_eq_fl 5 0
+ss = ulong 0
+i = ulong 5
+while lt i na bound 64
+if not osp_arg_eq_fl i 0
+break
+end
+if or ge add i 1 na ge ss 4
+exit 2
+end
+osp_parse_strand_arg add i 1 ss
+put ocl_wm ss 1000
+ss = add ss 1
+i = add i 2
+end
+if lt ss 2
+exit 2
+end
+put ocl_st 1 ss
+osp_parse_dyn_flags i 0
+else
+ss = oargu 5
+if or lt ss 2 gt ss 4
+exit 2
+end
+put ocl_st 1 ss
+idx = ulong 6
+for s ulong ss
+if gt add idx 2 na
+exit 2
+end
+put ocl_wm s oargs idx
+ks = oargu add idx 1
+if or eq ks 0 gt ks 8
+exit 2
+end
+if gt add add idx 2 ks na
+exit 2
+end
+put ocl_k s ks
+for j ulong ks
+sl = add 1 add mul s 8 j
+put ocl_link add mul s 8 j ovp_from_arg sl add add idx 2 j
+end
+idx = add add idx 2 ks
+end
+osp_parse_dyn_flags idx 0
+end
+osp_clip_validate_knobs
+osp_clip_init
+osp_rec_write out_ai
+oputc 83
+oputc 80
+oputc 67
+oputc 76
+oputc 73
+oputc 80
+oputc 95
+oputc 67
+oputc 82
+oputc 69
+oputc 65
+oputc 84
+oputc 69
+oputc 32
+oputu get ocl_st 1
+oputc 32
+oputu get ocl_st 0
+oputc 32
+oputu get ocl_cfg 0
+oputc 32
+oput_sha_rsha
+oputc 10
+oflush
+end
+
+note spclip edit RECIPE.spclip [--out OUT.spclip] [--weights ...] [--set-weight I W] [--mode M] [--tau T] [--splice ...] [--set-splice I S]
+fn cmdspclip_edit to void
+na = oargc
+if lt na 4
+exit 2
+end
+rec_ai = ovp_from_arg 36 3
+osp_rec_load rec_ai
+put ocl_cfg 8 rec_ai
+osp_parse_dyn_flags 4 1
+osp_clip_validate_knobs
+osp_clip_init
+osp_rec_write get ocl_cfg 8
+oputc 83
+oputc 80
+oputc 67
+oputc 76
+oputc 73
+oputc 80
+oputc 95
+oputc 69
+oputc 68
+oputc 73
+oputc 84
+oputc 32
+oputu get ocl_st 1
+oputc 32
+oputu get ocl_st 0
+oputc 32
+oputu get ocl_cfg 0
+oputc 32
+oput_sha_rsha
+oputc 10
+oflush
+end
+
+fn cmdspclip_verify to void
+if ne oargc 4
+exit 2
+end
+rec_ai = ovp_from_arg 36 3
+osp_rec_load rec_ai
+osp_clip_init
+oputc 83
+oputc 80
+oputc 67
+oputc 76
+oputc 73
+oputc 80
+oputc 95
+oputc 86
+oputc 69
+oputc 82
+oputc 73
+oputc 70
+oputc 89
+oputc 32
+oputc 79
+oputc 75
+oputc 32
+oputu get ocl_st 1
+oputc 32
+oputu get ocl_st 0
+oputc 32
+oputu get ocl_cfg 0
+oputc 32
+oputu get ocl_st 2
+oputc 32
+oputu get ocl_st 3
+oputc 32
+oputu get ocl_st 5
+oputc 32
+oput_sha_rsha
+oputc 10
+oflush
+end
+
+fn cmdspclip_inspect to void
+if ne oargc 4
+exit 2
+end
+rec_ai = ovp_from_arg 36 3
+osp_rec_load rec_ai
+osp_clip_init
+oputc 83
+oputc 80
+oputc 67
+oputc 76
+oputc 73
+oputc 80
+oputc 95
+oputc 73
+oputc 78
+oputc 83
+oputc 80
+oputc 69
+oputc 67
+oputc 84
+oputc 32
+oputu get ocl_st 1
+oputc 32
+oputu get ocl_st 0
+oputc 32
+oputu get ocl_cfg 0
+oputc 32
+oputu get ocl_st 2
+oputc 32
+oputu get ocl_st 3
+oputc 32
+oputu get ocl_st 5
+oputc 32
+oput_sha_rsha
+oputc 10
+for s ulong get ocl_st 1
+oputc 83
+oputc 84
+oputc 82
+oputc 65
+oputc 78
+oputc 68
+oputc 32
+oputu s
+oputc 32
+oputl get ocl_wm s
+oputc 32
+oputu get ocl_sp_s s
+oputc 58
+oputu get ocl_sp_e s
+oputc 58
+oputu get ocl_sp_g s
+oputc 32
+oputu get ocl_raw_sl s
+oputc 32
+oputu get ocl_sl s
+oputc 32
+oputu get ocl_k s
+oputc 10
+end
+oflush
+end
+
+note spclip run RECIPE.spclip PROMPT N TEMPMILLI SEED MERGES [--weights ...] [--mode M] [--tau T] [--splice ...]
+fn cmdspclip_run to void
+if lt oargc 9
+exit 2
+end
+rec_ai = ovp_from_arg 36 3
+osp_rec_load rec_ai
+nn = oargu 5
+if gt nn 999999
+exit 2
+end
+tm = oargu 6
+sd = oargu 7
+osp_parse_dyn_flags 9 0
+osp_clip_validate_knobs
+osp_clip_init
+v = get og 0
+if gt v 256
+obload 8 v
+end
+osp_prompt 4 v
+osp_clip_loop nn sd tm
+end
+
+note Evaluate one full window of T positions under clipped + spliced strands (exact per-row log-prob fusion)
+fn osp_clip_eval_br s ulong tt ulong hfin_off ulong to void
+tl = get ocl_st 3
+sl = get ocl_sl s
+wo = get ocl_wo s
+wn = get ocl_wn s
+if gt wn 0
+osp_c2wb get ocl_st 4 wo wn
+end
+osp_hrest osp_hout tl get ocl_st 7 mul tt get og 2
+put og 9 tt
+put okv 0 0
+put ogkm 1 0
+ta = osp_app tl
+for k ulong sub sl tl
+olayf add ta k
+end
+td = mul tt get og 2
+osp_hsnap add hfin_off mul s td osp_hout sl td
+end
+
+fn osp_clip_row_proj s ulong t ulong r ulong to void
+hf = add get og 15 r
+z = add get og 17 r
+s0 = add get og 16 t
+frms hf get og 33 z s0
+klogit z get og 27 get og 0 get og 2
+osp_clip_lsm s
+end
+
+fn osp_clip_eval_row_s s ulong t ulong tt ulong hfin_off ulong to void
+d = get og 2
+r = mul t d
+osp_c2wb get og 33 add get ocl_wo s get ocl_wn s d
+osp_hrest add get og 15 r add add hfin_off mul s mul tt d r d
+osp_clip_row_proj s t r
+end
+
+fn osp_clip_eval_row t ulong tt ulong hfin_off ulong to f64
+for s ulong get ocl_st 1
+osp_clip_eval_row_s s t tt hfin_off
+end
+osp_clip_fuse
+ret olossrow get og 27 get og 0 get oby t
+end
+
+fn osp_clip_eval_win w ulong hfin_off ulong to f64
+tt = get og 1
+tl = get ocl_st 3
+obrow 0 mul w tt
+put og 9 tt
+put okv 0 0
+put ogkm 1 0
+oemb 0
+ta = osp_app tl
+for l ulong ta
+olayf l
+end
+osp_hsnap get ocl_st 7 osp_hout tl mul tt get og 2
+for s ulong get ocl_st 1
+osp_clip_eval_br s tt hfin_off
+end
+ls = 0.0f64
+for t ulong tt
+ls = add ls osp_clip_eval_row t tt hfin_off
+end
+ret div ls f64 tt
+end
+
+note spclip eval RECIPE.spclip HELD W MERGES [--weights ...] [--mode M] [--tau T] [--splice ...]
+fn cmdspclip_eval to void
+if lt oargc 7
+exit 2
+end
+rec_ai = ovp_from_arg 36 3
+osp_rec_load rec_ai
+ww = oargu 5
+osp_parse_dyn_flags 7 0
+osp_clip_validate_knobs
+osp_clip_init
+v = get og 0
+if gt v 256
+obload 6 v
+end
+odopen 4
+tt = get og 1
+m = get odn 0
+if eq ww 0
+exit 23
+end
+if gt ww div sub m 1 tt
+exit 23
+end
+hfin_off = get ocl_st 8
+td = mul tt get og 2
+if gt add hfin_off mul get ocl_st 1 td ocsinit
+exit 12
+end
+ls = 0.0f64
+nb = ulong 0
+for w ulong ww
+ls = add ls osp_clip_eval_win w hfin_off
+if gt v 256
+nb = add nb oevnb tt
+end
+end
+lo = div ls f64 ww
+bp = div lo 0.6931471805599453
+if gt v 256
+bp = div mul bp f64 mul ww tt f64 nb
+end
+oputc 83
+oputc 80
+oputc 67
+oputc 76
+oputc 73
+oputc 80
+oputc 95
+oputc 69
+oputc 86
+oputc 65
+oputc 76
+oputc 32
+oputu ww
+oputc 32
+oputl rmic lo
+oputc 32
+oputl rmic bp
+oputc 32
+oputu get ocl_st 1
+oputc 32
+oputu get ocl_st 0
+oputc 32
+oputu get ocl_cfg 0
+oputc 10
+oflush
+end
+
+note ---- 14. spclip tune (Materialize + Frozen-Trunk Fine-Tune -> Verified OLLMSP01 + OLLMSPLIN01) ----
+
+fn osp_tune_cal_s s2 ulong hfin_off ulong to void
+tt = get og 1
+eh = 0.0f64
+for t ulong tt
+osp_clip_eval_row_s s2 t tt hfin_off
+eh = add eh get ocl_ent s2
+end
+put ocl_ent s2 div eh f64 tt
+end
+
+note Calibrate effective strand weights ocl_tun_al[0..S) (for MODE=1 measures mean entropy on window 0 of DATA)
+fn osp_tune_cal_al to void
+ss = get ocl_st 1
+if eq get ocl_st 0 0
+osp_clip_calc_al
+for s ulong ss
+put ocl_tun_al s get ocl_al s
+end
+ret
+end
+tt = get og 1
+tl = get ocl_st 3
+hfin_off = get ocl_st 8
+td = mul tt get og 2
+if gt add hfin_off mul ss td ocsinit
+exit 12
+end
+obrow 0 0
+put og 9 tt
+put okv 0 0
+put ogkm 1 0
+oemb 0
+for l ulong osp_app tl
+olayf l
+end
+osp_hsnap get ocl_st 7 osp_hout tl td
+for s ulong ss
+osp_clip_eval_br s tt hfin_off
+end
+for s2 ulong ss
+osp_tune_cal_s s2 hfin_off
+end
+osp_clip_calc_al
+for s3 ulong ss
+put ocl_tun_al s3 get ocl_al s3
+end
+end
+
+fn osp_is_res_off i ulong to bool
+d = get og 2
+wo_lo = add d mul 3 mul d d
+wo_hi = add wo_lo mul d d
+if and ge i wo_lo lt i wo_hi
+ret true
+end
+w2_lo = add add wo_hi d mul d get og 4
+ret ge i w2_lo
+end
+
+fn osp_tune_blend_1 k ulong i ulong psum f64 to f64
+ss = get ocl_st 1
+tl = get ocl_st 3
+koff = mul k get og 32
+is_res = osp_is_res_off i
+acc = 0.0f64
+for s ulong ss
+if gt sub get ocl_sl s tl k
+al = get ocl_tun_al s
+if or is_res gt al 0.0
+acc = add acc mul al ocsg add add get ocl_wo s koff i
+end
+end
+end
+ret div acc psum
+end
+
+note Blend one materialized branch layer k into ow[fzt + k*lstr ..) using ocl_tun_al[0..S)
+fn osp_tune_blend_lay k ulong to void
+ss = get ocl_st 1
+tl = get ocl_st 3
+psum = 0.0f64
+for s0 ulong ss
+if and gt get ocl_w s0 0.0 gt sub get ocl_sl s0 tl k
+psum = add psum get ocl_tun_al s0
+end
+end
+if le psum 0.0
+exit 2
+end
+lstr = get og 32
+dst = add get ocl_st 4 mul k lstr
+i = ulong 0
+while lt i lstr bound 9223372036854775807
+owp add dst i osp_tune_blend_1 k i psum
+i = add i 1
+end
+end
+
+fn osp_tune_blend_gf to void
+ss = get ocl_st 1
+d = get og 2
+psum_g = 0.0f64
+for s0 ulong ss
+if gt get ocl_w s0 0.0
+psum_g = add psum_g get ocl_tun_al s0
+end
+end
+for g ulong d
+acc = 0.0f64
+for s2 ulong ss
+if gt get ocl_w s2 0.0
+goff = add get ocl_wo s2 get ocl_wn s2
+acc = add acc mul get ocl_tun_al s2 ocsg add goff g
+end
+end
+put odl2 g div acc psum_g
+end
+end
+
+fn osp_tune_add_lays maxd ulong addl ulong to void
+tl = get ocl_st 3
+fzt = get ocl_st 4
+lstr = get og 32
+src_off = add get og 31 mul sub add tl maxd 1 lstr
+for a ulong addl
+dst_off = add fzt mul add maxd a lstr
+i = ulong 0
+while lt i lstr bound 9223372036854775807
+owp add dst_off i owg add src_off i
+i = add i 1
+end
+end
+ogrowsilent add tl maxd
+end
+
+fn osp_tune_finish_ow child_l ulong need_p ulong to void
+if ne child_l get og 5
+osp_w2c 0 0 need_p
+put og 5 child_l
+if not ogeom
+exit 12
+end
+osp_c2wb 0 0 need_p
+end
+for g2 ulong get og 2
+owp add get og 33 g2 get odl2 g2
+end
+end
+
+note Materialize clipped + spliced mix (+ optional add_layers) into ow with target depth child_L
+fn osp_tune_materialize to ulong
+ss = get ocl_st 1
+tl = get ocl_st 3
+maxd = ulong 0
+for s ulong ss
+if gt get ocl_w s 0.0
+ds = sub get ocl_sl s tl
+if gt ds maxd
+maxd = ds
+end
+end
+end
+addl = get ocl_cfg 5
+child_l = add add tl maxd addl
+if eq get ocl_cfg 4 0
+put ocl_exp 11 get ocl_st 2
+put ocl_exp 13 get ocl_st 11
+else
+put ocl_exp 11 tl
+put ocl_exp 12 get ocl_st 4
+put ocl_exp 13 get ocl_exp 14
+end
+if or le child_l get ocl_exp 11 gt child_l 24
+exit 2
+end
+for k ulong maxd
+osp_tune_blend_lay k
+end
+osp_tune_blend_gf
+if gt addl 0
+osp_tune_add_lays maxd addl
+end
+osp_tune_finish_ow child_l add get ocl_st 4 mul add maxd addl get og 32
+ret child_l
+end
+
+note Write canonical OLLMSPLIN01 Merkle lineage certificate to dst_ai; stores lineage_sha256 in ocl_tsha
+fn osp_lin_write dst_ai ulong steps ulong lrm ulong bat ulong child_l ulong nspec ulong to void
+osr_reset
+osr_putkw 1
+osr_putkw 16
+osr_putslot 33
+osr_putc 10
+osr_putkw 17
+for i ulong 32
+put osha_d i get ocl_csha i
+end
+osr_putsha_d
+osr_putc 10
+osr_putkw 18
+osr_putu get ocl_exp 11
+osr_putc 10
+osr_putkw 19
+osr_putu child_l
+osr_putc 10
+osr_putkw 20
+osr_putx64 get ocl_exp 13
+osr_putc 10
+osr_putkw 21
+osr_putx64 get ocl_exp 15
+osr_putc 10
+osr_putkw 22
+osr_putu nspec
+osr_putc 10
+osr_putkw 2
+osr_putslot 0
+osr_putc 10
+osr_putkw 3
+for i2 ulong 32
+put osha_d i2 get ocl_bsha i2
+end
+osr_putsha_d
+osr_putc 10
+osr_putkw 4
+osr_putu get ocl_st 2
+osr_putc 10
+osr_putkw 5
+osr_putx64 get ocl_st 11
+osr_putc 10
+osr_putkw 23
+osr_putu get ocl_st 3
+osr_putc 10
+osr_putkw 24
+for i3 ulong 32
+put osha_d i3 get ocl_rsha i3
+end
+osr_putsha_d
+osr_putc 10
+osr_putkw 6
+osr_putu get ocl_st 0
+osr_putc 10
+osr_putkw 7
+osr_putu get ocl_cfg 0
+osr_putc 10
+osr_putkw 25
+for i4 ulong 32
+put osha_d i4 get ocl_dsha i4
+end
+osr_putsha_d
+osr_putc 10
+osr_putkw 26
+osr_putu steps
+osr_putc 10
+osr_putkw 27
+osr_putu lrm
+osr_putc 10
+osr_putkw 28
+osr_putu bat
+osr_putc 10
+osr_putkw 29
+osr_putl rmic get ocl_tun_ls 0
+osr_putc 10
+osr_putkw 30
+osr_putl rmic get ocl_tun_ls 1
+osr_putc 10
+osr_putkw 8
+osr_putu get ocl_st 1
+osr_putc 10
+osp_lin_wr_strands
+osha_buf_ocl get ocl_rlen 0
+osha_save_tsha
+osr_putkw 31
+osr_putsha_d
+osr_putc 10
+osr_flush_file dst_ai
+end
+
+fn osp_lin_wr_strands to void
+ss = get ocl_st 1
+for s ulong ss
+osr_putkw 9
+osr_putu s
+osr_putc 32
+osr_putkw 10
+osr_putl get ocl_wm s
+osr_putc 32
+osr_putkw 15
+osr_putl rmic get ocl_tun_al s
+osr_putc 32
+osr_putkw 11
+osr_putu get ocl_sp_s s
+osr_putc 58
+osr_putu get ocl_sp_e s
+osr_putc 58
+osr_putu get ocl_sp_g s
+osr_putc 32
+osr_putkw 12
+osr_putu get ocl_k s
+osr_putc 10
+for j ulong get ocl_k s
+idx = add mul s 8 j
+osr_putkw 13
+osr_putu s
+osr_putc 32
+osr_putu j
+osr_putc 32
+osr_putslot add 1 idx
+osr_putc 32
+bo = mul idx 32
+for b ulong 32
+put osha_d b get ocl_lsha add bo b
+end
+osr_putsha_d
+osr_putc 32
+osr_putx64 get ocl_lph idx
+osr_putc 10
+end
+end
+end
+
+fn osp_tune_run_opt steps ulong lrm ulong to void
+tl = get ocl_st 3
+fzt = get ocl_st 4
+ozerom mul 2 get og 8
+put ofreeze 0 fzt
+put ofzlay 0 osp_app tl
+put og 41 0
+tot = steps
+if eq tot 0
+tot = ulong 1
+end
+put og 42 tot
+put og 43 bitcast ulong div f64 lrm 1000000.0
+put og 44 1
+put og 45 1
+if ne get ocl_cfg 6 0
+put og 6 get ocl_cfg 6
+end
+obrow 0 0
+put og 9 get og 1
+put ocl_tun_ls 0 ofwd 0
+s = ulong 0
+while lt s steps bound 999999
+ls = ostep
+s = add s 1
+end
+obrow 0 0
+put og 9 get og 1
+put ocl_tun_ls 1 ofwd 0
+put ofreeze 0 0
+put ofzlay 0 0
+end
+
+note spclip tune RECIPE.spclip DATA OUT.sp STEPS LRMICRO [--batch B] [--weights ...] [--mode M] [--tau T] [--splice ...] [--add-layers K] [--trunk-link] [--lineage PATH | --no-lineage]
+fn cmdspclip_tune to void
+if lt oargc 8
+exit 2
+end
+rec_ai = ovp_from_arg 36 3
+osp_rec_load rec_ai
+data_ai = ovp_from_arg 34 4
+out_ai = ovp_from_arg 33 5
+steps = oargu 6
+if gt steps 999999
+exit 2
+end
+lrm = oargu 7
+if and gt steps 0 eq lrm 0
+exit 2
+end
+osp_parse_dyn_flags 8 2
+osp_clip_validate_knobs
+osha_file data_ai
+osha_save_dsha
+osp_clip_init
+odopen data_ai
+osp_tune_cal_al
+child_l = osp_tune_materialize
+osp_tune_run_opt steps lrm
+ex_bl = get ocl_exp 11
+ex_fz = get ocl_exp 12
+ex_bh = get ocl_exp 13
+if ne osp_basehash ex_bl ex_fz ex_bh
+exit 62
+end
+if ne osp_basehash get ocl_st 3 get ocl_st 4 get ocl_exp 14
+exit 62
+end
+nspec = sub get og 8 ex_fz
+osp_wrpack out_ai ex_bl child_l ex_bh ex_fz nspec
+if ne oprd out_ai 0 0 48 48
+exit 60
+end
+put ocl_exp 15 opw8 40
+osha_file out_ai
+osha_save_csha
+lin_ai = get ocl_cfg 7
+if eq lin_ai 0
+lin_ai = ovp_set_lin 35 5
+end
+if ne lin_ai 999999
+osp_lin_write lin_ai steps lrm get og 6 child_l nspec
+else
+for z ulong 32
+put ocl_tsha z 0
+end
+end
+oputc 83
+oputc 80
+oputc 67
+oputc 76
+oputc 73
+oputc 80
+oputc 95
+oputc 84
+oputc 85
+oputc 78
+oputc 69
+oputc 32
+oputu ex_bl
+oputc 32
+oputu child_l
+oputc 32
+oputu nspec
+oputc 32
+oputu steps
+oputc 32
+oputl rmic get ocl_tun_ls 0
+oputc 32
+oputl rmic get ocl_tun_ls 1
+oputc 32
+oput_sha_csha
+oputc 32
+oput_sha_tsha
+oputc 10
+oflush
+end
+
+fn osp_lin_rd_strand s ulong to void
+osr_eat_kw 9
+if ne osr_rd_u 32 s
+exit 60
+end
+osr_eat_kw 10
+put ocl_wm s osr_rd_l 32
+osr_eat_kw 15
+am = osr_rd_l 32
+osr_eat_kw 11
+put ocl_sp_s s osr_rd_u 58
+put ocl_sp_e s osr_rd_u 58
+put ocl_sp_g s osr_rd_u 32
+osr_eat_kw 12
+ks = osr_rd_u 10
+if or eq ks 0 gt ks 8
+exit 60
+end
+put ocl_k s ks
+for j ulong ks
+osr_eat_kw 13
+if ne osr_rd_u 32 s
+exit 60
+end
+if ne osr_rd_u 32 j
+exit 60
+end
+idx = add mul s 8 j
+ai = osr_rd_path add 1 idx 32
+put ocl_link idx ai
+osr_rd_sha_d 32
+osha_save_lsha idx
+put ocl_lph idx osr_rd_x64 10
+end
+end
+
+fn osp_lin_parse_hdr to ulong
+osr_eat_kw 1
+osr_eat_kw 16
+child_ai = osr_rd_path 33 10
+osr_eat_kw 17
+osr_rd_sha_d 10
+osha_save_csha
+osr_eat_kw 18
+put ocl_exp 2 osr_rd_u 10
+osr_eat_kw 19
+put ocl_exp 3 osr_rd_u 10
+osr_eat_kw 20
+put ocl_exp 4 osr_rd_x64 10
+osr_eat_kw 21
+put ocl_exp 5 osr_rd_x64 10
+osr_eat_kw 22
+put ocl_exp 6 osr_rd_u 10
+osr_eat_kw 2
+put ocl_cfg 1 osr_rd_path 0 10
+osr_eat_kw 3
+osr_rd_sha_d 10
+osha_save_bsha
+osr_eat_kw 4
+put ocl_exp 0 osr_rd_u 10
+osr_eat_kw 5
+put ocl_exp 1 osr_rd_x64 10
+osr_eat_kw 23
+put ocl_exp 7 osr_rd_u 10
+osr_eat_kw 24
+osr_rd_sha_d 10
+osha_save_rsha
+osr_eat_kw 6
+put ocl_st 0 osr_rd_u 10
+osr_eat_kw 7
+put ocl_cfg 0 osr_rd_u 10
+osr_eat_kw 25
+osr_rd_sha_d 10
+osha_save_dsha
+osr_eat_kw 26
+put ocl_exp 8 osr_rd_u 10
+osr_eat_kw 27
+put ocl_exp 9 osr_rd_u 10
+osr_eat_kw 28
+put ocl_exp 10 osr_rd_u 10
+osr_eat_kw 29
+z0 = osr_rd_l 10
+osr_eat_kw 30
+z1 = osr_rd_l 10
+ret child_ai
+end
+
+note spclip verify-lineage FILE.lineage: fail-closed Merkle verification of lineage seal + child + base + all parents
+fn cmdspclip_vlin to void
+if ne oargc 4
+exit 2
+end
+osp_clip_defaults
+lin_ai = ovp_from_arg 35 3
+osr_read_file lin_ai
+child_ai = osp_lin_parse_hdr
+osr_eat_kw 8
+ss = osr_rd_u 10
+if or lt ss 2 gt ss 4
+exit 60
+end
+put ocl_st 1 ss
+for s ulong ss
+osp_lin_rd_strand s
+end
+seal_end = get ocl_rcur 0
+osr_eat_kw 31
+osr_rd_sha_d 10
+osha_save_tsha
+if ne get ocl_rcur 0 get ocl_rlen 0
+exit 60
+end
+osha_buf_ocl seal_end
+if not osha_eq_tsha
+exit 61
+end
+put ocl_cfg 2 1
+put ocl_cfg 3 1
+osp_clip_validate_knobs
+osp_clip_init
+if ne get ocl_st 3 get ocl_exp 7
+exit 62
+end
+osha_file child_ai
+if not osha_eq_csha
+exit 61
+end
+c_bl = get ocl_exp 2
+c_bh = get ocl_exp 4
+if eq c_bl get ocl_st 2
+if ne c_bh get ocl_st 11
+exit 62
+end
+else
+if or ne c_bl get ocl_st 3 ne c_bh get ocl_exp 14
+exit 62
+end
+end
+osp_rdhdr child_ai c_bl c_bh
+if ne get ottt_st 1 get ocl_exp 3
+exit 61
+end
+if ne get ottt_st 3 get ocl_exp 6
+exit 61
+end
+if ne get ottt_st 4 get ocl_exp 5
+exit 61
+end
+osp_chkpay child_ai get ottt_st 3 get ottt_st 4
+oputc 83
+oputc 80
+oputc 67
+oputc 76
+oputc 73
+oputc 80
+oputc 95
+oputc 76
+oputc 73
+oputc 78
+oputc 69
+oputc 65
+oputc 71
+oputc 69
+oputc 95
+oputc 86
+oputc 69
+oputc 82
+oputc 73
+oputc 70
+oputc 89
+oputc 32
+oputc 79
+oputc 75
+oputc 32
+oput_sha_csha
+oputc 32
+oputu get ocl_st 1
+oputc 32
+oputu get ocl_exp 3
+oputc 32
+oput_sha_tsha
+oputc 10
+oflush
+end
+
+fn cmdspclip_legacy to void
+osp_clip_defaults
 osp_clip_parse
 nn = oargu 5
 if gt nn 999999
@@ -2395,4 +5649,43 @@ obload 8 v
 end
 osp_prompt 4 v
 osp_clip_loop nn st tm
+end
+
+fn cmdspclip to void
+if lt oargc 3
+exit 2
+end
+if osp_arg_eq_sub 2 0
+cmdspclip_create
+ret
+end
+if osp_arg_eq_sub 2 1
+cmdspclip_edit
+ret
+end
+if osp_arg_eq_sub 2 2
+cmdspclip_verify
+ret
+end
+if osp_arg_eq_sub 2 3
+cmdspclip_inspect
+ret
+end
+if osp_arg_eq_sub 2 4
+cmdspclip_run
+ret
+end
+if osp_arg_eq_sub 2 5
+cmdspclip_eval
+ret
+end
+if osp_arg_eq_sub 2 6
+cmdspclip_tune
+ret
+end
+if osp_arg_eq_sub 2 7
+cmdspclip_vlin
+ret
+end
+cmdspclip_legacy
 end

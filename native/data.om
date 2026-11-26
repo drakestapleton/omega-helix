@@ -22,17 +22,111 @@ note v1 (CONTRACT-V1 section 3): the window that the platform's positioned read 
 note the bpe commands and the windowed data reads all use it.
 const OPWCAP ulong 2097152
 global opw uchar 2097152
+note Virtual path slots (ai >= OVARG_BASE) so recipe-loaded paths work identically across lio/mio/eio/metal_io.
+const OVARG_BASE ulong 65536
+const OVARG_MAX ulong 48
+const OVARG_STR ulong 1024
+global ovpth uchar 49152
+global ovpln ulong 48
 
 note exit codes of this unit: 2 usage, 20 data file empty or too short for T, 21 data file over
 note 2^25 bytes, 70 I/O.
 
 note argument i into oarg; returns its length (1 .. 4096) or exits 2.
 fn oargp i ulong to ulong
+if ge i OVARG_BASE
+sl = sub i OVARG_BASE
+if ge sl OVARG_MAX
+exit 2
+end
+n = get ovpln sl
+if or eq n 0 gt n OVARG_STR
+exit 2
+end
+bo = mul sl OVARG_STR
+for k ulong n
+put oarg k get ovpth add bo k
+end
+ret n
+end
 r = oargr i
 if or le r 0 gt r 4096
 exit 2
 end
 ret ulong r
+end
+
+fn ovp_chk_oarg n ulong to bool
+if or eq n 0 gt n OVARG_STR
+ret false
+end
+for k ulong n
+c = ulong get oarg k
+if or lt c 33 gt c 126
+ret false
+end
+end
+ret true
+end
+
+fn ovp_set sl ulong n ulong to void
+if ge sl OVARG_MAX
+exit 2
+end
+if not ovp_chk_oarg n
+exit 2
+end
+bo = mul sl OVARG_STR
+for k ulong n
+put ovpth add bo k get oarg k
+end
+put ovpln sl n
+end
+
+fn ovp_from_arg sl ulong ai ulong to ulong
+n = oargp ai
+ovp_set sl n
+ret add OVARG_BASE sl
+end
+
+fn ovp_putb sl ulong pos ulong b uchar to void
+put ovpth add mul sl OVARG_STR pos b
+end
+
+fn ovp_getb sl ulong pos ulong to uchar
+ret get ovpth add mul sl OVARG_STR pos
+end
+
+fn ovp_len sl ulong to ulong
+ret get ovpln sl
+end
+
+fn ovp_setlen sl ulong n ulong to void
+put ovpln sl n
+end
+
+fn ovp_set_lin sl ulong src_ai ulong to ulong
+n = oargp src_ai
+if gt add n 8 OVARG_STR
+exit 2
+end
+if not ovp_chk_oarg n
+exit 2
+end
+bo = mul sl OVARG_STR
+for k ulong n
+put ovpth add bo k get oarg k
+end
+put ovpth add bo n 46
+put ovpth add bo add n 1 108
+put ovpth add bo add n 2 105
+put ovpth add bo add n 3 110
+put ovpth add bo add n 4 101
+put ovpth add bo add n 5 97
+put ovpth add bo add n 6 103
+put ovpth add bo add n 7 101
+put ovpln sl add n 8
+ret add OVARG_BASE sl
 end
 
 note argv[i] as an unsigned decimal of 1 .. 19 digits.

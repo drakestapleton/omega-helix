@@ -295,6 +295,36 @@ else
 fi
 echo "SERVE_SCALING_OM_PASS"
 
+echo "=== 13b. Pure-Omega Dynamic Editable spclip (.spclip create/edit/verify/eval/run/tune/verify-lineage + rc=60/61/62/2) ==="
+"$BIN" growpro "$work/base.ck" "$work/sc_a.ck" 3 8 60000
+"$BIN" trainf "$work/sc_a.ck" "$here/README.md" 6 6 2
+"$BIN" spext "$work/base.ck" "$work/sc_a.ck" "$work/sc_a.sp"
+"$BIN" growpro "$work/base.ck" "$work/sc_b.ck" 3 8 60000
+"$BIN" trainf "$work/sc_b.ck" "$here/docs/LOOP.md" 6 6 2
+"$BIN" spext "$work/base.ck" "$work/sc_b.ck" "$work/sc_b.sp"
+"$BIN" spclip create "$work/mix.spclip" "$work/base.ck" \
+  --strand "$work/sc_a.sp" --strand "$work/sc_b.sp" --weights 70,30 --mode 1 --tau 1000 --splice all,all
+"$BIN" spclip verify "$work/mix.spclip"
+"$BIN" spclip edit "$work/mix.spclip" --weights 60,40 --tau 500 --splice 2:3:1000,2:3:500
+"$BIN" spclip verify "$work/mix.spclip"
+"$BIN" spclip eval "$work/mix.spclip" "$work/corpus.txt" 4 - > "$work/spclip_eval.out"
+cat "$work/spclip_eval.out"
+awk 'NR==1 && $1=="SPCLIP_EVAL" && $2==4 && $5==2 && $6==1 && $7==500 { ok=1 } END { exit ok ? 0 : 1 }' "$work/spclip_eval.out"
+"$BIN" spclip run "$work/mix.spclip" "Omega " 12 0 42 - > /dev/null
+"$BIN" spclip tune "$work/mix.spclip" "$work/corpus.txt" "$work/tuned_child.sp" 8 40000 --batch 4 > "$work/spclip_tune.out"
+cat "$work/spclip_tune.out"
+awk 'NR==1 && $1=="SPCLIP_TUNE" && $2==2 && $3==3 && $7 < $6 { ok=1 } END { exit ok ? 0 : 1 }' "$work/spclip_tune.out"
+"$BIN" spclip verify-lineage "$work/tuned_child.sp.lineage"
+"$BIN" spapp "$work/base.ck" "$work/tuned_child.sp" "$work/tuned_child.ck"
+sed 's/weight 60/weight 61/' "$work/mix.spclip" > "$work/mix_tamper.spclip"
+sc_rc=0
+"$BIN" spclip verify "$work/mix_tamper.spclip" >/dev/null 2>&1 || sc_rc=$?
+[ "$sc_rc" -eq 61 ] || { echo "FAIL: expected rc=61 on tampered .spclip, got $sc_rc" >&2; exit 1; }
+sc_rc=0
+"$BIN" spclip edit "$work/mix.spclip" --out "$work/mix_zero.spclip" --weights 0,0 >/dev/null 2>&1 || sc_rc=$?
+[ "$sc_rc" -eq 2 ] || { echo "FAIL: expected rc=2 on zero weights, got $sc_rc" >&2; exit 1; }
+echo "SPCLIP_EDITABLE_OM_PASS"
+
 if [ -n "${METAL_BIN:-}" ] && [ -x "${METAL_BIN:-}" ]; then
   echo "=== 14. Apple Silicon Metal GPU Pure-Omega Gate (mdev -> mops -> gcmp) ==="
   mdev_rc=0

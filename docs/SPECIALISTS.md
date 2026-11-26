@@ -78,6 +78,25 @@ ollm spclip BASE.ck MODE PROMPT N TEMPMILLI SEED MERGES S W1 K1 A1..AK1 W2 K2 B1
     - `MODE=1`: Entropy-gated multi-helix (`u_s = w_s / (H_s + 0.001)`, `alpha_s = u_s / sum(u)`, fused `sum_s alpha_s * log P_s`) so whichever specialized strand is more confident on the current token dominates.
   - **`ollm spguard BASE.ck DISAGREE_MILLI MAX_EXTRA PROMPT N TEMPMILLI SEED MERGES S W1 K1 A1..AK1 ...`** (`28273260578173043`, [`docs/SOVEREIGN-RUNTIME.md`](SOVEREIGN-RUNTIME.md)): extends `spclip` (`MODE=0` signed Anti-DNA weights) with exact per-token Jensen-Shannon Disagreement (`JSD = H(p_bar) - mean H(p_s)`) across positive strands, triggering up to `MAX_EXTRA` (`0..4`) extra `LTP0` latent refinement passes when `JSD >= DISAGREE_MILLI / 1000`, and streaming an FNV-1a-64 per-token receipt chain (`G <step> <tok> <jsd_milli> <extra_passes> <contested> <anti_active> <receipt_hex>`) ending in `GR <drawn> <contested_tot> <extra_tot> <anti_active> <base_hash_hex> <final_receipt_hex>`.
 
+### 4b. Dynamic User-Editable `spclip` Recipes (`.spclip`) & User Fine-Tuning (`OLLMSPLIN01`)
+```sh
+ollm spclip create OUT.spclip BASE.ck --strand A.sp [--strand P1.sp,P2.sp ...] [--weights 70,25,5] [--mode 0|1] [--tau 1000] [--splice all,2:3:500]
+ollm spclip edit RECIPE.spclip [--out NEW.spclip] [--weights W1,W2,...] [--set-weight IDX W] [--mode 0|1] [--tau TAU_MILLI] [--splice S1,S2,...] [--set-splice IDX SPEC]
+ollm spclip verify RECIPE.spclip
+ollm spclip inspect RECIPE.spclip
+ollm spclip run RECIPE.spclip PROMPT N TEMPMILLI SEED MERGES [--weights ...] [--mode 0|1] [--tau ...] [--splice ...]
+ollm spclip eval RECIPE.spclip HELD W MERGES [--weights ...] [--mode 0|1] [--tau ...] [--splice ...]
+ollm spclip tune RECIPE.spclip DATA OUT.sp STEPS LRMICRO [--batch B] [--weights ...] [--mode 0|1] [--tau ...] [--splice ...] [--add-layers K] [--trunk-link] [--lineage PATH | --no-lineage]
+ollm spclip verify-lineage OUT.sp.lineage
+```
+- **Editable clip controls (persisted in `.spclip` or overridden live on `run`/`eval`/`tune`):**
+  - `--weights W1,W2[,W3[,W4]]` (or `--set-weight IDX W`): signed milli-weights in `-5000..5000` (`MODE=0`, positive sum `> 0`) or non-negative `0..5000` (`MODE=1`, positive sum `> 0`).
+  - `--mode 0|1`: `0` = signed normalized Product-of-Experts, `1` = entropy-gated multi-helix.
+  - `--tau TAU_MILLI` (`1..100000`, default `1000` = `1.000`): entropy sharpness / temperature — in `MODE=1`, log-domain stabilized `u_s = w_s * exp((l_min - log(H_s + 0.001)) / tau)` (smaller `tau` sharpens toward lowest-entropy strand, larger `tau` softens toward prior PoE, `tau=1000` bit-identical to legacy `w_s / (H_s + 0.001)`); in `MODE=0`, temperature scaling `acc / tau` on fused log-probs (`tau=1000` bit-identical).
+  - `--splice SPEC1,SPEC2,...` (or `--set-splice IDX SPEC`): per-strand layer/branch splice (`all`, `END`, `START:END`, or `START:END:SCALE` with `START`/`END` within `[trunk_L .. L_s]` and residual `(Wo, W2)` gain `SCALE` in `0..2000` milli-units, default `1000`).
+- **Deterministic `.spclip` (`OLLMSPCLIP01`) recipe format:** ASCII canonical LF-delimited file binding `base` + FIPS 180-4 `base_sha256` + `base_L` + `base_hash`, `mode`, `tau`, `strands` (`2..4`), every parent `OLLMSP01` link's exact FIPS 180-4 SHA-256 and FNV-1a-64 `pack_hash`, and self-sealing `recipe_sha256`. Fails closed: `rc=60` (malformed/truncated), `rc=61` (tampered `.spclip` or parent `.sp` SHA-256/FNV-1a mismatch), `rc=62` (base/trunk mismatch), `rc=2` (zero/invalid weights, bad `tau`, out-of-range splice).
+- **User fine-tuning & Merkle lineage (`spclip tune` + `verify-lineage`, `OLLMSPLIN01`):** materializes the clipped + spliced mix (with data-calibrated entropy weights in `MODE=1`), freezes the shared trunk bit-identically (`ofreeze` + `ofzlay`), runs `STEPS` of pure-Omega Adam fine-tuning on user `DATA`, verifies frozen base integrity, and exports a standard `OLLMSP01` child strand (`OUT.sp`, directly usable by `spapp`/`speval`/`spsamp`/`spclip`) plus a self-sealing `OLLMSPLIN01` Merkle lineage certificate (`<OUT.sp>.lineage` or `--lineage PATH`) binding `child_sha256`, `base_sha256`, `parent_recipe_sha256`, all parent `OLLMSP01` SHA-256s, and `data_sha256`. Use `--trunk-link` to export an incremental Merkle link atop shared `common_links` when present.
+
 ### 5. Bank-B KV Cache (`okvkv` in `model.om`) & Inference-Time Experiments (`ttteval`, `tttsamp`, `dolaeval`)
 - **`okvkv` (`model.om`)** restores/saves only the `oak`/`oau` K/V slices in `oab` for bank-B layers (`l >= LAA`) without clobbering `oahin`, enabling exact KV-cached decode for `L = 8..16` (verified 0 mismatched logits via `ollm kvcmp` on `L=8` and `L=10`).
 - `ollm ttteval CK HELD W PREFIX STEPS LRMICRO LAYER_FROM` — strictly-causal test-time fast-weight adaptation on `[0..PREFIX)`, scored on `[PREFIX..T)`, restoring base weights after every window.

@@ -25,6 +25,7 @@ import catalog as studio_catalog  # noqa: E402
 import chain_runner as runner  # noqa: E402
 import server as studio_server  # noqa: E402
 import ssh_remote  # noqa: E402
+import topology as studio_topology  # noqa: E402
 
 
 # --------------------------------------------------------------------------- ANSI styling
@@ -70,9 +71,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         return 0
 
     print_banner("System Diagnostics & Pure-Omega Toolchain Check")
-    print(f"  {cyan('Platform')}   : {info['os']} {info['arch']} · Python {info['python']}")
+    topo = info.get("topology") or studio_topology.detect_topology()
+    print(f"  {cyan('Platform')}   : {topo.get('platform_label', info['os'] + ' ' + info['arch'])} · Python {info['python']}")
+    print(f"  {cyan('Topology')}   : {topo.get('topology')} · mode={topo.get('mode')} · browser={topo.get('browser_kind')} · ssh_tunnel={'skip' if topo.get('should_skip_ssh_tunnel') else 'active'}")
     print(f"  {violet('Compiler')}   : {emerald(info['omc']) if info['omc'] else amber('omc not found (install via brew or interplane.io/omega)')}")
-    print(f"  {emerald('GB10 GPU')}   : {emerald('detected (/dev/nvidiactl)') if info['has_gb10'] else dim('not detected (CPU mode ready)')}")
+    gpu_str = emerald('detected (/dev/nvidiactl or /dev/aien-gpu)') if info['has_gb10'] else dim('not detected (CPU mode ready)')
+    print(f"  {emerald('GB10 GPU')}   : {gpu_str}")
     print(f"  {amber('OpenWALDO')}  : {cat['count']} indexed corpora · waldo CLI: {'installed' if info['has_waldo_cli'] else 'not installed (local/preset mode ready)'}")
     print(f"  {dim('Runs Dir')}   : {info['runs_dir']}")
     print(f"  {dim('Bin Dir')}    : {info['bin_dir']}")
@@ -127,6 +131,66 @@ def cmd_catalog(args: argparse.Namespace) -> int:
 def _run_studio_once(args: argparse.Namespace) -> int:
     bind_host = getattr(args, "bind", None) or args.host
     port = int(args.port)
+    headless = bool(getattr(args, "headless", False))
+    no_open = bool(getattr(args, "no_open", False))
+    remote_target = (getattr(args, "remote", None) or "").strip()
+    topo = studio_topology.detect_topology(
+        remote_target=remote_target or None,
+        headless_flag=headless,
+        no_open_flag=no_open,
+        bind_host=bind_host,
+        port=port,
+    )
+
+    if getattr(args, "dry_run", False):
+        plan = {
+            "ok": True,
+            "dry_run": True,
+            "topology": topo,
+            "bind": f"{bind_host}:{port}",
+            "url": topo["url"],
+            "mode": topo["mode"],
+            "should_skip_ssh_tunnel": topo["should_skip_ssh_tunnel"],
+            "browser_action": studio_topology.open_studio_browser(topo["url"], topo, dry_run=True),
+        }
+        if getattr(args, "json", False):
+            print(json.dumps(plan, indent=2))
+        else:
+            print_banner("Studio Topology Dry-Run Plan")
+            print(f"  {cyan('Topology')}    : {topo['topology']} ({topo['platform_label']})")
+            print(f"  {emerald('Mode')}        : {topo['mode']} (skip_ssh_tunnel={topo['should_skip_ssh_tunnel']})")
+            print(f"  {violet('Target')}      : {topo['binary_target']} · signing={topo['signing_mode']}")
+            print(f"  {cyan('Studio URL')}  : {topo['url']}")
+            print(f"  {amber('Browser')}     : {topo['open_action']} ({topo['browser_cmd'] or 'print clickable URL'})")
+            print(f"  {dim('Guidance')}    : {topo['guidance']}")
+        return 0
+
+    if remote_target:
+        mgr = ssh_remote.TunnelManager()
+        tun = mgr.connect(
+            remote_target,
+            remote_port=int(getattr(args, "remote_port", 18420)),
+            local_port=int(getattr(args, "local_port", 0)),
+            ssh_port=int(getattr(args, "ssh_port", 22)),
+            bootstrap=not bool(getattr(args, "no_bootstrap", False)),
+        )
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": True, "topology": topo, "tunnel": tun}, indent=2), flush=True)
+        else:
+            print_banner(f"SSH Tunnel Active -> {tun['host']} ({topo['topology']})")
+            print(f"  {emerald('●')} Local URL  : {cyan(tun['open_url'])}")
+            print(f"  {violet('●')} Remote     : {tun['host']}:{tun['remote_port']}")
+            print(f"  {amber('●')} Stop       : {dim('Ctrl-C')}")
+            print()
+        if topo["open_action"] == "browser" and sys.stdout.isatty():
+            threading.Timer(0.3, lambda: studio_topology.open_studio_browser(tun["open_url"], topo)).start()
+        try:
+            while True:
+                time.sleep(0.5)
+        except KeyboardInterrupt:
+            mgr.close_all()
+        return 0
+
     if getattr(args, "reclaim_stale_lock", False):
         rec = ssh_remote.reclaim_stale_lock(port, yes=bool(getattr(args, "yes", False)))
         if getattr(args, "json", False):
@@ -174,7 +238,12 @@ def _run_studio_once(args: argparse.Namespace) -> int:
     tok = pol.pairing_code
     url = f"http://{host}:{bound_port}/"
     pair_url = f"http://{adv}/?pair={tok}" if tok else f"http://{adv}/"
-    headless = bool(getattr(args, "headless", False))
+    topo = studio_topology.detect_topology(
+        headless_flag=headless,
+        no_open_flag=no_open,
+        bind_host=host,
+        port=bound_port,
+    )
 
     if getattr(args, "json", False):
         print(json.dumps({
@@ -185,20 +254,23 @@ def _run_studio_once(args: argparse.Namespace) -> int:
             "pairing_code": tok,
             "url": url,
             "pairing_url": pair_url,
+            "topology": topo,
             "ssh_forward_cmd": f"ssh -N -L 18421:127.0.0.1:{bound_port} {os.environ.get('USER', 'user')}@{os.uname().nodename}",
         }), flush=True)
     else:
         print_banner("Sovereign Studio Server — Zero Telemetry, 100% Pure-Omega")
+        print(f"  {cyan('●')} Topology    : {topo['topology']} ({topo['platform_label']})")
         print(f"  {emerald('●')} Studio UI   : {cyan(url)}")
         if adv != f"{host}:{bound_port}" or tok:
             print(f"  {cyan('●')} Pairing URL : {cyan(pair_url)}")
         print(f"  {violet('●')} Runs Dir    : {dim(str(srv.manager.runs_dir))}")
-        print(f"  {amber('●')} SSH Forward : {dim(f'ssh -N -L 18421:127.0.0.1:{bound_port} <host>')}")
+        if topo["open_action"] == "print_url" and topo["os"] == "Linux" and not topo["is_wsl"]:
+            print(f"  {amber('●')} SSH Forward : {dim(f'ssh -N -L 18421:127.0.0.1:{bound_port} <host>')}")
         print(f"  {amber('●')} Stop Server : {dim('Ctrl-C')}")
         print()
 
-    if not headless and not args.no_open and sys.stdout.isatty():
-        threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+    if topo["open_action"] == "browser" and sys.stdout.isatty():
+        threading.Timer(0.4, lambda: studio_topology.open_studio_browser(url, topo)).start()
 
     try:
         srv.serve_forever(poll_interval=0.25)
@@ -331,8 +403,9 @@ def cmd_remote(args: argparse.Namespace) -> int:
             print(f"  {violet('●')} Remote     : {tun['host']}:{tun['remote_port']}")
             print(f"  {amber('●')} Stop       : {dim('Ctrl-C')}")
             print()
-        if not args.no_open and sys.stdout.isatty():
-            threading.Timer(0.3, lambda: webbrowser.open(tun["open_url"])).start()
+        topo = studio_topology.detect_topology(remote_target=args.target, no_open_flag=bool(args.no_open))
+        if topo["open_action"] == "browser" and sys.stdout.isatty():
+            threading.Timer(0.3, lambda: studio_topology.open_studio_browser(tun["open_url"], topo)).start()
         try:
             while True:
                 time.sleep(0.5)
@@ -940,6 +1013,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_studio.add_argument("--yes", action="store_true")
     p_studio.add_argument("--json", action="store_true")
     p_studio.add_argument("--no-open", action="store_true", help="Do not open browser automatically")
+    p_studio.add_argument("--remote", default=None, help="Optional SSH host for remote Spark Studio tunnel mode")
+    p_studio.add_argument("--remote-port", dest="remote_port", type=int, default=18420)
+    p_studio.add_argument("--local-port", dest="local_port", type=int, default=0)
+    p_studio.add_argument("--ssh-port", dest="ssh_port", type=int, default=22)
+    p_studio.add_argument("--no-bootstrap", dest="no_bootstrap", action="store_true")
+    p_studio.add_argument("--dry-run", dest="dry_run", action="store_true", help="Print detected host topology & launch plan without starting")
     p_studio.set_defaults(func=cmd_studio)
 
     p_host = sub.add_parser("host", parents=[common], help="Manage & probe SSH target hosts (Orca-style)")
