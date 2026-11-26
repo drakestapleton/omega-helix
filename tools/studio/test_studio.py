@@ -1033,6 +1033,13 @@ class StudioTestCase(unittest.TestCase):
         self.assertTrue(ag_doc["ok"])
         self.assertIn("2_non_interactive_setup_and_forge", ag_doc["recipes"])
 
+        r_cat = subprocess.run(
+            [sys.executable, cli_py, "--bin-dir", str(self.bin_dir), "catalog", "--query", "python", "--json"],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(r_cat.returncode, 0, r_cat.stderr)
+        self.assertGreaterEqual(json.loads(r_cat.stdout)["count"], 1)
+
         with tempfile.TemporaryDirectory(prefix="helix-ai-cli-") as td:
             spec_p = Path(td) / "spec.json"
             ws_dir = Path(td) / "runs"

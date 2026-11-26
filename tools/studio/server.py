@@ -855,12 +855,16 @@ class StudioHandler(BaseHTTPRequestHandler):
                 bins = runner.ensure_binaries(["ollm"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
                 ollm = str(bins["ollm"])
                 base_ck = str(Path(body["base_ck"]).expanduser().resolve())
-                corpus = str(Path(body["corpus"]).expanduser().resolve())
+                corpus_raw = body.get("corpus") or body.get("data_path")
+                if not corpus_raw:
+                    raise ValueError("missing required field: corpus")
+                corpus = str(Path(corpus_raw).expanduser().resolve())
                 out_dir = Path(body["out_dir"]).expanduser().resolve()
                 out_dir.mkdir(parents=True, exist_ok=True)
                 windows = int(body.get("windows", 8))
                 ridge_milli = int(body.get("ridge_milli", 10000))
                 gn_iters = int(body.get("gn_iters", 1))
+                merges_raw = body.get("merges_bin") or body.get("merges")
                 fc_path = out_dir / "frozen.hc"
                 sp_path = out_dir / "closed.sp"
                 spec_ck = out_dir / "spec.ck"
@@ -873,7 +877,10 @@ class StudioHandler(BaseHTTPRequestHandler):
                 r3 = subprocess.run([ollm, "spapp", base_ck, str(sp_path), str(spec_ck)], capture_output=True, text=True, check=False)
                 if r3.returncode != 0:
                     raise ValueError(f"spapp rc={r3.returncode}: {r3.stderr.strip()}")
-                r4 = subprocess.run([ollm, "speval", base_ck, str(sp_path), corpus, str(windows)], capture_output=True, text=True, check=False)
+                ev_cmd = [ollm, "speval", base_ck, str(sp_path), corpus, str(windows)]
+                if merges_raw:
+                    ev_cmd.append(str(Path(merges_raw).expanduser().resolve()))
+                r4 = subprocess.run(ev_cmd, capture_output=True, text=True, check=False)
                 if r4.returncode != 0:
                     raise ValueError(f"speval rc={r4.returncode}: {r4.stderr.strip()}")
                 sp_parts = r2.stdout.strip().split()
@@ -947,6 +954,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                     max_regression_nats=float(body.get("max_regression_nats", 0.25)),
                     steps=int(body.get("steps", 8)),
                     date_tag=body.get("date_tag"),
+                    merges_bin=body.get("merges_bin") or body.get("merges"),
                 )
                 self._send_json(HTTPStatus.OK, {"ok": True, "receipt": res})
             except Exception as exc:

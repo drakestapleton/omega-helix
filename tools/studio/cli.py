@@ -879,7 +879,8 @@ def cmd_runtime_sleep(args: argparse.Namespace) -> int:
     vers = [x.strip() for x in args.verify.split(",") if x.strip()]
     res = rt.run_sleep_cycle(
         bins["ollm"], args.base_ck, args.interaction, args.held, args.out_dir,
-        verifiers=vers, max_regression_nats=args.max_regression, steps=args.steps, date_tag=args.date_tag,
+        verifiers=vers, max_regression_nats=args.max_regression, steps=args.steps,
+        date_tag=args.date_tag, merges_bin=args.merges,
     )
     print(json.dumps(res, indent=2))
     return 0 if res.get("accepted") else 1
@@ -1323,7 +1324,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_doc.set_defaults(func=cmd_doctor)
 
     p_cat = sub.add_parser("catalog", parents=[common], help="Search & sync the OpenWALDO verified dataset catalog")
-    p_cat.add_argument("--search", "-q", default="")
+    p_cat.add_argument("--search", "--query", "-q", default="")
     p_cat.add_argument("--category", "-c", default="")
     p_cat.add_argument("--license", "-l", default="")
     p_cat.add_argument("--prog", "-p", default="")
@@ -1504,6 +1505,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_slp.add_argument("--max-regression", dest="max_regression", type=float, default=0.25)
     p_slp.add_argument("--steps", type=int, default=8)
     p_slp.add_argument("--date-tag", dest="date_tag", default=None)
+    p_slp.add_argument("--merges", default=None, help="BPE merges.bin path when base_ck has V > 256")
     p_slp.add_argument("--json", action="store_true")
     p_slp.set_defaults(func=cmd_runtime_sleep)
 
