@@ -185,6 +185,8 @@ def ensure_binaries(
                 env=env,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
             if proc.returncode != 0:
@@ -1852,6 +1854,8 @@ class ChainManager:
                 [str(univ_bin), "sample", str(ck_p), str(seed), str(n_tokens), str(temp_milli)],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
             if proc.returncode != 0:
@@ -1895,6 +1899,8 @@ class ChainManager:
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
             if proc.returncode != 0:

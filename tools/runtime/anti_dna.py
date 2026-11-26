@@ -137,7 +137,7 @@ def run_firewall_decode(
         argv.extend([str(wm), str(len(packs)), *packs])
         pack_hash_chains.append([read_sp_pack_hash(p) for p in packs])
 
-    res = subprocess.run(argv, capture_output=True, text=True, timeout=60, check=False)
+    res = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, check=False)
     if res.returncode != 0:
         raise RuntimeError(f"ollm spguard failed (rc={res.returncode}): {res.stderr.strip()}")
 

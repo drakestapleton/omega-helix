@@ -75,7 +75,12 @@ def run_sleep_cycle(
     hdr = ow_bridge.read_ollm_checkpoint_header(bck)
     base_L = int(hdr["shape"]["L"])
     T = int(hdr["shape"]["T"])
+    V = int(hdr["shape"]["V"])
     new_L = base_L + max(1, int(add_layers))
+    merges_p = Path(merges_bin).expanduser().resolve() if merges_bin else None
+    if V > 256 and merges_p is None:
+        raise ValueError(f"BPE checkpoint (V={V}) requires merges_bin / --merges for sleep cycle")
+    tok_width = 2 if V > 256 else 1
 
     recs: list[dict[str, Any]] = []
     for item in session_interactions:
@@ -91,16 +96,30 @@ def run_sleep_cycle(
         raise RuntimeError("sleep cycle rejected all session interactions; zero verified memories to consolidate")
 
     corpus_bytes = "\n".join(r["text"] for r in accepted_recs).encode("utf-8", errors="replace")
-    while len(corpus_bytes) <= T + 8:
+    min_raw = (T + 8) * (4 if V > 256 else 1)
+    while len(corpus_bytes) <= min_raw:
         corpus_bytes = corpus_bytes + b"\n" + corpus_bytes
     mem_bin = od / f"memory-{tag}.bin"
     mem_bin.write_bytes(corpus_bytes)
 
+    train_input = mem_bin
+    if V > 256 and merges_p is not None:
+        mem_tok = od / f"memory-{tag}.tok"
+        for _ in range(4):
+            r_enc = subprocess.run([ollm, "bpeenc", str(merges_p), str(V), str(mem_bin), str(mem_tok)], capture_output=True, text=True, check=False)
+            if r_enc.returncode != 0:
+                raise RuntimeError(f"bpeenc failed (rc={r_enc.returncode}): {r_enc.stderr.strip()}")
+            if (mem_tok.stat().st_size // 2) > T + 2:
+                break
+            corpus_bytes = corpus_bytes + b"\n" + corpus_bytes
+            mem_bin.write_bytes(corpus_bytes)
+        train_input = mem_tok
+
     held_bytes = held.stat().st_size
-    if held_bytes <= T:
-        raise ValueError(f"held regression corpus {held} shorter than T={T}")
-    eval_w = max(1, min(8, (held_bytes - 1) // T))
-    merges_p = Path(merges_bin).expanduser().resolve() if merges_bin else None
+    held_toks = held_bytes // tok_width
+    if held_toks <= T:
+        raise ValueError(f"held regression corpus {held} shorter than T={T} tokens (got {held_toks})")
+    eval_w = max(1, min(8, (held_toks - 1) // T))
     eval_before = _run_eval(ollm, bck, held, eval_w, merges_bin=merges_p)
 
     cand_ck = od / f"day-{tag}.ck"
@@ -111,8 +130,9 @@ def run_sleep_cycle(
     if r_grow.returncode != 0:
         raise RuntimeError(f"growpro failed (rc={r_grow.returncode}): {r_grow.stderr.strip()}")
 
-    fc_w = max(1, min(16, (len(corpus_bytes) - 1) // T))
-    r_fc = subprocess.run([ollm, "fcache", str(bck), str(mem_bin), str(fc_w), str(cand_hc)], capture_output=True, text=True, check=False)
+    train_toks = train_input.stat().st_size // tok_width
+    fc_w = max(1, min(16, (train_toks - 1) // T))
+    r_fc = subprocess.run([ollm, "fcache", str(bck), str(train_input), str(fc_w), str(cand_hc)], capture_output=True, text=True, check=False)
     if r_fc.returncode != 0:
         raise RuntimeError(f"fcache failed (rc={r_fc.returncode}): {r_fc.stderr.strip()}")
 

@@ -53,7 +53,7 @@ def _sample_candidate(
         ]
     else:
         argv = [ollm, "sample", str(ck), str(int(seed)), str(int(n_tokens)), str(int(temp_milli)), prompt, merges]
-    res = subprocess.run(argv, capture_output=True, text=True, timeout=60, check=False)
+    res = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, check=False)
     if res.returncode != 0:
         raise RuntimeError(f"sampling command failed (rc={res.returncode}): {res.stderr.strip()}")
     if not is_loop:
@@ -97,6 +97,7 @@ def run_compile_until_green(
     hdr = ow_bridge.read_ollm_checkpoint_header(work_ck)
     base_L = int(hdr["shape"]["L"])
     T = int(hdr["shape"]["T"])
+    V = int(hdr["shape"]["V"])
     is_loop = hdr["magic"] == "OLLMCK03"
     layer_from = max(0, base_L - 1)
 
@@ -149,6 +150,8 @@ def run_compile_until_green(
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=60,
                 check=False,
             )
@@ -158,15 +161,26 @@ def run_compile_until_green(
     sp_info: dict[str, Any] | None = None
     if passed:
         trace_bytes = f"{prompt}\n{winning_text}\n".encode("utf-8", errors="replace")
-        while len(trace_bytes) <= T + 8:
+        min_raw = (T + 8) * (4 if V > 256 else 1)
+        while len(trace_bytes) <= min_raw:
             trace_bytes = trace_bytes + b"\n" + trace_bytes
         trace_bin = od / "winning_trace.bin"
         trace_bin.write_bytes(trace_bytes)
+        train_input = trace_bin
+        if V > 256 and merges and merges != "-":
+            trace_tok = od / "winning_trace.tok"
+            for _ in range(4):
+                subprocess.run([ollm, "bpeenc", str(merges), str(V), str(trace_bin), str(trace_tok)], check=True, capture_output=True)
+                if (trace_tok.stat().st_size // 2) > T + 2:
+                    break
+                trace_bytes = trace_bytes + b"\n" + trace_bytes
+                trace_bin.write_bytes(trace_bytes)
+            train_input = trace_tok
         cryst_ck = od / "crystallized.ck"
         cryst_sp = od / "crystallized.sp"
         new_L = base_L + max(1, int(add_layers))
         subprocess.run([ollm, "growpro", str(src_ck), str(cryst_ck), str(new_L), str(int(cryst_steps)), "2000"], check=True, capture_output=True)
-        subprocess.run([ollm, "trainf", str(cryst_ck), str(trace_bin), str(int(cryst_steps)), str(max(1, int(cryst_steps) // 2)), str(base_L)], check=True, capture_output=True)
+        subprocess.run([ollm, "trainf", str(cryst_ck), str(train_input), str(int(cryst_steps)), str(max(1, int(cryst_steps) // 2)), str(base_L)], check=True, capture_output=True)
         subprocess.run([ollm, "spext", str(src_ck), str(cryst_ck), str(cryst_sp)], check=True, capture_output=True)
         ph = read_sp_pack_hash(cryst_sp)
         sha, sz = ow_bridge.file_sha256_and_bytes(cryst_sp)

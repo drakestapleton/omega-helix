@@ -1123,6 +1123,42 @@ class StudioTestCase(unittest.TestCase):
             merkle_chk = next(c for c in ver_doc["checks"] if c["name"] == "merkle_sp_chain")
             self.assertTrue(merkle_chk["detail"].startswith("parallel fork:"), merkle_chk)
 
+            merges_p = run_dir / "data" / "base" / "merges300.bin"
+            train_tok = run_dir / "data" / "base" / "train.tok"
+            r_slp = subprocess.run(
+                [
+                    sys.executable, cli_py, "--bin-dir", str(self.bin_dir),
+                    "sleep", str(run_dir / "base.ck"), "--held", str(train_tok),
+                    "--interaction", "fn pure_add x ulong y ulong to ulong\n  ret add x y\nend\n" * 16,
+                    "--out-dir", str(Path(td) / "sleep_bpe"), "--steps", "4",
+                    "--max-regression", "2.0", "--merges", str(merges_p), "--json",
+                ],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(r_slp.returncode, 0, r_slp.stderr or r_slp.stdout)
+            self.assertTrue(json.loads(r_slp.stdout)["accepted"])
+
+            r_grn = subprocess.run(
+                [
+                    sys.executable, cli_py, "--bin-dir", str(self.bin_dir),
+                    "green", str(run_dir / "base.ck"), "--prompt", "fn ",
+                    "--verifier", "nonempty", "--max-attempts", "2", "--temp-milli", "800",
+                    "--out-dir", str(Path(td) / "green_bpe"), "--merges", str(merges_p), "--json",
+                ],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(r_grn.returncode, 0, r_grn.stderr or r_grn.stdout)
+            self.assertTrue(json.loads(r_grn.stdout)["passed"])
+
+            r_err = subprocess.run(
+                [sys.executable, cli_py, "--workspace-dir", str(ws_dir), "--bin-dir", str(self.bin_dir), "sample", "no-such-run", "--prompt", "hi", "--json"],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(r_err.returncode, 1)
+            err_doc = json.loads(r_err.stdout)
+            self.assertFalse(err_doc["ok"])
+            self.assertIn("no-such-run", err_doc["error"])
+
         app_js = (STUDIO_DIR / "ui" / "app.js").read_text(encoding="utf-8")
         self.assertNotIn('el("button", {', app_js)
         self.assertNotIn('el("option", {', app_js)
