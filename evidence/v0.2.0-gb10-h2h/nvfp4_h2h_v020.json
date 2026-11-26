@@ -1,0 +1,43 @@
+{
+  "kind": "omega-helix-nvfp4-and-gemm-h2h",
+  "shape": {
+    "M": 4096,
+    "N": 4096,
+    "K": 8192
+  },
+  "omega_nvfp4_omma_sf_16864": [
+    {
+      "raw_line": "NVFP4 4096 4096 8192 20 11974717 45909 9181 8192 8192 PASS",
+      "M": 4096,
+      "N": 4096,
+      "K": 8192,
+      "iters": 20,
+      "wall_ns": 11974717,
+      "tflops": 459.09,
+      "pct_of_500tf_peak": 91.81,
+      "expected": 8192,
+      "got": 8192,
+      "status": "PASS"
+    },
+    {
+      "raw_line": "NVFP4 4096 4096 8192 50 30177362 45543 9108 8192 8192 PASS",
+      "M": 4096,
+      "N": 4096,
+      "K": 8192,
+      "iters": 50,
+      "wall_ns": 30177362,
+      "tflops": 455.43,
+      "pct_of_500tf_peak": 91.08,
+      "expected": 8192,
+      "got": 8192,
+      "status": "PASS"
+    }
+  ],
+  "pytorch_cublas_bf16_matmul": {
+    "torch_version": "2.14.0+cu130",
+    "cuda_version": "13.0",
+    "iters": 20,
+    "elapsed_s": 0.064048,
+    "tflops": 85.84
+  }
+}
