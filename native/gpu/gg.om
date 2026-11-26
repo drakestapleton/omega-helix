@@ -98,6 +98,10 @@ oputc 32
 oputu mapget get gbmem 3 16 4
 oputc 32
 oputu mapget get gbmem 2 8192 4
+oputc 32
+oputu get gbst 4
+oputc 32
+oputu get gbst 5
 else
 oputc 48
 oputc 32
@@ -175,9 +179,17 @@ ggput 19 rd
 ggput 20 mul bb d
 ggput 21 get og 8
 ggput 22 get og 8
-ggput 23 div ggp5 512
-note 37: split-K partials for ggsk, at most 2^21 floats (ggks stops doubling once a grid has 1024 blocks)
-ggput 37 2097152
+sn = div ggp5 512
+if lt sn 2048
+sn = 2048
+end
+ggput 23 sn
+note 37: split-K partials for ggsk, up to 4M floats (16 MB) so 128x128 dW fills 3.0 waves on 48 SMs
+ggput 37 4194304
+note 38: packed-BF16 weight shadow (P * 2 bytes = ggp5 / 2 u32 words) for native BF16-IO 128x128 GEMMs
+ggput 38 div ggp5 2
+note 39: packed-BF16 dlogits scratch (R * V * 2 bytes) so F32->BF16 after CE is out-of-place & race-free
+ggput 39 div mul r get og 0 2
 ret get gga 47
 end
 
@@ -200,6 +212,10 @@ end
 
 fn ggw o ulong to ulong
 ret add gga1 0 mul o 4
+end
+
+fn ggwh o ulong to ulong
+ret add gga1 38 mul o 2
 end
 
 fn ggg o ulong to ulong
@@ -284,6 +300,91 @@ ggdie 99
 end
 end
 
+note Packed-BF16 Native-IO GEMM & conversion helpers (slots 67..74, 82..83)
+fn ggmmh m ulong n ulong k ulong nz ulong h2 ulong fl uint to void
+a = uint m
+b = uint n
+c = uint k
+e = uint nz
+g = uint h2
+if not gkmmh a b c e g fl
+ggdie 99
+end
+end
+
+fn ggxwh x ulong w ulong c ulong n ulong k ulong bt bool to void
+k2 = uint mul k 2
+n2 = uint mul n 2
+gkoph 0 x k2 2 0 0
+gkoph 1 w 2 n2 0 0
+gkopc c n2 2 0 0 f32 1.0f64
+fl = uint 2
+if bt
+fl = 3
+end
+ggmmh ggr n k 1 1 fl
+end
+
+fn ggxwth x ulong w ulong c ulong n ulong k ulong bt bool to void
+k2 = uint mul k 2
+n2 = uint mul n 2
+gkoph 0 x k2 2 0 0
+gkoph 1 w k2 2 0 0
+gkopc c n2 2 0 0 f32 1.0f64
+fl = uint 2
+if bt
+fl = 3
+end
+ggmmh ggr n k 1 1 fl
+end
+
+fn ggskh m ulong n ulong nz ulong s ulong g ulong gz uint to void
+mn = mul m n
+p = gga1 37
+n4 = uint mul n 4
+c1 = uint mul mul mn s 4
+c2 = uint mul mn 4
+gkopc p n4 4 c1 c2 f32 1.0f64
+k = div ggr s
+z = mul nz s
+ggmmh m n k z s 0
+ggskr mn nz s g gz
+end
+
+fn ggwgh x ulong dy ulong g ulong kk ulong n ulong to void
+k2 = uint mul kk 2
+n2 = uint mul n 2
+n4 = uint mul n 4
+s = ggks kk n 1
+if eq s 1
+gkoph 0 x 2 k2 0 0
+gkoph 1 dy 2 n2 0 0
+gkopc g n4 4 0 0 f32 1.0f64
+ggmmh kk n ggr 1 1 1
+ret
+end
+sl = div ggr s
+gkoph 0 x 2 k2 0 uint mul mul sl kk 2
+gkoph 1 dy 2 n2 0 uint mul mul sl n 2
+ggskh kk n 1 s g 0
+end
+
+fn ggf2b n ulong src ulong dst ulong to void
+n8 = div n 8
+ggu 0 n8
+ggpt 1 src
+ggpt 2 dst
+ggrun 82 6 ggcd n8 256 1 1
+end
+
+fn ggb2f n ulong src ulong dst ulong to void
+n8 = div n 8
+ggu 0 n8
+ggpt 1 src
+ggpt 2 dst
+ggrun 83 6 ggcd n8 256 1 1
+end
+
 note C[R][n] (+)= X[R][k] W[k][n]
 fn ggxw x ulong w ulong c ulong n ulong k ulong bt bool to void
 k4 = uint mul k 4
@@ -331,8 +432,27 @@ note with R = 128 (the small shape B 4, T 32) the f32 rule took s = 8, depth 16,
 note with nverr -22, so gbcmp, gbcmp2 and gtrainb ended in ggdie (exit 84). At R = 16384 (B 64, T 256)
 note every s <= 16 leaves a depth that is a multiple of 32: the split there is unchanged.
 fn ggks m ulong n ulong nz ulong to ulong
-b = mul mul div m 32 div n 32 nz
 r = ggr
+if ggbf_ok
+b128 = mul mul div m 128 div n 128 nz
+mnz = mul mul m n nz
+s = ulong 1
+while lt mul b128 s 144 bound 8
+s2 = mul s 2
+if gt s2 16
+ret s
+end
+if ne rem r mul s2 32 0
+ret s
+end
+if gt mul mnz s2 1572864
+ret s
+end
+s = s2
+end
+ret s
+end
+b = mul mul div m 32 div n 32 nz
 kq = ulong 16
 if eq get gkbf 0 1
 kq = 32
@@ -366,28 +486,52 @@ ggmm m n k z s false
 ggskr mn nz s g gz
 end
 
-note COLSUM 14 over slot 37: G[c gz + i] += sum over z2 < s of P[c][z2][i], i < mn, c < nz
+note COLSUM 14 over slot 37: G[c gz + i] += sum over z2 < s of P[c][z2][i], vectorized 256 thr x 4 floats
 fn ggskr mn ulong nz ulong s ulong g ulong gz uint to void
 kc = s
 if eq OMUTP 0
 kc = sub s 1
 end
-ggu 0 mn
+mn4 = div mn 4
+ggu 0 mn4
 ggu 1 kc
 ggpt 1 gga1 37
 ggu 4 mul mn 4
 ggu 5 mul mul mn s 4
 ggpt 3 g
 ggu 8 ulong gz
-ggrun 14 9 ggcd mn 64 nz 1
+ggrun 14 9 ggcd mn4 256 nz 1
 end
 
-note 19 COPY (x into y), 20 ZERO (x) over n elements (the FFN ReLU is fused into the GEMMs, gkope)
+note 19 COPY (x into y), 20 ZERO (x) over n elements (256 threads x 4 floats via LDG.E.128/STG.E.128)
 fn ggew id uint n ulong x ulong y ulong to void
-ggu 0 n
+n4 = div n 4
+ggu 0 n4
 ggpt 1 x
 ggpt 2 y
-ggrun id 6 ggcd n 64 1 1
+ggrun id 6 ggcd n4 256 1 1
+end
+
+fn ggrmsf_h v ulong g ulong y ulong s ulong to void
+r = mul ggr 32
+ggu 0 r
+ggpt 1 v
+ggpt 2 g
+ggpt 3 y
+ggpt 4 s
+ggrun 75 10 ggcd r 256 1 1
+end
+
+fn ggrmsb_h v ulong g ulong s ulong to void
+r = mul ggr 32
+ggu 0 r
+ggpt 1 v
+ggpt 2 g
+ggpt 3 s
+ggpt 4 gga1 14
+ggpt 5 gga1 13
+ggpt 6 gga1 19
+ggrun 76 14 ggcd r 256 1 1
 end
 
 note RMSF/RMSB run one warp per row: arg 0 and the thread count are R*32
@@ -414,27 +558,52 @@ ggpt 6 gga1 19
 ggrun 11 14 ggcd r 64 1 1
 end
 
-note gain gradient at parameter offset go += column sums of WS: per sequence (slot 13), then over B
-fn ggain go ulong to void
+note gain gradient at parameter offset go += column sums of WS (8-warp CTA-reduced R/8 rows from RMSB_BF16)
+fn ggain_h go ulong to void
 d = get og 2
-tt = get og 1
+d4 = div d 4
+tt8 = div get og 1 8
 bb = get og 6
-ggu 0 d
-ggu 1 tt
+ggu 0 d4
+ggu 1 tt8
 ggpt 1 gga1 19
 ggu 4 mul d 4
-ggu 5 mul mul tt d 4
+ggu 5 mul mul tt8 d 4
 ggpt 3 gga1 20
 ggu 8 mul d 4
-ggrun 13 9 ggcd d 64 bb 1
-ggu 0 d
+ggrun 13 9 ggcd d4 256 bb 1
+ggu 0 d4
 ggu 1 bb
 ggpt 1 gga1 20
 ggu 4 mul d 4
 ggu 5 0
 ggpt 3 ggg go
 ggu 8 0
-ggrun 14 9 ggcd d 64 1 1
+ggrun 14 9 ggcd d4 256 1 1
+end
+
+note gain gradient at parameter offset go += column sums of WS: vectorized 256 thr x 4 floats
+fn ggain go ulong to void
+d = get og 2
+d4 = div d 4
+tt = get og 1
+bb = get og 6
+ggu 0 d4
+ggu 1 tt
+ggpt 1 gga1 19
+ggu 4 mul d 4
+ggu 5 mul mul tt d 4
+ggpt 3 gga1 20
+ggu 8 mul d 4
+ggrun 13 9 ggcd d4 256 bb 1
+ggu 0 d4
+ggu 1 bb
+ggpt 1 gga1 20
+ggu 4 mul d 4
+ggu 5 0
+ggpt 3 ggg go
+ggu 8 0
+ggrun 14 9 ggcd d4 256 1 1
 end
 
 note softmax rows: one warp per row, T 32 threads per score block, grid (T/2, B H)
@@ -509,8 +678,18 @@ note q, k, u = a wq, a wk, a wv as one batched GEMM (wq wk wv and q k u are cont
 fn ggqkv l ulong to void
 d = get og 2
 a = ggl l 1
-w = ggw ovwq l
 c = ggl l 2
+if ggbf_ok
+d2 = uint mul d 2
+s6 = get ggs 6
+w2 = ggwh ovwq l
+gkoph 0 a d2 2 0 0
+gkoph 1 w2 2 d2 0 uint mul mul d d 2
+gkopc c d2 2 0 s6 f32 1.0f64
+ggmmh ggr d d 3 3 2
+ret
+end
+w = ggw ovwq l
 s0 = get ggs 0
 s6 = get ggs 6
 s7 = get ggs 7
@@ -520,22 +699,71 @@ gkopc c s0 4 0 s6 f32 1.0f64
 ggmm ggr d d 3 3 false
 end
 
-note P = softmax(q k^T / sqrt(E)), o = P u; causal: only S on and below the diagonal is formed
-note (gkmm cz 3) and o stops at the diagonal (cz 1), since P is exactly 0 above it
+note true when SM121 HMMA.16816 Fused Flash-Attention-2 (slots 63..66) is active for this shape
+fn ggfa_ok to bool
+if or eq get gkbf 0 0 ne get gkbck 0 0
+ret false
+end
+if eq OMUTG 0
+ret false
+end
+tt = get og 1
+if or lt tt 64 ne rem tt 64 0
+ret false
+end
+e = get og 7
+ret or eq e 32 eq e 64
+end
+note true when 128x128 fast epilogues (residual-fused beta + single-store ReLU) are active in ggffn/ggbffn
+note ggnofp[0] = 1 during gtrainf/gtrainb/gprof (skips duplicate FP store; gcmp2/gbcmp2 keeps FP for ogmask rho check)
+global ggnofp uint 1
+fn ggfast_ffn to bool
+if or eq get gkbf 0 0 ne get gkbck 0 0
+ret false
+end
+if or ne rem ggr 128 0 ne rem get og 2 128 0
+ret false
+end
+ret eq rem get og 4 128 0
+end
+fn ggskip_fp to bool
+ret and ggfast_ffn ne get ggnofp 0 0
+end
+note true when full Packed-BF16 Native-IO training mode (slots 67..83, 2 B/elem activations + W_bf16) is active
+fn ggbf_ok to bool
+if not ggskip_fp
+ret false
+end
+ret ggfa_ok
+end
+note P = softmax(q k^T / sqrt(E)), o = P u; uses SM121 HMMA.16816 Flash-Attention-2 (FA2F slot 63) when ggfa_ok
 fn ggatt l ulong to void
 tt = get og 1
 e = get og 7
 pp = ggl l 12
 q = ggl l 2
 k = ggl l 3
+u = ggl l 4
+o = ggl l 5
+if ggfa_ok
+ggpt 0 q
+ggpt 1 k
+ggpt 2 u
+ggpt 3 o
+ggpt 4 pp
+fid = uint 63
+if ggbf_ok
+fid = 77
+end
+ggrun fid 10 div tt 64 get og 3 get og 6
+ret
+end
 gghd 0 q false
 gghd 1 k false
 isq = div 1.0f64 fsqrt f64 e
 ggcp pp isq
 ggbh tt tt e false 3
 ggsoft 15 pp pp
-u = ggl l 4
-o = ggl l 5
 ggpl 0 pp false
 gghd 1 u true
 ggch o 1.0f64
@@ -543,30 +771,60 @@ ggbh tt e tt false 1
 end
 
 note hm = hin + o wo; bn = rms(hm) g2; out = hm + relu(bn w1) w2
+fn ggffn_h l ulong to void
+d = get og 2
+f = get og 4
+hm = ggl l 6
+gkopfl 8 ggl l 0
+ggxwh ggl l 5 ggwh ovwo l hm d d true
+ggrmsf_h hm ggw ovg2 l ggl l 7 ggl l 9
+gkope 1 ggl l 11
+ggxwh ggl l 7 ggwh ovw1 l ggl l 10 f d false
+gkopfl 8 hm
+ggxwh ggl l 11 ggwh ovw2 l ggout l d f true
+end
+
 fn ggffn l ulong to void
+if ggbf_ok
+ggffn_h l
+ret
+end
 d = get og 2
 f = get og 4
 rd = mul ggr d
 hm = ggl l 6
 x = ggl l 0
+ff = ggfast_ffn
+if not ff
 ggew 19 rd x hm
-x = ggl l 5
+end
+x5 = ggl l 5
 w = ggw ovwo l
-ggxw x w hm d d true
-x = ggl l 7
+if ff
+gkopfl 8 x
+end
+ggxw x5 w hm d d true
+x7 = ggl l 7
 w = ggw ovg2 l
 s = ggl l 9
-ggrmsf hm w x s
+ggrmsf hm w x7 s
 fp = ggl l 10
 w = ggw ovw1 l
 y = ggl l 11
 gkope 1 y
-ggxw x w fp f d false
-x = y
+if ggskip_fp
+gkopfl 4 0
+end
+ggxw x7 w fp f d false
 o = ggout l
+if not ff
 ggew 19 rd hm o
+end
 w = ggw ovw2 l
-ggxw x w o d f true
+if ff
+gkopfl 8 hm
+end
+ggxw y w o d f true
 end
 
 fn ggfl l ulong to void
@@ -574,7 +832,11 @@ x = ggl l 0
 w = ggw ovg1 l
 a = ggl l 1
 s = ggl l 8
+if ggbf_ok
+ggrmsf_h x w a s
+else
 ggrmsf x w a s
+end
 ggqkv l
 ggatt l
 ggffn l
@@ -589,6 +851,9 @@ end
 fn ggfwd_emb to void
 d = get og 2
 x = ggl 0 0
+if ggbf_ok
+x = gga1 13
+end
 ggu 0 d
 ggpt 1 x
 x = ggw 0
@@ -600,12 +865,36 @@ ggpt 4 x
 tt = get og 1
 bb = get og 6
 ggrun 9 10 ggcd d 64 tt bb
+if ggbf_ok
+ggf2b mul ggr d gga1 13 ggl 0 0
+end
 end
 fn ggfwd_head to void
 if eq get ggnoce 0 2
 ret
 end
 d = get og 2
+v = get og 0
+if ggbf_ok
+ggrmsf_h gga1 8 ggw get og 33 gga1 10 gga1 9
+d2 = uint mul d 2
+v4 = uint mul v 4
+gkoph 0 gga1 10 d2 2 0 0
+gkoph 1 ggwh 0 d2 2 0 0
+gkopc gga1 11 v4 4 0 0 f32 1.0f64
+ggmmh ggr v d 1 1 0
+if ne get ggnoce 0 0
+ret
+end
+r = mul ggr 32
+ggu 0 r
+ggpt 1 gga1 11
+ggpt 2 gga1 3
+ggpt 3 gga1 12
+ggpt 4 gga1 39
+ggrun 87 10 ggcd r 256 1 1
+ret
+end
 x = gga1 8
 w = ggw get og 33
 z = gga1 10
@@ -613,7 +902,6 @@ s = gga1 9
 ggrmsf x w z s
 x = gga1 11
 w = ggw 0
-v = get og 0
 ggxwt z w x v d false
 if ne get ggnoce 0 0
 ret
@@ -637,17 +925,34 @@ ret 2
 end
 ret 3
 end
+fn ggfwd_ecnt to ulong
+if ggbf_ok
+ret 2
+end
+ret 1
+end
+fn ggfwd_lcnt to ulong
+c = ulong 11
+if ggfa_ok
+c = sub c 2
+end
+if ggfast_ffn
+c = sub c 2
+end
+ret c
+end
 fn ggfwd_bat to void
 lv = get og 56
+lc = ggfwd_lcnt
 l0 = ulong 0
 while lt l0 lv bound 1024
 l1 = add l0 16
 if gt l1 lv
 l1 = lv
 end
-cnt = mul sub l1 l0 11
+cnt = mul sub l1 l0 lc
 if eq l0 0
-cnt = add cnt 1
+cnt = add cnt ggfwd_ecnt
 end
 if eq l1 lv
 cnt = add cnt ggfwd_hcnt
@@ -686,9 +991,30 @@ end
 ggfwd_head
 end
 
+fn ggbffn_h l ulong to void
+d = get og 2
+f = get og 4
+dh = gga1 13
+df = gga1 17
+da = gga1 14
+gkope 2 ggl l 11
+ggxwth dh ggwh ovw2 l df f d false
+if or eq OMUTLG 1 eq olp l l
+ggwgh ggl l 11 dh ggg ovw2 l f d
+end
+ggwgh ggl l 7 df ggg ovw1 l d f
+ggxwth df ggwh ovw1 l da d f false
+ggrmsb_h ggl l 6 ggw ovg2 l ggl l 9
+ggain_h ovg2 l
+end
+
 note layer l FFN backward: DH holds d out on entry, d hm on exit. The dF GEMM's fused epilogue (gkope 2)
 note applies the ReLU mask FP > 0; the forward W1 GEMM (ggffn, gkope 1) stores both FP and Y.
 fn ggbffn l ulong to void
+if ggbf_ok
+ggbffn_h l
+ret
+end
 d = get og 2
 f = get og 4
 dh = gga1 13
@@ -696,6 +1022,9 @@ df = gga1 17
 da = gga1 14
 w = ggw ovw2 l
 x = ggl l 10
+if ggskip_fp
+x = ggl l 11
+end
 gkope 2 x
 ggxwt dh w df f d false
 x = ggl l 11
@@ -715,6 +1044,47 @@ ggrmsb x w s
 ggain ovg2 l
 end
 
+fn ggfa_bwd l ulong to void
+tt = get og 1
+h = get og 3
+bb = get og 6
+dn = gga1 16
+pp = ggl l 12
+dp = gga1 18
+dq = gga1 15
+dk = add dq ulong get ggs 6
+du = add dk ulong get ggs 6
+id_d = uint 64
+id_q = uint 65
+id_kv = uint 66
+if ggbf_ok
+id_d = 78
+id_q = 79
+id_kv = 80
+end
+ggpt 0 ggl l 5
+ggpt 1 dn
+ggpt 2 dp
+ggrun id_d 6 div tt 2 h bb
+ggpt 0 ggl l 2
+ggpt 1 ggl l 3
+ggpt 2 ggl l 4
+ggpt 3 dn
+ggpt 4 pp
+ggpt 5 dp
+ggpt 6 dq
+ggrun id_q 14 div tt 64 h bb
+ggpt 0 ggl l 2
+ggpt 1 ggl l 3
+ggpt 2 ggl l 4
+ggpt 3 dn
+ggpt 4 pp
+ggpt 5 dp
+ggpt 6 dk
+ggpt 7 du
+ggrun id_kv 16 div tt 64 h bb
+end
+
 note layer l attention backward: DO, DP, DU, DS (in DP), DQ, DK, then DA. Causal as in ggatt: DP
 note on and below the diagonal (cz 3, SOFTB reads dp above it as 0), DU and DK start at the diagonal
 note (cz 2), DQ stops there (cz 1).
@@ -724,21 +1094,31 @@ tt = get og 1
 e = get og 7
 dh = gga1 13
 dn = gga1 16
+if ggbf_ok
+ggxwth dh ggwh ovwo l dn d d false
+ggwgh ggl l 5 dh ggg ovwo l d d
+ggfa_bwd l
+ret
+end
 w = ggw ovwo l
 ggxwt dh w dn d d false
 x = ggl l 5
 w = ggg ovwo l
 ggwg x dh w d d
+if ggfa_ok
+ggfa_bwd l
+ret
+end
 dp = gga1 18
+pp = ggl l 12
+dq = gga1 15
+dk = add dq ulong get ggs 6
+du = add dk ulong get ggs 6
 x = ggl l 4
 gghd 0 dn false
 gghd 1 x false
 ggcp dp 1.0f64
 ggbh tt tt e false 3
-pp = ggl l 12
-dq = gga1 15
-dk = add dq ulong get ggs 6
-du = add dk ulong get ggs 6
 ggpl 0 pp true
 gghd 1 dn true
 ggch du 1.0f64
@@ -760,8 +1140,43 @@ ggch dk al
 ggbh tt e tt false 2
 end
 
+fn ggbqkv_h l ulong to void
+d = get og 2
+da = gga1 14
+dq = gga1 15
+d2 = uint mul d 2
+s6 = get ggs 6
+s7 = get ggs 7
+dd2 = uint mul mul d d 2
+note Fused 3-way GEMM (slot 85): dA = dQ Wq^T + dK Wk^T + dV Wv^T in ONE launch!
+gkoph 0 dq d2 2 sub s6 d2 0
+gkoph 1 ggwh ovwq l d2 2 sub dd2 d2 0
+gkopc da d2 2 0 0 f32 1.0f64
+ggmmh ggr d d 1 1 8
+a = ggl l 1
+w = ggg ovwq l
+k = ggks d d 3
+if eq k 1
+gkoph 0 a 2 d2 0 0
+gkoph 1 dq 2 d2 0 s6
+gkopc w get ggs 0 4 0 s7 f32 1.0f64
+ggmmh d d ggr 3 3 1
+else
+sl = uint div ggr k
+gkoph 0 a 2 d2 0 mul sl d2
+gkoph 1 dq 2 d2 s6 mul sl d2
+ggskh d d 3 k w s7
+end
+ggrmsb_h ggl l 0 ggw ovg1 l ggl l 8
+ggain_h ovg1 l
+end
+
 note DA = DQ wq^T + DK wk^T + DU wv^T; G wq wk wv += a^T (DQ DK DU) batched; then the rms backward
 fn ggbqkv l ulong to void
+if ggbf_ok
+ggbqkv_h l
+ret
+end
 d = get og 2
 da = gga1 14
 dq = gga1 15
@@ -816,6 +1231,15 @@ v = get og 0
 r = ggr
 ggew 20 ggp5 gga1 1 gga1 1
 ggew 20 mul r d gga1 13 gga1 13
+if ggbf_ok
+ggxwh gga1 39 ggwh 0 gga1 14 d v false
+if eq ggfzn 0
+ggwgh gga1 39 gga1 10 ggg 0 v d
+end
+ggrmsb_h gga1 8 ggw get og 33 gga1 9
+ggain_h get og 33
+ret
+end
 ggxw gga1 11 ggw 0 gga1 14 d v false
 if eq ggfzn 0
 ggwg gga1 11 gga1 10 ggg 0 v d
@@ -832,16 +1256,22 @@ d = get og 2
 v = get og 0
 tt = get og 1
 td = mul tt d
-ggu 0 td
+td4 = div td 4
+dh = gga1 13
+if ggbf_ok
+ggb2f mul ggr d gga1 13 gga1 16
+dh = gga1 16
+end
+ggu 0 td4
 ggu 1 get og 6
-ggpt 1 gga1 13
+ggpt 1 dh
 ggu 4 mul td 4
 ggu 5 0
 ggpt 3 ggg get og 30
 ggu 8 0
-ggrun 14 9 ggcd td 64 1 1
+ggrun 14 9 ggcd td4 256 1 1
 ggu 0 d
-ggpt 1 gga1 13
+ggpt 1 dh
 ggpt 2 gga1 4
 ggpt 3 gga1 5
 ggpt 4 ggg 0
@@ -860,6 +1290,12 @@ fn ggbwd_lcnt l ulong to ulong
 d = get og 2
 f = get og 4
 c = ulong 20
+if ggfa_ok
+c = sub c 2
+end
+if ggbf_ok
+c = sub c 2
+end
 c = add c ggks_ex d f 1
 c = add c ggks_ex d d 1
 c = add c ggks_ex d d 3
@@ -871,6 +1307,9 @@ end
 
 fn ggbwd_ecnt to ulong
 if eq ggfzn 0
+if ggbf_ok
+ret 3
+end
 ret 2
 end
 ret 0
@@ -1061,11 +1500,32 @@ owp i f64 bitcast f32 x
 end
 end
 
+global ggub uchar 262144
+fn ggub_u32 i ulong v ulong to void
+o = mul i 4
+put ggub o uchar and v 255
+put ggub add o 1 uchar and shr v 8 255
+put ggub add o 2 uchar and shr v 16 255
+put ggub add o 3 uchar and shr v 24 255
+end
+
 fn ggupt to void
 h = get gbmem 5
 xo = get gga 2
 yo = get gga 3
-for i ulong ggr
+r = ggr
+if le r 65536
+for i ulong r
+ggub_u32 i get obx i
+end
+m = mapwrite h xo ggub 0 mul r 4
+for i ulong r
+ggub_u32 i get oby i
+end
+m = mapwrite h yo ggub 0 mul r 4
+ret
+end
+for i ulong r
 tk = get obx i
 m = mapset h add xo mul i 4 4 tk
 ty = get oby i
@@ -1077,10 +1537,11 @@ note counting sort of the R rows by input token: start (V + 1) and order (R) arr
 fn ggcsr to void
 h = get gbmem 5
 v = get og 0
+r = ggr
 for c ulong add v 1
 put ggcn c 0
 end
-for i ulong ggr
+for i ulong r
 c1 = add get obx i 1
 n = add get ggcn c1 1
 put ggcn c1 n
@@ -1091,16 +1552,34 @@ n = add get ggcn c1 get ggcn c
 put ggcn c1 n
 end
 so = get gga 4
-for c ulong add v 1
+v1 = add v 1
+if le v1 65536
+for c ulong v1
+ggub_u32 c get ggcn c
+end
+m = mapwrite h so ggub 0 mul v1 4
+else
+for c ulong v1
 n = get ggcn c
 m = mapset h add so mul c 4 4 n
 end
+end
 so = get gga 5
-for i ulong ggr
+if le r 65536
+for i ulong r
+c = get obx i
+p = get ggcn c
+ggub_u32 p i
+put ggcn c add p 1
+end
+m = mapwrite h so ggub 0 mul r 4
+else
+for i ulong r
 c = get obx i
 p = get ggcn c
 m = mapset h add so mul p 4 4 i
 put ggcn c add p 1
+end
 end
 end
 
@@ -1154,6 +1633,8 @@ note the step loss and gradient for the batch in obx/oby; ggopen first. full: up
 note parameters first and download the gradient into ogr[0..P) after; otherwise both stay on chip.
 note phase wall times (ns): 0 upload, 1 forward, 2 backward, 3 download, 4 loss, 5 on-chip Adam
 global ggtm long 6
+note Skip CPU ggloss on non-save/non-log training steps (saves ~1.04 ms/step of f64 flog on R=16384!)
+global ggnoloss uint 1
 fn ggpass full bool to f64
 t = monons
 if full
@@ -1173,7 +1654,10 @@ ggdown
 end
 t = monons
 put ggtm 3 sub t u
+l = 0.0f64
+if eq get ggnoloss 0 0
 l = ggloss
+end
 u = monons
 put ggtm 4 sub u t
 ret l
@@ -1187,15 +1671,15 @@ note clip and Adam on chip at step og[41], the f32 image of oadam: SQN partial s
 note norm, clip factor, schedule and bias corrections on the host in f64, then ADAM over P
 fn ggadam to void
 p = get og 8
-nc = div ggp5 512
-ggu 0 nc
+n4 = div ggp5 4
+ggu 0 n4
 ggpt 1 gga1 1
 ggpt 2 gga1 23
-ggrun 23 6 ggcd nc 64 1 1
+ggrun 23 6 256 1 1
 h = get gbmem 5
 so = get gga 23
 ss = 0.0f64
-for c ulong nc
+for c ulong 2048
 x = uint mapget h add so mul c 4 4
 ss = add ss f64 bitcast f32 x
 end
@@ -1220,8 +1704,9 @@ note touched on the chip. Clip factor cl, lr / bc1 and 1 / bc2 from ggadam.
 fn ggad24 p ulong cl f64 lb f64 ib f64 to void
 fz = ggfzn
 n = sub p fz
+n4 = div n 4
 o = mul fz 4
-ggu 0 n
+ggu 0 n4
 ggpt 1 add gga1 0 o
 ggpt 2 add gga1 21 o
 ggpt 3 add gga1 22 o
@@ -1229,7 +1714,12 @@ ggpt 4 add gga1 1 o
 ggu 10 ulong grf cl
 ggu 11 ulong grf lb
 ggu 12 ulong grf ib
-ggrun 24 13 ggcd n 64 1 1
+if ggbf_ok
+ggpt 7 add gga1 38 mul fz 2
+ggrun 81 16 ggcd n4 256 1 1
+ret
+end
+ggrun 24 13 ggcd n4 256 1 1
 end
 
 fn ggtms to void
@@ -2044,17 +2534,28 @@ en = un
 end
 ggopen
 ggupst
+put ggnofp 0 1
+if ggbf_ok
+ggf2b ggp5 gga1 0 gga1 38
+end
 while lt get og 41 en bound 999999
 s = get og 41
+s1 = add s 1
+need_l = or eq rem s1 ev 0 eq s1 en
+if need_l
+put ggnoloss 0 0
+else
+put ggnoloss 0 1
+end
 obatch s
 put og 10 0
 ls = ggpass false
+put ggnoloss 0 0
 t = monons
 ggadam
 put ggtm 5 sub monons t
-s1 = add s 1
 put og 41 s1
-if or eq rem s1 ev 0 eq s1 en
+if need_l
 ggdnst
 ocksave 2
 oputc 84
@@ -2086,6 +2587,10 @@ exit 2
 end
 ggopen
 ggupst
+put ggnofp 0 1
+if ggbf_ok
+ggf2b ggp5 gga1 0 gga1 38
+end
 ls = 0.0f64
 for i ulong nn
 s = get og 41
@@ -3155,6 +3660,122 @@ note with gpu/ in place of nogpu.om and no renamed main. It runs the GPU command
 note training commands in gb.om and returns true; any other word returns false and ocmd goes on to
 note the CPU commands. The inference interface is documented in docs/omegallm/CONTRACT-BF16.md;
 note command constants encode little-endian word bytes.
+note nvfp4 M N K ITERS: live physical GB10 SM121 OMMA.SF.16864.F32.E2M1.E2M1.UE4M3.4X Tensor Core
+note benchmark & bit-exact verification (slot 84, 500 TF hardware peak). Prints:
+note `NVFP4 M N K ITERS wall_ns tflops_x100 pct_peak_x100 expected got PASS/FAIL`.
+fn ggnvfp4_lch m ulong n ulong k ulong to void
+base = gkbase
+ggpt 0 base
+ggpt 1 add base 4096
+ggpt 2 add base 8192
+ggpt 3 add base 12288
+ggpt 4 add base 65536
+ggu 10 div k 64
+ggu 11 n
+ggrun 84 12 div n 128 div m 128 1
+end
+
+fn ggnvfp4_pr m ulong n ulong k ulong it ulong ns long to void
+got = f64 bitcast f32 uint mapget get gbmem 5 65536 4
+exp = f64 k
+flops = mul mul 2.0f64 f64 mul m n mul f64 k f64 it
+tf = div flops mul f64 ns 1000.0f64
+pct = div mul tf 100.0f64 500.0f64
+oputc 78
+oputc 86
+oputc 70
+oputc 80
+oputc 52
+oputc 32
+oputu m
+oputc 32
+oputu n
+oputc 32
+oputu k
+oputc 32
+oputu it
+oputc 32
+oputl ns
+oputc 32
+oputl long mul tf 100.0f64
+oputc 32
+oputl long mul pct 100.0f64
+oputc 32
+oputl long exp
+oputc 32
+oputl long got
+oputc 32
+if eq got exp
+oputc 80
+oputc 65
+oputc 83
+oputc 83
+oputc 10
+oflush
+r = nvstop
+ret
+end
+oputc 70
+oputc 65
+oputc 73
+oputc 76
+oputc 10
+oflush
+r = nvstop
+exit 51
+end
+
+fn ggnvfp4_fill to void
+h = get gbmem 5
+for i ulong 1024
+r = mapset h mul i 4 4 572662306
+r = mapset h add 4096 mul i 4 4 572662306
+r = mapset h add 8192 mul i 4 4 943208504
+r = mapset h add 12288 mul i 4 4 943208504
+end
+put gkinv 0 1
+end
+
+fn ggnvfp4 to void
+if ne oargc 6
+exit 2
+end
+m = oargu 2
+n = oargu 3
+k = oargu 4
+it = oargu 5
+if or eq m 0 eq n 0
+exit 2
+end
+if or eq k 0 eq it 0
+exit 2
+end
+if ne rem m 128 0
+exit 2
+end
+if ne rem n 128 0
+exit 2
+end
+if ne rem k 64 0
+exit 2
+end
+grset 256 32 64 2 128 2
+if not gropen add mul mul m n 4 1048576
+ggsetupfail
+end
+if not gbbopen
+ggdie 122
+end
+ggnvfp4_fill
+ggnvfp4_lch m n k
+t0 = monons
+for q ulong it
+ggnvfp4_lch m n k
+end
+ns = sub monons t0
+ggnvfp4_pr m n k it ns
+end
+
 fn ogcmd w ulong to bool
 if eq w 27696107117441895
 put bfdec 0 1
@@ -3258,6 +3879,10 @@ ret true
 end
 if eq w 28543748692731495
 ggfcache
+ret true
+end
+if eq w 225224062574
+ggnvfp4
 ret true
 end
 ret false
