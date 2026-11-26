@@ -16,10 +16,12 @@ fn gbhi v ulong to uint
 ret uint shr v 32
 end
 fn gbemit w uint to void
-for i ulong 4
-put gbcmd get gbused 0 uchar and shr w mul i 8 255
-put gbused 0 add get gbused 0 1
-end
+u = get gbused 0
+put gbcmd u uchar and w 255
+put gbcmd add u 1 uchar and shr w 8 255
+put gbcmd add u 2 uchar and shr w 16 255
+put gbcmd add u 3 uchar shr w 24
+put gbused 0 add u 4
 end
 fn gbmth subc uint method uint count uint to void
 gbemit or or or uint 536870912 shl count 16 shl subc 13 shr method 2

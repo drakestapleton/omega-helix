@@ -1562,7 +1562,7 @@ gradv 16 adv2
 grbot 30 top2
 gkexit
 end
-note 76 RMSB_BF16: packed-bf16 v, da, dh; f32 g, s, ws; chunk c <= 2 (4 floats/chunk -> max R67 <= 72)
+note 76 RMSB_BF16: packed-bf16 v, da, dh; f32 g, s, ws; args 14=ow_dh (1 skips dh load), 15=g_stride
 fn grrmsb_bf1_p1 u uint to void
 u2 = mul u 2
 gkimadi add 40 u2 add 32 u 65536 255
@@ -1582,6 +1582,8 @@ gkimadi add 44 u2 add 36 u 65536 255
 gkandi add 45 u2 add 36 u 4294901760
 gkimadi add 52 u2 add 56 u 65536 255
 gkandi add 53 u2 add 56 u 4294901760
+grfsel add 52 u2 add 52 u2 255 2
+grfsel add 53 u2 add 53 u2 255 2
 for q uint 2
 da = add add 40 u2 q
 vr = add add 44 u2 q
@@ -1643,6 +1645,8 @@ gkimadi 60 add 40 u 65536 255
 gkandi 61 add 40 u 4294901760
 gkimadi 62 add 48 u 65536 255
 gkandi 63 add 48 u 4294901760
+grfsel 62 62 255 2
+grfsel 63 63 255 2
 gkldg64o 56 12 mul u 256 false
 gkfmulf 56 58 56
 gkfmulf 58 58 60
@@ -1659,7 +1663,38 @@ grfsub 57 57 61
 gkfmulf 57 57 67
 grfadd 63 63 57
 gkf2fp add 48 u 63 62 0
-grrmsb_bf1_red 58 59 mul u 256
+off_lo = mul u 2048
+off_hi = add off_lo 128
+gklds32 60 22 off_lo 3 0
+gklds32 61 22 off_hi 3 0
+grfaddw 60 60 58
+grfadd 61 61 59
+gksts2 22 off_lo 60 false
+gksts 22 off_hi 61 true
+end
+fn grrmsb_bf1_fin nh uint d4 uint to void
+gksync
+gkisetp 1 23 255 5
+gkexitp 1
+grptr 18 11 2 d4
+gkimadw 18 9 8 18
+for u uint nh
+off_lo = mul u 2048
+off_hi = add off_lo 128
+wt = get gkpend 0
+put gkpend 0 0
+gklds32 58 22 off_lo 3 wt
+gklds32 59 22 off_hi 3 0
+for k uint 7
+ww = add k 1
+gklds32 60 22 add off_lo mul ww 256 3 0
+gklds32 61 22 add off_hi mul ww 256 3 0
+grfaddw 58 58 60
+grfadd 59 59 61
+end
+gkstg64o 18 58 mul u 256 false
+end
+gkexit
 end
 fn grrmsb_bf1 to void
 d = uint get grd 2
@@ -1667,22 +1702,39 @@ d2 = mul d 2
 d4 = mul d 4
 nh = div d 64
 grrrow256
-gkimadi 22 0 8 255
 gkshr 23 0 5
 gkmovi 24 grf div 1.0f64 f64 d
-grptr 20 5 8 4
-gkldg 67 20 0 false
+gkldc 20 grarg 14 false
+gkisetp 2 20 255 2
 if le nh 8
-grrptr 10 1 d2
+gkimadi 22 23 256 255
+gkimadi 22 9 4 22
+gkldc 25 grarg 15 false
 gkldc64 12 grarg 4
 gkimadw 12 9 8 12
+gkmovz 58
+for u uint nh
+off_lo = mul u 2048
+off_hi = add off_lo 128
+gksts2 22 off_lo 58 ne u 0
+if eq u sub nh 1
+gksts 22 off_hi 58 true
+else
+gksts2 22 off_hi 58 true
+end
+end
+top = div get gkat 0 16
+gkshr 8 4 5
+grptr 20 5 8 4
+gkldg 67 20 0 false
+grrptr 10 1 d2
 grrptr 14 7 d2
 grrptr 16 9 d2
-grptr 18 11 2 d4
-gkimadw 18 9 8 18
 grldw 32 14 nh true
 grldw 40 10 nh false
-grldw 48 16 nh false
+for u uint nh
+gkldgp add 48 u 16 mul u 128 true 2
+end
 gkmovz 64
 for u uint nh
 grrmsb_bf1_1p_u u
@@ -1695,9 +1747,15 @@ for u uint nh
 grrmsb_bf1_2p_u u
 end
 grstw 16 48 nh
-gkexit
+gkiadd 4 4 25
+gkisetp 0 4 5 1
+gkbra 0 ulong top
+grrmsb_bf1_fin nh d4
 ret
 end
+gkimadi 22 0 8 255
+grptr 20 5 8 4
+gkldg 67 20 0 false
 c = uint 2
 if ne rem nh 2 0
 c = 1
@@ -1735,7 +1793,9 @@ gkimadw 18 9 8 18
 top2 = grtop 30 it
 grldw 32 14 c true
 grldw 36 10 c false
-grldw 56 16 c false
+for u uint c
+gkldgp add 56 u 16 mul u 128 true 2
+end
 grrmsb_bf1_ldg c
 for u uint c
 grrmsb_bf1_p2 u
@@ -2339,14 +2399,18 @@ gkstg64o 10 16 0 false
 gkstg64o 14 18 0 true
 gkexit
 end
-note 87 CE_BF16: 2-pass online softmax CE (256 thr/CTA = 8 warps/CTA!) writing packed dlogits_bf16
-note directly to arg 8-9 (eliminates 3rd 268MB read pass, 268MB f32 write, and separate F2B launch!).
-note Args: 0 R*32, 2-3 logits_f32, 4-5 y, 6-7 stats, 8-9 dlogits_bf16.
+note 87 CE_BF16: 2-pass online softmax CE (256 thr/CTA = 8 warps/CTA!) reading packed logits_bf16
+note from arg 2-3 and writing packed dlogits_bf16 to arg 8-9 (0 SHFLs, coalesced 128B STG!).
+note Args: 0 R*32, 2-3 logits_bf16, 4-5 y, 6-7 stats, 8-9 dlogits_bf16.
 fn grce_bf1_p1 to void
-grldw 32 10 8 true
-grfmax 64 32 33
+grldw 32 10 4 true
+for u uint 4
+gkimadi add 48 mul u 2 add 32 u 65536 255
+gkandi add 49 mul u 2 add 32 u 4294901760
+end
+grfmax 64 48 49
 for u uint 6
-grfmax 64 64 add 34 u
+grfmax 64 64 add 50 u
 end
 grwred 1 0
 grfmax 65 43 64
@@ -2357,48 +2421,50 @@ gkfmulf 66 66 40
 grfadd 43 65 255
 gkfmulf 65 43 29
 for u uint 8
-gkffmaf add 32 u add 32 u 28 65
+gkffmaf add 48 u add 48 u 28 65
 end
 for u uint 8
-grmufu2 add 32 u add 32 u 2048
+grmufu2 add 48 u add 48 u 2048
 end
 for u uint 8
-grfadd 66 66 add 32 u
+grfadd 66 66 add 48 u
 end
 end
 fn grce_bf1_p2 to void
-grldw 32 10 8 true
-for u uint 8
-gkffmaf add 32 u add 32 u 28 65
+grldw 32 10 4 true
+for u uint 4
+gkimadi add 48 mul u 2 add 32 u 65536 255
+gkandi add 49 mul u 2 add 32 u 4294901760
 end
 for u uint 8
-grmufu2 add 32 u add 32 u 2048
+gkffmaf add 48 u add 48 u 28 65
 end
 for u uint 8
-grfmul2 add 32 u add 32 u 67
+grmufu2 add 48 u add 48 u 2048
 end
-gkmovi 42 32
 for u uint 8
+grfmul2 add 48 u add 48 u 67
+end
+gkmovi 42 64
+for u uint 4
+lo = add 48 mul u 2
+hi = add 49 mul u 2
 gkisetp 1 41 20 2
-grfsub 40 add 32 u 25
-grfsel add 32 u 40 add 32 u 1
+grfsub 40 lo 25
+grfsel lo 40 lo 1
+gkiadd 40 41 26
+gkisetp 1 40 20 2
+grfsub 40 hi 25
+grfsel hi 40 hi 1
 gkiadd 41 41 42
 end
-for u uint 8
-grshfl 40 add 32 u 1
-w = get gkpend 0
-put gkpend 0 0
-gkf2fp add 48 u 40 add 32 u w
+for u uint 4
+gkf2fp add 32 u add 49 mul u 2 add 48 mul u 2 0
 end
-gkandi 40 9 1
-gkisetp 1 40 255 2
-for u uint 8
-gkstgp 18 add 48 u mul u 64 ne u 0 1
-end
+grstw 18 32 4
 end
 fn grce_bf1 to void
 v = uint get grd 0
-v4 = mul v 4
 v2 = mul v 2
 it = div v 256
 sc = div 1.0f64 f64 mul get grd 1 get grd 5
@@ -2408,29 +2474,33 @@ gkmovi 29 grf neg 1.4426950408889634f64
 gkmovi 25 grf sc
 grptr 12 3 8 4
 gkldg 20 12 0 false
-grptr 14 1 8 v4
-gkimadw 14 20 4 14
-gkldg 68 14 0 false
-grrptr 10 1 v4
+grptr 14 1 8 v2
+gkandi 40 20 4294967294
+gkimadw 14 40 2 14
+gkldg 41 14 0 false
+gkimadi 68 41 65536 255
+gkandi 42 41 4294901760
+gkandi 40 20 1
+gkisetp 1 40 255 5
+grfsel 68 42 68 1
+grrptr 10 1 v2
 gkmovi 43 grf -1.0e30f64
 gkmovz 66
 top = grtop 30 it
 grce_bf1_p1
-gradv 10 1024
+gradv 10 512
 grbot 30 top
 grfadd 64 66 255
 grwred 0 0
 grmufu 67 64 4096
 gkfmulf 67 67 25
 gkfmulf 65 43 29
-grrptr 10 1 v4
-grptr 18 7 8 v2
-gkshr 40 9 1
-gkimadw 18 40 4 18
-gkimadi 41 9 1 255
+grrptr 10 1 v2
+grrptr 18 7 v2
+gkimadi 41 9 2 255
 top2 = grtop 30 it
 grce_bf1_p2
-gradv 10 1024
+gradv 10 512
 gradv 18 512
 grbot 30 top2
 gkandi 21 20 31
@@ -2458,7 +2528,12 @@ ret false
 end
 put gkthr 76 256
 put gkgpr 76 72
-put gksm 76 2048
+nh76 = uint div get grd 2 64
+sm76 = uint 2048
+if le nh76 8
+sm76 = mul nh76 2048
+end
+put gksm 76 sm76
 e = div get grd 2 get grd 3
 if or eq e 32 eq e 64
 gkslot 77
