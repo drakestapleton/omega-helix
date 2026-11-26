@@ -1418,9 +1418,9 @@ put gn4o 10 k
 ret c
 end
 
-note Deterministic value in {-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5} (exact in BF16 and E2M1 with scale 0.25)
+note Deterministic value in {-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5} (exact in BF16 and E2M1 with scale 0.25; coprime strides so every row/col differs)
 fn gn4v i ulong j ulong salt ulong to f64
-s = rem add add mul i 7 mul j 13 salt 7
+s = rem add add mul i 5 mul j 13 salt 7
 ret mul sub f64 s 3.0f64 0.5f64
 end
 
