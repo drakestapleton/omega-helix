@@ -616,10 +616,23 @@ ggcmp2
 end
 
 note gtrainb CK TRAIN UNTIL EVERY [FREEZE_LAYERS]: gtrainf with gkbf 1 (geval stays f32); the frozen
-note core (gg.om ggfz) is the same on BF16: the frozen layers launch no BF16 GEMM at all
+note core (gg.om ggfz) is the same on BF16: the frozen layers launch no BF16 GEMM at all.
+note When OLLM_NVFP4=1 is set in the environment, routes eligible 128x128x64 GEMMs through NVFP4.
 fn gbtrain to void
+if ggnv4_env
+ggsnv4 1
+end
 put gkbf 0 1
 ggtrainf
+ggsnv4 0
+end
+
+note gtrain4 CK TRAIN UNTIL EVERY [FREEZE_LAYERS]: gtrainb with NVFP4 (OMMA.SF.16864) enabled
+fn gbtrain4 to void
+ggsnv4 1
+put gkbf 0 1
+ggtrainf
+ggsnv4 0
 end
 
 note gprofb: gprof with gkbf 1
@@ -1366,4 +1379,511 @@ oputc 49
 oputc 10
 oflush
 ggc2pr lg l0 sub t1 t0
+end
+
+note NVFP4 standalone K-looped 128x128 GEMM parity verifier (gnv4gemm M N K) and full-step verifier (gnv4cmp)
+global gn4o ulong 12
+global gn4m f64 10
+global gn4s f64 4
+
+fn gn4align x ulong to ulong
+ret mul div add x 255 256 256
+end
+
+fn gn4p idx ulong to ulong
+ret add gkbase get gn4o idx
+end
+
+fn gn4plan m ulong n ulong k ulong to ulong
+c = ulong 0
+put gn4o 0 c
+c = add c gn4align mul mul m k 2
+put gn4o 1 c
+c = add c gn4align mul mul n k 2
+put gn4o 2 c
+c = add c gn4align div mul m k 2
+put gn4o 3 c
+c = add c gn4align div mul m k 16
+put gn4o 4 c
+c = add c gn4align div mul n k 2
+put gn4o 5 c
+c = add c gn4align div mul n k 16
+put gn4o 6 c
+c = add c gn4align mul mul m n 4
+put gn4o 7 c
+c = add c gn4align mul mul m n 2
+put gn4o 8 m
+put gn4o 9 n
+put gn4o 10 k
+ret c
+end
+
+note Deterministic value in {-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5} (exact in BF16 and E2M1 with scale 0.25)
+fn gn4v i ulong j ulong salt ulong to f64
+s = rem add add mul i 7 mul j 13 salt 7
+ret mul sub f64 s 3.0f64 0.5f64
+end
+
+fn gn4bf16 v f64 to uint
+u = bitcast uint f32 v
+ret shr u 16
+end
+
+fn gn4wr_rm1 ro ulong r ulong c2 ulong salt ulong to void
+for cc ulong c2
+c = mul cc 2
+lo = gn4bf16 gn4v r c salt
+hi = gn4bf16 gn4v r add c 1 salt
+gbput add ro mul cc 4 or lo shl hi 16
+end
+end
+
+fn gn4wr_rm base ulong rows ulong cols ulong salt ulong to void
+c2 = div cols 2
+for r ulong rows
+gn4wr_rm1 add base mul mul r cols 2 r c2 salt
+end
+end
+
+fn gn4wr_tr1 ro ulong r ulong c2 ulong salt ulong to void
+for cc ulong c2
+c = mul cc 2
+lo = gn4bf16 gn4v c r salt
+hi = gn4bf16 gn4v add c 1 r salt
+gbput add ro mul cc 4 or lo shl hi 16
+end
+end
+
+fn gn4wr_tr base ulong rows ulong cols ulong salt ulong to void
+c2 = div cols 2
+for r ulong rows
+gn4wr_tr1 add base mul mul r cols 2 r c2 salt
+end
+end
+
+fn gn4ref r ulong c ulong k ulong sc f64 to f64
+s = 0.0f64
+for kk ulong k
+s = add s mul gn4v r kk 1 gn4v c kk 5
+end
+ret mul s sc
+end
+
+fn gn4rdf32 base ulong r ulong c ulong n ulong to f64
+o = add base mul add mul r n c 4
+ret f64 bitcast f32 gbw o
+end
+
+fn gn4rdbf base ulong r ulong c ulong n ulong to f64
+idx = add mul r n c
+w = gbw add base mul div idx 2 4
+h = and w 65535
+if eq rem idx 2 1
+h = shr w 16
+end
+ret f64 bitcast f32 shl h 16
+end
+
+fn gn4nf_f32r ro ulong n ulong to ulong
+nf = ulong 0
+for c ulong n
+v = f64 bitcast f32 gbw add ro mul c 4
+if not ggfin v
+nf = add nf 1
+end
+end
+ret nf
+end
+
+fn gn4chk_nf_f32 base ulong m ulong n ulong to ulong
+nf = ulong 0
+for r ulong m
+nf = add nf gn4nf_f32r add base mul mul r n 4 n
+end
+ret nf
+end
+
+fn gn4nf_bfr ro ulong n2 ulong to ulong
+nf = ulong 0
+for cc ulong n2
+w = gbw add ro mul cc 4
+v0 = f64 bitcast f32 shl and w 65535 16
+v1 = f64 bitcast f32 shl shr w 16 16
+if not ggfin v0
+nf = add nf 1
+end
+if not ggfin v1
+nf = add nf 1
+end
+end
+ret nf
+end
+
+fn gn4chk_nf_bf base ulong m ulong n ulong to ulong
+nf = ulong 0
+n2 = div n 2
+for r ulong m
+nf = add nf gn4nf_bfr add base mul mul r n 2 n2
+end
+ret nf
+end
+
+fn gn4acc g f64 rf f64 to void
+put gn4s 0 add get gn4s 0 mul g rf
+put gn4s 1 add get gn4s 1 mul g g
+put gn4s 2 add get gn4s 2 mul rf rf
+df = sub g rf
+put gn4s 3 add get gn4s 3 mul df df
+end
+
+fn gn4wr_rm1s ro ulong r ulong c2 ulong sc f64 to void
+for cc ulong c2
+c = mul cc 2
+lo = gn4bf16 mul gn4v r c 1 sc
+hi = gn4bf16 mul gn4v r add c 1 1 sc
+gbput add ro mul cc 4 or lo shl hi 16
+end
+end
+
+fn gn4wr_rms base ulong rows ulong cols ulong sc f64 to void
+c2 = div cols 2
+for r ulong rows
+gn4wr_rm1s add base mul mul r cols 2 r c2 sc
+end
+end
+
+note Non-power-of-2 arbitrary float in [-1.73, +1.73] (exercises non-zero UE4M3 mantissas + E2M1 rounding)
+fn gn4va i ulong j ulong salt ulong to f64
+s = rem add add mul i 11 mul j 17 salt 23
+ret mul sub f64 s 11.0f64 0.157f64
+end
+
+fn gn4wr_rma1 ro ulong r ulong c2 ulong salt ulong sc f64 to void
+for cc ulong c2
+c = mul cc 2
+lo = gn4bf16 mul gn4va r c salt sc
+hi = gn4bf16 mul gn4va r add c 1 salt sc
+gbput add ro mul cc 4 or lo shl hi 16
+end
+end
+
+fn gn4wr_rma base ulong rows ulong cols ulong salt ulong sc f64 to void
+c2 = div cols 2
+for r ulong rows
+gn4wr_rma1 add base mul mul r cols 2 r c2 salt sc
+end
+end
+
+fn gn4refa r ulong c ulong k ulong sc f64 to f64
+s = 0.0f64
+for kk ulong k
+s = add s mul gn4va r kk 3 mul gn4va c kk 9 sc
+end
+ret s
+end
+
+fn gn4stat1 s ulong idx ulong bf bool to void
+m = get gn4o 8
+n = get gn4o 9
+k = get gn4o 10
+r = rem add mul s 37 13 m
+c = rem add mul s 53 29 n
+if eq s 0
+r = 0
+c = 0
+end
+if eq s 63
+r = sub m 1
+c = sub n 1
+end
+sc = 1.0f64
+if eq idx 2
+sc = 2.0f64
+end
+if eq idx 3
+sc = 0.000244140625f64
+end
+g = 0.0f64
+if bf
+g = gn4rdbf get gn4o 7 r c n
+else
+g = gn4rdf32 get gn4o 6 r c n
+end
+rf = 0.0f64
+if eq idx 4
+rf = gn4refa r c k 0.05f64
+else
+rf = gn4ref r c k sc
+end
+gn4acc g rf
+end
+
+fn gn4stat idx ulong bf bool to void
+for j ulong 4
+put gn4s j 0.0f64
+end
+for s ulong 64
+gn4stat1 s idx bf
+end
+cs = gbcsn get gn4s 0 get gn4s 1 get gn4s 2
+rl = gbrat fsqrt get gn4s 3 fsqrt get gn4s 2
+put gn4m mul idx 2 cs
+put gn4m add mul idx 2 1 rl
+end
+
+fn gn4gemm_pr m ulong n ulong k ulong nf ulong tf long to void
+ok = eq nf 0
+ok = and ok ge get gn4m 0 0.98f64
+ok = and ok ge get gn4m 2 0.98f64
+ok = and ok ge get gn4m 4 0.98f64
+ok = and ok ge get gn4m 6 0.98f64
+ok = and ok ge get gn4m 8 0.95f64
+oputc 71
+oputc 78
+oputc 86
+oputc 52
+oputc 71
+oputc 69
+oputc 77
+oputc 77
+oputc 32
+oputu m
+oputc 32
+oputu n
+oputc 32
+oputu k
+for j ulong 10
+oputc 32
+oputl rmic ggclp get gn4m j
+end
+oputc 32
+oputu nf
+oputc 32
+oputl tf
+oputc 32
+if ok
+oputc 80
+oputc 65
+oputc 83
+oputc 83
+oputc 10
+oflush
+ret
+end
+oputc 70
+oputc 65
+oputc 73
+oputc 76
+oputc 10
+oflush
+exit 52
+end
+
+fn gn4gemm_run m ulong n ulong k ulong fl uint al f64 to void
+ggmm4_ab gn4p 2 gn4p 3 gn4p 4 gn4p 5 k
+if ne and fl 2 0
+gkopc gn4p 7 uint mul n 2 2 0 0 f32 al
+else
+gkopc gn4p 6 uint mul n 4 4 0 0 f32 al
+end
+ggmm4_lch m n k fl
+end
+
+fn gn4gemm_bench m ulong n ulong k ulong nf ulong to void
+it = ulong 1
+if ge mul mul m n k 67108864
+it = 5
+end
+t0 = monons
+for q ulong it
+gn4gemm_run m n k 2 1.0f64
+end
+ns = sub monons t0
+tf = long 0
+if gt ns 0
+flops = mul mul 2.0f64 f64 mul m n mul f64 k f64 it
+tf = long div flops mul f64 ns 10.0f64
+end
+r = nvstop
+gn4gemm_pr m n k nf tf
+end
+
+fn gnv4gemm to void
+if ne oargc 5
+exit 2
+end
+m = oargu 2
+n = oargu 3
+k = oargu 4
+if or eq m 0 eq n 0
+exit 2
+end
+if eq k 0
+exit 2
+end
+if or gt m 8192 gt n 8192
+exit 2
+end
+if gt k 16384
+exit 2
+end
+if gt mul m n 67108864
+exit 2
+end
+if or ne rem m 128 0 ne rem n 128 0
+exit 2
+end
+if ne rem k 64 0
+exit 2
+end
+asz = gn4plan m n k
+grset 256 32 64 2 128 2
+if not gropen asz
+ggsetupfail
+end
+gn4wr_rm get gn4o 0 m k 1
+gn4wr_tr get gn4o 1 k n 5
+put gkinv 0 1
+ggqnv4_p 1.0f64
+ggqnv4 gn4p 0 gn4p 2 gn4p 3 m k false
+ggqnv4 gn4p 1 gn4p 4 gn4p 5 n k true
+gn4gemm_run m n k 0 1.0f64
+nf = gn4chk_nf_f32 get gn4o 6 m n
+gn4stat 0 false
+gn4wr_rm get gn4o 1 n k 5
+put gkinv 0 1
+ggqnv4 gn4p 1 gn4p 4 gn4p 5 n k false
+gn4gemm_run m n k 2 1.0f64
+nf = add nf gn4chk_nf_bf get gn4o 7 m n
+gn4stat 1 true
+gn4gemm_run m n k 3 1.0f64
+nf = add nf gn4chk_nf_bf get gn4o 7 m n
+gn4stat 2 true
+gn4wr_rms get gn4o 0 m k 0.000244140625f64
+put gkinv 0 1
+ggqnv4_p 4096.0f64
+ggqnv4 gn4p 0 gn4p 2 gn4p 3 m k false
+ggqnv4_p 1.0f64
+gn4gemm_run m n k 0 0.000244140625f64
+nf = add nf gn4chk_nf_f32 get gn4o 6 m n
+gn4stat 3 false
+gn4wr_rma get gn4o 0 m k 3 1.0f64
+gn4wr_rma get gn4o 1 n k 9 0.05f64
+put gkinv 0 1
+ggqnv4_p 1.0f64
+ggqnv4 gn4p 0 gn4p 2 gn4p 3 m k false
+ggqnv4_p 16.0f64
+ggqnv4 gn4p 1 gn4p 4 gn4p 5 n k false
+ggqnv4_p 1.0f64
+gn4gemm_run m n k 0 0.0625f64
+nf = add nf gn4chk_nf_f32 get gn4o 6 m n
+gn4stat 4 false
+gn4gemm_bench m n k nf
+end
+
+fn gn4cmp_nf p ulong to ulong
+nf = ulong 0
+for q ulong ocn p
+i0 = mul q OCH
+for j ulong sub oce q p i0
+if not ggfin omvg add i0 j
+nf = add nf 1
+end
+end
+end
+ret nf
+end
+
+fn gnv4cmp_pr p ulong nf ulong ns long to void
+cs = get gn4m 0
+dl = get gn4m 1
+l0 = get gn4m 2
+lg = get gn4m 3
+ok = and eq nf 0 and ggfin lg and ge cs 0.90f64 lt dl 0.15f64
+oputc 71
+oputc 78
+oputc 86
+oputc 52
+oputc 67
+oputc 77
+oputc 80
+oputc 32
+oputu p
+oputc 32
+oputl rmic ggclp cs
+oputc 32
+oputl rmic ggclp dl
+oputc 32
+oputu nf
+oputc 32
+oputl rmic ggclp l0
+oputc 32
+oputl rmic ggclp lg
+oputc 32
+oputl ns
+oputc 32
+if ok
+oputc 80
+oputc 65
+oputc 83
+oputc 83
+oputc 10
+oflush
+ret
+end
+oputc 70
+oputc 65
+oputc 73
+oputc 76
+oputc 10
+oflush
+exit 53
+end
+
+note gnv4cmp CK DATA S: full-step forward+backward NVFP4 vs CPU f64 K0 parity verifier
+fn gnv4cmp to void
+if ne oargc 5
+exit 2
+end
+ockloop 2
+odopen 3
+obatch oargu 4
+p = get og 8
+put gkbf 0 1
+put gkbck 0 0
+ggsnv4 1
+ggsnofp 1
+ggopen
+if not ggnv4_ok
+ggsnv4 0
+ggsnofp 0
+r = nvstop
+put gn4m 0 0.0f64
+put gn4m 1 1.0f64
+put gn4m 2 0.0f64
+put gn4m 3 0.0f64
+gnv4cmp_pr p 1 0
+end
+ggupw
+ggf2b ggp5 gga1 0 gga1 38
+t0 = monons
+lg = ggpass false
+t1 = monons
+ggdown
+ggstash p 0
+ggsnv4 0
+ggsnofp 0
+put og 10 0
+put ogkm 0 0
+l0 = ograd
+ggstash p p
+nf = gn4cmp_nf p
+cs = gbcos p
+dl = gbrat gbabs sub lg l0 gbabs l0
+r = nvstop
+put gn4m 0 cs
+put gn4m 1 dl
+put gn4m 2 l0
+put gn4m 3 lg
+gnv4cmp_pr p nf sub t1 t0
 end

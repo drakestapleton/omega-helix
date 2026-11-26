@@ -1859,6 +1859,205 @@ gkgemmh3_pass
 end
 gkepih128 false 0 true
 end
+note =========================================================================
+note Native NVFP4 128x128x64 OMMA.SF.16864 Double-Buffered GEMMs (slots 90..95):
+note   C = alpha * (A_nv4 @ B_nv4^T) (+ C if beta), M,N % 128 == 0, K % 64 == 0.
+note   256 threads (8 warps, 4x2 warp grid), 128 GPRs (max R125), 18432 B SMEM (2 x 9216 B).
+note   SMEM per stage (9216 B): +0 A_nv4 (4096 B), +4096 B_nv4 (4096 B),
+note                            +8192 Sa_nv4 (512 B), +8704 Sb_nv4 (512 B).
+note   Slots: 90(b0,e0,bf), 91(b1,e0,bf), 92(b0,e0,f32), 93(b1,e0,f32),
+note          94(b0,e1,bf), 95(b0,e2,bf).
+note =========================================================================
+fn gkommasf2 rd uint ra uint rb uint rsa uint rsb uint wt uint to void
+w0 = or or 29823 shl rd 16 shl ra 24
+w1 = or or 1879048192 rb or shl rsa 8 shl rsb 20
+w2 = or 278016 rd
+gkq w0 w1 w2 gkcw 2 7 7 wt
+end
+fn gknv4_ld p uint to void
+gkldgq1 96 112 false p
+gkldgq1 100 114 true p
+gkldgp 104 116 0 true p
+end
+fn gknv4_sts to void
+for i uint 4
+gksts2 118 mul i 4 add 96 i ne i 0
+end
+for i uint 4
+gksts2 118 add 4096 mul i 4 add 100 i true
+end
+gksts 119 0 104 true
+end
+fn gknv4_adv to void
+gkmovi 8 32
+gkmovi 9 4
+gkimadw1 112 8 1 112
+gkimadw1 114 8 1 114
+gkimadw 116 9 1 116
+end
+fn gknv4_lds0 to void
+gklds32 80 120 0 3 0
+gklds32 81 120 256 3 0
+gklds32 82 120 16 3 0
+gklds32 83 120 272 3 0
+gklds32 84 120 512 3 0
+gklds32 85 120 768 3 0
+gklds32 86 120 528 3 0
+gklds32 87 120 784 3 0
+gklds32 105 122 0 3 0
+gklds32 106 122 64 3 0
+for nj uint 4
+off = mul nj 256
+gklds32 add 88 mul nj 2 121 off 3 0
+gklds32 add 89 mul nj 2 121 add off 16 3 0
+gklds32 add 107 nj 123 mul nj 32 3 0
+end
+end
+fn gknv4_lds1 to void
+for nj uint 4
+off = add 1024 mul nj 256
+gklds32 add 8 mul nj 2 121 off 4 0
+gklds32 add 9 mul nj 2 121 add off 16 4 0
+end
+for nj uint 4
+gklds32 add 107 nj 123 add 128 mul nj 32 4 0
+end
+end
+fn gknv4_mma hi uint to void
+w = uint 8
+bb = uint 88
+if eq hi 1
+w = 16
+bb = 8
+end
+n0 = add 16 mul hi 16
+for nj uint 4
+gkommasf2 add n0 mul nj 4 80 add bb mul nj 2 105 add 107 nj w
+w = 0
+end
+for nj uint 4
+gkommasf2 add add n0 32 mul nj 4 84 add bb mul nj 2 106 add 107 nj 0
+end
+end
+fn gkgemmnv4_128 beta bool ep uint out_bf bool to void
+put gkpend 0 0
+gkldc 1 892 false
+gks2r 0 33 true
+gks2r 2 37 true
+gks2r 3 38 true
+gks2r 5 39 true
+gkq 4278482860 27392 134220288 or gkcw 4 2 7 get gkpend 0 8192
+put gkpend 0 4
+gkldc 8 988 false
+gkldc 9 992 true
+gkimadh 6 5 8 255
+gkimad 7 6 9 5
+gkswiz
+note Setup A_nv4 ptr (R112:113) and B_nv4 ptr (R114:115)
+gkshr 11 0 1
+gkandi 12 0 1
+gkimadi 12 12 16 255
+gkimadi 13 3 128 11
+gkldc 14 912 false
+gkldc 15 920 true
+gkimad 13 13 14 12
+gkimad 13 6 15 13
+gkldc64 10 896
+gkimadw 112 13 1 10
+gkimadi 13 2 128 11
+gkldc 14 944 false
+gkldc 15 952 true
+gkimad 13 13 14 12
+gkimad 13 6 15 13
+gkldc64 10 928
+gkimadw 114 13 1 10
+note Setup S_nv4 ptr (R116:117): Sa for tid < 128, Sb for tid >= 128
+gkandi 11 0 127
+gkshr 10 0 7
+gkisetp 0 10 255 5
+p_sb = grbfwd_mk 0
+gkimadi 13 3 128 11
+gkldc 14 916 false
+gkldc 15 924 true
+gkimad 13 13 14 255
+gkimad 13 6 15 13
+gkldc64 10 904
+gkimadw 116 13 1 10
+p_sd = grbfwd_mk 7
+grbfwd_fx 0 p_sb
+gkimadi 13 2 128 11
+gkldc 14 948 false
+gkldc 15 956 true
+gkimad 13 13 14 255
+gkimad 13 6 15 13
+gkldc64 10 936
+gkimadw 116 13 1 10
+grbfwd_fx 7 p_sd
+note SMEM STS bases: R118 = tid*16, R119 = 8192 + tid*4
+gkimadi 118 0 16 255
+gkmovi 10 8192
+gkimadi 119 0 4 10
+note SMEM LDS bases: R120 A, R121 B, R122 Sa, R123 Sb
+gkbt 120 6 3 1024 true
+gkbt 120 2 7 32 false
+gkbt 120 0 3 4 false
+gkmovi 121 4096
+gkbt 121 5 1 2048 false
+gkbt 121 2 7 32 false
+gkbt 121 0 3 4 false
+gkmovi 122 8192
+gkbt 122 6 3 128 false
+gkbt 122 2 7 4 false
+gkbt 122 0 1 32 false
+gkmovi 123 8704
+gkbt 123 5 1 256 false
+gkbt 123 2 7 4 false
+gkldc 124 984 false
+gkmovi 4 4294967295
+for i uint 64
+gkmovz add 16 i
+end
+put gkpend 0 63
+gknv4_ld 7
+gknv4_sts
+gksync
+gknv4_adv
+gkmovi 125 9216
+gkiadd 118 118 125
+gkiadd 119 119 125
+top = div get gkat 0 16
+gkisge 1 124 2
+gknv4_lds0
+gknv4_ld 1
+gknv4_mma 0
+gknv4_lds1
+gknv4_mma 1
+gknv4_sts
+gksync
+gknv4_adv
+gkiadd 120 120 125
+gkiadd 121 121 125
+gkiadd 122 122 125
+gkiadd 123 123 125
+gkimad 125 125 4 255
+gkiadd 118 118 125
+gkiadd 119 119 125
+gkiadd 124 124 4
+gkisge 0 124 1
+gkbra 0 ulong top
+gkepih128 beta ep out_bf
+end
+fn gkemitnv4_128 id uint bt bool ep uint out_bf bool to bool
+gkslot id
+gkgemmnv4_128 bt ep out_bf
+put gkgpr id 128
+put gksm id 18432
+if gt get gkat 0 mul ulong add id 1 16384
+ret false
+end
+put gkthr id 256
+ret true
+end
 fn gkallh to bool
 if not gkemith128 67 1 0 false 0 true
 ret false
@@ -1892,7 +2091,25 @@ if gt get gkat 0 mul ulong 86 16384
 ret false
 end
 put gkthr 85 256
-ret gkemith128 86 1 1 false 0 false
+if not gkemith128 86 1 1 false 0 false
+ret false
+end
+if not gkemitnv4_128 90 false 0 true
+ret false
+end
+if not gkemitnv4_128 91 true 0 true
+ret false
+end
+if not gkemitnv4_128 92 false 0 false
+ret false
+end
+if not gkemitnv4_128 93 true 0 false
+ret false
+end
+if not gkemitnv4_128 94 false 1 true
+ret false
+end
+ret gkemitnv4_128 95 false 2 true
 end
 note Kernel table: ids 0..7 = 32x32 gemm (one 16 KiB slot each), ids 40, 42, ..., 54 = 64x64 gemm
 note (40 + 2 (ma + 2 mb + 4 beta), two slots each: the pipelined K loop does not fit in one). Fused
