@@ -28,34 +28,40 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def _resolve_cpu_bin() -> Path:
+    env_bin = os.environ.get("OLLM_BIN")
+    if env_bin:
+        p = Path(env_bin)
+        if p.is_file() and os.access(p, os.X_OK):
+            return p
     sys_name = platform.system()
     mach = platform.machine()
     if sys_name == "Darwin":
-        cands = [
-            ROOT / "build" / "verify-om" / "ollm-macos",
-            ROOT / "build" / "ollm-macos",
-        ]
+        name = "ollm-macos"
+        target = "macos"
     elif mach in ("x86_64", "amd64"):
-        cands = [
-            ROOT / "build" / "verify-om" / "ollm-x86linux",
-            ROOT / "build" / "ollm-x86linux",
-        ]
+        name = "ollm-x86linux"
+        target = "x86linux"
     else:
-        cands = [
-            ROOT / "build" / "verify-om" / "ollm",
-            ROOT / "build" / "ollm",
-        ]
+        name = "ollm"
+        target = "aarch64"
+    cands = [
+        ROOT / "build" / "verify-om" / name,
+        ROOT / "build" / name,
+    ]
+    out_env = os.environ.get("OUT")
+    if out_env:
+        cands.insert(0, Path(out_env) / name)
     for c in cands:
         if c.is_file() and os.access(c, os.X_OK):
             return c
-    target = "macos" if sys_name == "Darwin" else ("x86linux" if mach in ("x86_64", "amd64") else "aarch64")
+    out_dir = Path(out_env) if out_env else ROOT / "build"
     subprocess.run(
         ["sh", str(ROOT / "scripts" / "build.sh")],
         cwd=str(ROOT),
-        env={**os.environ, "TARGET": target},
+        env={**os.environ, "TARGET": target, "OUT": str(out_dir)},
         check=True,
     )
-    return cands[-1]
+    return out_dir / name
 
 
 def _resolve_gb10_bin() -> Path | None:

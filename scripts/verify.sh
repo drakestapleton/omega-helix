@@ -97,7 +97,7 @@ IX_BIN="$OUT/ollm-interchange" UNIV_BIN="$OUT/ollm-univ" LEGACY_BIN="$BIN" \
   python3 -W error::ResourceWarning "$here/tests/test_interchange.py" -v
 
 echo "--- 3d. Adaptive looped core (per-token exit & inter-pass messages) suite ---"
-OLLM_BIN="$BIN" python3 "$here/tests/test_adaptive_loop.py"
+OLLM_BIN="$BIN" python3 -W error::ResourceWarning "$here/tests/test_adaptive_loop.py"
 
 echo "--- 3e. 8-Pillar Post-Tensor Runtime (SM121 SASS/Megakernel, Reversible, Rings/Arboris, Evo-JIT, Closed-Form SP, OMG) ---"
 python3 -W error::ResourceWarning "$here/tests/test_gpu_ternary_sass.py"
@@ -109,6 +109,11 @@ python3 -W error::ResourceWarning "$here/tests/test_split_bypass.py"
 python3 -W error::ResourceWarning "$here/tests/test_evo_jit.py"
 python3 -W error::ResourceWarning "$here/tests/test_sp_closed_form.py"
 python3 -W error::ResourceWarning "$here/tests/test_omg_graph.py"
+
+echo "--- 3f. Spiral-2048 Razor MoE, Full-APU Co-Execution Fabric & GB10 Scaling Suites ---"
+OLLM_BIN="$BIN" python3 -W error::ResourceWarning "$here/tests/test_spiral_weave.py" -v
+OLLM_BIN="$BIN" python3 -W error::ResourceWarning "$here/tests/test_apu_weave.py" -v
+OLLM_BIN="$BIN" python3 -W error::ResourceWarning "$here/tests/test_gpu_spiral_gb10.py" -v
 
 echo "--- 4. OpenWALDO dataset verifier, pure-Omega ingestor, multi-arch backend & BOM ---"
 OLLM_WALDO_BIN="$OUT/ollm-waldo" OLLM_UNIV_BIN="$OUT/ollm-univ" \
@@ -168,7 +173,7 @@ if [ "$OS" = Linux ] && [ "$ARCH" = aarch64 ]; then
 
   NVDISASM=${NVDISASM:-$(command -v nvdisasm 2>/dev/null || echo /usr/local/cuda/bin/nvdisasm)}
   if [ -x "$NVDISASM" ]; then
-    echo "--- 9. SM121 Blackwell SASS disassembly & GPR ceiling check (all 43 kernel slots) ---"
+    echo "--- 9. SM121 Blackwell SASS disassembly & GPR ceiling check (all 78 kernel slots) ---"
     OMC="$OMC_BIN" OUT="$OUT/gpu-disasm" NVDISASM="$NVDISASM" sh "$here/tests/gpu-disasm.sh" --all
   else
     echo "--- 9. SM121 SASS disassembly: NOT_RUN (nvdisasm not installed) ---"

@@ -83,7 +83,8 @@ def compile_om(om_path, binary):
 
 
 def variant(src_om, dst_om, subs):
-    text = open(src_om).read()
+    with open(src_om) as f:
+        text = f.read()
     for old, new in subs:
         if text.count(old) != 1:
             raise RuntimeError("variant: %r occurs %d times" % (old, text.count(old)))
@@ -140,8 +141,9 @@ def baseline_tree(work):
         _, txt = run(["git", "-C", REPO, "show", ref + ":" + rel])
         with open(os.path.join(root, rel), "w", encoding="latin-1") as f:
             f.write(txt)
-    if "fn cmdadcmp" in open(os.path.join(root, "native/cli.om"), encoding="latin-1").read():
-        raise RuntimeError("baseline already has the adaptive loop")
+    with open(os.path.join(root, "native/cli.om"), encoding="latin-1") as f:
+        if "fn cmdadcmp" in f.read():
+            raise RuntimeError("baseline already has the adaptive loop")
     return root
 
 
@@ -157,19 +159,23 @@ def main():
         check(os.path.exists(B), "build TARGET=%s" % tgt)
         sdir = os.path.join(work, "serve")
         build("aarch64", sdir)
-        elf = open(os.path.join(sdir, "ollm"), "rb").read(4)
-        som = open(os.path.join(sdir, "ollm.om")).read()
+        with open(os.path.join(sdir, "ollm"), "rb") as f:
+            elf = f.read(4)
+        with open(os.path.join(sdir, "ollm.om")) as f:
+            som = f.read()
         check(elf == b"\x7fELF" and "svnl_emit_loop" in som and "fn cmdadcmp" in som,
               "build TARGET=aarch64 (serve.om with adaptive-loop fields compiles)")
         for rel in OWNED:
-            n = sum(1 for _ in open(os.path.join(REPO, rel)))
+            with open(os.path.join(REPO, rel)) as f:
+                n = sum(1 for _ in f)
             check(n < 8192, "line count %s = %d" % (rel, n))
 
         # ---- data, tokenizer, checkpoints
         text = os.path.join(work, "text.txt")
         with open(text, "wb") as f:
             for rel in ("docs/LOOP.md", "README.md"):
-                f.write(open(os.path.join(REPO, rel), "rb").read())
+                with open(os.path.join(REPO, rel), "rb") as src:
+                    f.write(src.read())
         M = os.path.join(work, "m.bin")
         TK = os.path.join(work, "toks.bin")
         run([B, "bpefit", text, M, "300"])
@@ -207,7 +213,9 @@ def main():
                 shutil.copy(ck, c2)
                 a = run([H, "train", c1, TK, "25", "5"])[1]
                 b = run([B, "train", c2, TK, "25", "5"])[1]
-                check(a == b and open(c1, "rb").read() == open(c2, "rb").read(),
+                with open(c1, "rb") as f1, open(c2, "rb") as f2:
+                    same_ck = f1.read() == f2.read()
+                check(a == b and same_ck,
                       "preserve train %s (same lines, same checkpoint bytes)" % tag)
         else:
             print("SKIP preservation (no .git in %s)" % REPO)

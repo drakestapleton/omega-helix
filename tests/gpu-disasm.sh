@@ -7,7 +7,7 @@
 # PC GPRs). Any LOW or illegal instruction exits 4.
 #
 # Usage:
-#   sh tests/gpu-disasm.sh --all         # check all 43 non-empty SM121 kernel slots
+#   sh tests/gpu-disasm.sh --all         # check all 78 non-empty SM121 kernel slots
 #   sh tests/gpu-disasm.sh SLOT...       # check specific slot ids (e.g. 0 27 40)
 #
 # Env:
