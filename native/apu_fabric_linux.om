@@ -1,0 +1,1097 @@
+note SPDX-License-Identifier: AGPL-3.0-only
+note native/apu_fabric_linux.om: True 20-Core Grace ARMv9 + 48-SM Blackwell Simultaneous Co-Execution Fabric.
+note
+note Architecture:
+note   - Allocates a lock-free MAP_SHARED|MAP_ANONYMOUS (mapnew -1 0 bytes 3 33) coherent unified ring BEFORE fork()
+note     so all 20 Grace child workers share zero-copy LPDDR5X pages with the parent GPU producer.
+note   - Forks 20 persistent Grace workers pinned 1-to-1 across physical cores via cpuset with bonClosePrevPipes
+note     pipe EOF hygiene (mirroring omega-mv/om/gpu/apu_fullchip.om & bonsai.om):
+note       * 2 Prefetcher/Arboris workers (A725 cores 0, 1): disk read, token validation, window pack, 2-gram novelty
+note       * 16 Cholesky spcryst workers (all 10 fast X925 cores 5..9, 15..19 + 6 A725 cores): Gram/RHS/Cholesky/cal/W4
+note       * 2 Live spweval + 1-bit tamper Verifier workers (A725 cores 13, 14): Merkle + held-out W4 eval + rc=61 tamper
+note   - Opens GB10 GPU AFTER fork() (parent only, avoiding NVRM fork/UVM VMA bugs) and streams batched GPU
+note     forwards (packing multiple shards per B-window batch when n_win <= B!) directly into the shared ring,
+note     immediately waking idle Grace workers via non-blocking pollfds + pipes with ZERO waiting for all 64 shards!
+
+const APU_MAX_W ulong 20
+const APU_PREF_SLOTS ulong 16
+const APU_WORK_SLOTS ulong 32
+const APU_SLOT_HDR ulong 64
+
+note Worker pool pipes, pids, roles (0=pref, 1=cryst+steal_verif, 2=verif), active cmd, and core pin table
+global apu_pids long 20
+global apu_gofd int 20
+global apu_rsfd int 20
+global apu_role ulong 20
+global apu_core ulong 20
+global apu_busy ulong 20
+global apu_wcmd ulong 20
+global apu_wslot ulong 20
+global apu_wshrd ulong 20
+
+note Shared-memory coherent unified ring handle & geometry:
+note apu_shm: 0=pref_off, 1=pref_stride, 2=work_off, 3=work_stride, 4=z_off, 5=r_off,
+note          6=s_off, 7=y_off, 8=zh_off, 9=yh_off, 10=train_cap, 11=held_cap, 12=n_work_slots
+global apu_shmh long 1
+global apu_shm ulong 16
+global apu_slot_use ulong 32
+global apu_pslot_use ulong 16
+global apu_pslot_sh ulong 16
+global apu_pslot_nw ulong 16
+global apu_pslot_nh ulong 16
+global apu_pslot_nov ulong 16
+
+note Ready queues (prefetch->gpu, cryst->verif)
+global apu_pq_sh ulong 64
+global apu_pq_ps ulong 64
+global apu_pq_st ulong 4
+global apu_vq_sh ulong 2048
+global apu_vq_ws ulong 2048
+global apu_vq_st ulong 4
+
+note Per-shard GPU/cryst telemetry (indexed by shard 0..2047)
+global apu_s_toks ulong 2048
+global apu_s_bcal ulong 2048
+global apu_s_ccal ulong 2048
+global apu_s_pb ulong 2048
+global apu_s_gms ulong 2048
+global apu_s_cms ulong 2048
+global apu_s_nov ulong 2048
+
+note Pipe/poll/dirent scratch
+global apu_msg uchar 64
+global apu_pfd uchar 160
+global apu_pidx ulong 20
+global apu_dirb uchar 4096
+global apu_arb_ht ulong 4096
+global apu_rowb uchar 8192
+global apu_xbuf uchar 65536
+global apu_bsh ulong 16
+global apu_bps ulong 16
+global apu_bws ulong 16
+global apu_bnw ulong 16
+global apu_bnh ulong 16
+
+note ---- Pipe & Little-Endian Helpers ----
+
+fn apu_get_i32_m off ulong to int
+b0 = uint get apu_msg off
+b1 = shl uint get apu_msg add off 1 8
+b2 = shl uint get apu_msg add off 2 16
+b3 = shl uint get apu_msg add off 3 24
+ret int or or b0 b1 or b2 b3
+end
+
+fn apu_put_u64_m off ulong v ulong to void
+for i ulong 8
+  put apu_msg add off i uchar and shr v mul i 8 255
+end
+end
+
+fn apu_get_u64_m off ulong to ulong
+v = ulong 0
+for i ulong 8
+  v = or v shl ulong get apu_msg add off i mul i 8
+end
+ret v
+end
+
+fn apu_pipe_wr fd int n ulong to void
+p = ulong 0
+while lt p n bound 1024
+  w = write fd apu_msg p sub n p
+  if le w 0
+    exit 70
+  end
+  p = add p ulong w
+end
+end
+
+fn apu_pipe_rd fd int n ulong to bool
+p = ulong 0
+while lt p n bound 1024
+  r = read fd apu_msg p sub n p
+  if le r 0
+    ret false
+  end
+  p = add p ulong r
+end
+ret true
+end
+
+fn apu_send_job fd int cmd ulong a ulong b ulong c ulong to void
+apu_put_u64_m 0 cmd
+apu_put_u64_m 8 a
+apu_put_u64_m 16 b
+apu_put_u64_m 24 c
+apu_pipe_wr fd 32
+end
+
+note Pin current Grace worker process to physical CPU core `cpu` (0..19) via sched_setaffinity.
+fn apu_pin_core cpu ulong to void
+m = new uchar 8 0
+put m div cpu 8 uchar shl ulong 1 rem cpu 8
+r = cpuset 0 m 0 8
+end
+
+note ---- Directory Scanner (getdnts) & Output Dir Creation (makedir) ----
+
+fn apu_ends_tok n ulong to bool
+if lt n 4
+  ret false
+end
+if ne get apu_pbuf sub n 4 46
+  ret false
+end
+if ne get apu_pbuf sub n 3 116
+  ret false
+end
+if ne get apu_pbuf sub n 2 111
+  ret false
+end
+ret eq get apu_pbuf sub n 1 107
+end
+
+fn apu_scan_dir_entry p ulong dn ulong to void
+q = add p 19
+nl = ulong 0
+while lt add q nl 4096 bound 256
+  if eq get apu_dirb add q nl 0
+    break
+  end
+  nl = add nl 1
+end
+if or eq nl 0 gt add dn add nl 2 sub APU_PATH_STRIDE 1
+  ret
+end
+if eq get apu_dirb q 46
+  ret
+end
+for i ulong dn bound 256
+  put apu_pbuf i get oarg i
+end
+pos = dn
+if and gt pos 0 ne get apu_pbuf sub pos 1 47
+  put apu_pbuf pos 47
+  pos = add pos 1
+end
+for j ulong nl bound 256
+  put apu_pbuf add pos j get apu_dirb add q j
+end
+tot = add pos nl
+if not apu_ends_tok tot
+  ret
+end
+cnt = get apu_cfg 0
+if lt cnt APU_MAX_SHARDS
+  apu_spath_set cnt 0 tot add cnt 1
+  put apu_cfg 0 add cnt 1
+end
+end
+
+fn apu_walk_dir_buf nr ulong pl ulong to void
+p = ulong 0
+while lt p nr bound 512
+  lo = ulong get apu_dirb add p 16
+  hi = ulong get apu_dirb add p 17
+  recl = or lo shl hi 8
+  if eq recl 0
+    break
+  end
+  apu_scan_dir_entry p pl
+  p = add p recl
+end
+end
+
+fn apu_discover_shards to void
+pl = oargp 3
+fd = int fopen oarg 0 pl 0 0
+if lt fd 0
+  exit 70
+end
+r0 = getdnts fd apu_dirb 0 4096
+if ge r0 0
+  r = r0
+  while gt r 0 bound 4096
+    apu_walk_dir_buf ulong r pl
+    r = getdnts fd apu_dirb 0 4096
+  end
+  c1 = fclose fd
+  apu_sort_shards
+else
+  c2 = fclose fd
+  fd2 = int fopen oarg 0 pl 0 0
+  if lt fd2 0
+    exit 70
+  end
+  apu_load_list_fd fd2
+  c3 = fclose fd2
+end
+if eq get apu_cfg 0 0
+  exit 20
+end
+mr = makedir apu_odir 0 get apu_odirn 0 493
+end
+
+note ---- Coherent Shared-Memory Ring Setup (MAP_SHARED | MAP_ANONYMOUS before fork) ----
+
+fn apu_shm_init to void
+tt = get og 1
+d = get og 2
+tcap = mul get apu_cfg 10 tt
+hcap = mul get apu_cfg 11 tt
+totw = add get apu_cfg 10 get apu_cfg 11
+pstride = mul div add add APU_SLOT_HDR mul mul totw tt 8 4095 4096 4096
+put apu_shm 0 4096
+put apu_shm 1 pstride
+put apu_shm 2 add 4096 mul APU_PREF_SLOTS pstride
+put apu_shm 4 APU_SLOT_HDR
+put apu_shm 5 add get apu_shm 4 mul mul tcap d 4
+put apu_shm 6 add get apu_shm 5 mul mul tcap d 4
+put apu_shm 7 add get apu_shm 6 mul tcap 4
+put apu_shm 8 add get apu_shm 7 mul tcap 4
+put apu_shm 9 add get apu_shm 8 mul mul hcap d 4
+put apu_shm 10 tcap
+put apu_shm 11 hcap
+wend = add get apu_shm 9 mul hcap 4
+put apu_shm 3 mul div add wend 4095 4096 4096
+nw = add get apu_cfg 5 12
+if gt nw APU_WORK_SLOTS
+  nw = APU_WORK_SLOTS
+end
+if lt nw 4
+  nw = ulong 4
+end
+put apu_shm 12 nw
+h = mapnew int -1 0 add get apu_shm 2 mul nw get apu_shm 3 3 33
+if lt h 0
+  exit 70
+end
+put apu_shmh 0 h
+for i ulong APU_WORK_SLOTS
+  put apu_slot_use i 0
+end
+for j ulong APU_PREF_SLOTS
+  put apu_pslot_use j 0
+end
+end
+
+fn apu_pref_base ps ulong to ulong
+ret add get apu_shm 0 mul ps get apu_shm 1
+end
+
+fn apu_work_base ws ulong to ulong
+ret add get apu_shm 2 mul ws get apu_shm 3
+end
+
+note ---- Grace Role 0: Prefetcher / Token Validator / Arboris 2-Gram Novelty Worker ----
+
+fn apu_pref_tok1 w ulong idx ulong to ulong
+if eq w 1
+  ret ulong get apu_xbuf idx
+end
+lo = ulong get apu_xbuf mul idx 2
+hi = ulong get apu_xbuf add mul idx 2 1
+ret or lo shl hi 8
+end
+
+fn apu_pref_calc_win sz ulong to ulong
+tw = ulong 1
+if gt get og 0 256
+  tw = ulong 2
+end
+if ne rem sz tw 0
+  exit 21
+end
+ntok = div sz tw
+tt = get og 1
+if le ntok tt
+  exit 20
+end
+avail_w = div sub ntok 1 tt
+ntw = get apu_cfg 10
+if gt ntw avail_w
+  ntw = avail_w
+end
+nhw = ulong 0
+if gt avail_w ntw
+  nhw = get apu_cfg 11
+end
+totw = add ntw nhw
+need_b = mul add mul totw tt 1 tw
+if gt need_b 65536
+  totw = div sub div 65536 tw 1 tt
+  if lt totw ntw
+    ntw = totw
+    nhw = ulong 0
+  else
+    nhw = sub totw ntw
+  end
+  need_b = mul add mul totw tt 1 tw
+end
+put apu_hdr 0 tw
+put apu_hdr 1 ntw
+put apu_hdr 2 nhw
+ret need_b
+end
+
+fn apu_pref_read_file shard ulong to ulong
+plen = apu_copy_spath shard
+fd = int fopen apu_pbuf 0 plen 0 0
+if lt fd 0
+  exit 70
+end
+sz = fseek fd 0 2
+if lt sz 0
+  c0 = fclose fd
+  exit 70
+end
+need_b = apu_pref_calc_win ulong sz
+p = ulong 0
+while lt p need_b bound 65536
+  r = pread fd apu_xbuf p sub need_b p long p
+  if le r 0
+    c3 = fclose fd
+    exit 70
+  end
+  p = add p ulong r
+end
+c4 = fclose fd
+ret mul add get apu_hdr 1 get apu_hdr 2 get og 1
+end
+
+fn apu_pref_pack_one pbase ulong tw ulong i ulong to ulong
+xt = apu_pref_tok1 tw i
+yt = apu_pref_tok1 tw add i 1
+v = get og 0
+if or ge xt v ge yt v
+  exit 25
+end
+sh = get apu_shmh 0
+off = add pbase mul i 8
+r1 = mapset sh off 4 xt
+r2 = mapset sh add off 4 4 yt
+h2 = and smx xor shl xt 16 yt 4095
+if eq get apu_arb_ht h2 0
+  put apu_arb_ht h2 1
+  ret 1
+end
+ret 0
+end
+
+fn apu_pref_pack_slot ps ulong tw ulong tot_t ulong to ulong
+for hi ulong 4096
+  put apu_arb_ht hi 0
+end
+nov = ulong 0
+pbase = add apu_pref_base ps APU_SLOT_HDR
+for i ulong tot_t bound 32768
+  nov = add nov apu_pref_pack_one pbase tw i
+end
+cpufence
+ret div mul nov 1000 tot_t
+end
+
+fn apu_pref_exec shard ulong ps ulong to void
+t0 = monons
+tot_t = apu_pref_read_file shard
+nov_m = apu_pref_pack_slot ps get apu_hdr 0 tot_t
+apu_put_u64_m 0 shard
+apu_put_u64_m 8 ps
+apu_put_u64_m 16 get apu_hdr 1
+apu_put_u64_m 24 get apu_hdr 2
+apu_put_u64_m 32 nov_m
+apu_put_u64_m 40 sub ulong monons ulong t0
+apu_put_u64_m 48 0
+apu_put_u64_m 56 0
+end
+
+note ---- Grace Role 1: Cholesky spcryst + Linear Calibration + W4 Pack Worker ----
+
+fn apu_rowb_f32 o ulong to f64
+u = uint get apu_rowb o
+u = or u shl uint get apu_rowb add o 1 8
+u = or u shl uint get apu_rowb add o 2 16
+u = or u shl uint get apu_rowb add o 3 24
+ret f64 bitcast f32 u
+end
+
+fn apu_unpack_row_z sh long off ulong d ulong to void
+r = mapread sh off apu_rowb 0 mul d 4
+for j ulong d bound 2048
+  put apu_z j apu_rowb_f32 mul j 4
+end
+end
+
+fn apu_unpack_row_r sh long off ulong d ulong scale f64 to void
+r = mapread sh off apu_rowb 0 mul d 4
+for j ulong d bound 2048
+  put apu_rv j mul scale apu_rowb_f32 mul j 4
+end
+end
+
+fn apu_cryst_save_cal wb ulong t ulong ncal ulong to void
+d = get og 2
+cz = mul ncal d
+for j ulong d bound 2048
+  put apu_calz add cz j get apu_z j
+end
+put apu_caly ncal mapget get apu_shmh 0 add add wb get apu_shm 7 mul t 4 4
+end
+
+fn apu_cryst_tok wb ulong sid ulong t ulong rscale f64 to void
+sh = get apu_shmh 0
+d = get og 2
+apu_unpack_row_z sh add add wb get apu_shm 4 mul mul t d 4 d
+apu_unpack_row_r sh add add wb get apu_shm 5 mul mul t d 4 d rscale
+surp = f64 bitcast f32 uint mapget sh add add wb get apu_shm 6 mul t 4 4
+apu_acc_tok add 0.25f64 fmin surp 8.0f64 get apu_cfg 1 d sid
+end
+
+fn apu_cryst_stream wb ulong sid ulong ntrain ulong rscale f64 to ulong
+ncal = ulong 0
+for t ulong ntrain bound 32768
+  apu_cryst_tok wb sid t rscale
+  if lt ncal APU_CALN
+    apu_cryst_save_cal wb t ncal
+    ncal = add ncal 1
+  end
+end
+ret ncal
+end
+
+fn apu_cryst_reply shard ulong ws ulong ntrain ulong fbytes ulong dt ulong to void
+apu_put_u64_m 0 shard
+apu_put_u64_m 8 ws
+apu_put_u64_m 16 ntrain
+apu_put_u64_m 24 get apu_hdr 0
+apu_put_u64_m 32 get apu_hdr 1
+apu_put_u64_m 40 fbytes
+apu_put_u64_m 48 dt
+apu_put_u64_m 56 0
+end
+
+fn apu_cryst_solve_pack shard ulong sid ulong ncal ulong to ulong
+apu_norm_cent get og 2
+apu_sym_reg get apu_cfg 1 fmax div f64 get apu_cfg 2 1000.0f64 0.0001f64
+if ne apu_chol get apu_cfg 1 0
+  exit 43
+end
+apu_chol_solve get apu_cfg 1 get og 2
+apu_calibrate ncal get apu_cfg 1 sid
+ret apu_write_sp2 apu_make_outpath shard get apu_cfg 6 get apu_cfg 1 sid get apu_cfg 4
+end
+
+fn apu_cryst_exec shard ulong ws ulong to void
+t0 = monons
+cpufence
+wb = apu_work_base ws
+sid = mapget get apu_shmh 0 add wb 8 8
+ntrain = mapget get apu_shmh 0 add wb 16 8
+if gt ntrain get apu_cfg 3
+  ntrain = get apu_cfg 3
+end
+apu_zero_cryst get apu_cfg 1 get og 2
+ncal = apu_cryst_stream wb sid ntrain bitcast f64 mapget get apu_shmh 0 add wb 32 8
+apu_cryst_reply shard ws ntrain apu_cryst_solve_pack shard sid ncal sub ulong monons ulong t0
+end
+
+note ---- Grace Role 2: Live Merkle + 1-Bit Tamper + Held-Out W4 spweval Verifier Worker ----
+
+fn apu_verif_copy_row hi ulong d ulong to void
+cz = mul hi d
+for j ulong d bound 2048
+  put apu_calz add cz j get apu_z j
+end
+end
+
+fn apu_verif_load_eval ev_n ulong zb ulong yb ulong to void
+sh = get apu_shmh 0
+d = get og 2
+for hi ulong ev_n bound 128
+  apu_unpack_row_z sh add zb mul mul hi d 4 d
+  apu_verif_copy_row hi d
+  put apu_caly hi mapget sh add yb mul hi 4 4
+end
+end
+
+fn apu_verif_run_eval wb ulong to void
+sh = get apu_shmh 0
+ev_n = mapget sh add wb 24 8
+ev_zb = add wb get apu_shm 8
+ev_yb = add wb get apu_shm 9
+if eq ev_n 0
+  ev_n = mapget sh add wb 16 8
+  ev_zb = add wb get apu_shm 4
+  ev_yb = add wb get apu_shm 7
+end
+if gt ev_n APU_CALN
+  ev_n = APU_CALN
+end
+apu_verif_load_eval ev_n ev_zb ev_yb
+apu_eval_loaded ev_n get apu_cfg 1 mapget sh add wb 8 8
+end
+
+fn apu_verif_reply shard ulong ws ulong vrc ulong dt ulong to void
+apu_put_u64_m 0 shard
+apu_put_u64_m 8 ws
+if ne vrc 0
+  apu_put_u64_m 16 0
+  apu_put_u64_m 24 0
+else
+  apu_put_u64_m 16 get apu_hdr 0
+  apu_put_u64_m 24 get apu_hdr 1
+end
+apu_put_u64_m 32 vrc
+apu_put_u64_m 40 dt
+apu_put_u64_m 48 get apu_hdr 11
+apu_put_u64_m 56 0
+end
+
+fn apu_verif_exec shard ulong ws ulong to void
+t0 = monons
+cpufence
+vrc = apu_verify_pack apu_make_outpath shard get apu_cfg 6
+if ne vrc 0
+  apu_verif_reply shard ws vrc sub ulong monons ulong t0
+  ret
+end
+apu_verif_run_eval apu_work_base ws
+apu_verif_reply shard ws 0 sub ulong monons ulong t0
+end
+
+note ---- Worker Main Loop + bonClosePrevPipes EOF Hygiene ----
+
+fn apu_worker_loop w ulong go_fd int res_fd int to void
+apu_pin_core get apu_core w
+apu_put_u64_m 0 add w 1
+apu_pipe_wr res_fd 8
+for round ulong 100000 bound 100000
+  if not apu_pipe_rd go_fd 32
+    exit 0
+  end
+  cmd = apu_get_u64_m 0
+  if eq cmd 0
+    exit 0
+  end
+  shrd = apu_get_u64_m 8
+  slot = apu_get_u64_m 16
+  if eq cmd 1
+    apu_pref_exec shrd slot
+  else
+    if eq cmd 2
+      apu_cryst_exec shrd slot
+    else
+      apu_verif_exec shrd slot
+    end
+  end
+  apu_pipe_wr res_fd 64
+end
+exit 0
+end
+
+note Close all previously opened parent pipe fds in child so EOF never hangs (bonsai.om bonClosePrevPipes!)
+fn apu_close_prev_pipes w ulong to void
+for pw ulong w bound 20
+  c1 = fclose get apu_gofd pw
+  c2 = fclose get apu_rsfd pw
+end
+end
+
+fn apu_assign_topology to ulong
+nc = get apu_cfg 5
+np = ulong 2
+nv = ulong 2
+if lt nc 4
+  np = ulong 1
+  nv = ulong 1
+end
+if gt add add nc np nv 20
+  np = ulong 2
+  nv = ulong 2
+  nc = ulong 16
+  put apu_cfg 5 16
+end
+put apu_cfg 8 np
+put apu_cfg 9 nv
+note Pin Cholesky workers to ALL 10 fast Cortex-X925 cores (5..9, 15..19) first, then A725 cores (2..4, 10..12)!
+xtab = new ulong 16 0
+put xtab 0 5
+put xtab 1 6
+put xtab 2 7
+put xtab 3 8
+put xtab 4 9
+put xtab 5 15
+put xtab 6 16
+put xtab 7 17
+put xtab 8 18
+put xtab 9 19
+put xtab 10 2
+put xtab 11 3
+put xtab 12 4
+put xtab 13 10
+put xtab 14 11
+put xtab 15 12
+w = ulong 0
+for i ulong np bound 4
+  put apu_role w 0
+  put apu_core w i
+  w = add w 1
+end
+for j ulong nc bound 16
+  put apu_role w 1
+  put apu_core w get xtab j
+  w = add w 1
+end
+for k ulong nv bound 4
+  put apu_role w 2
+  put apu_core w add 13 k
+  w = add w 1
+end
+ret w
+end
+
+fn apu_mkpipe_pair off ulong to void
+p = new uchar 8 0
+if ne pipefds p 0 8 0 0
+  exit 70
+end
+for b ulong 8
+  put apu_msg add off b get p b
+end
+end
+
+fn apu_spawn_one w ulong to void
+apu_mkpipe_pair 0
+apu_mkpipe_pair 8
+pid = fork
+if lt pid 0
+  exit 70
+end
+if eq pid 0
+  rc = fclose apu_get_i32_m 4
+  rc = fclose apu_get_i32_m 8
+  apu_close_prev_pipes w
+  apu_worker_loop w apu_get_i32_m 0 apu_get_i32_m 12
+end
+rc = fclose apu_get_i32_m 0
+rc = fclose apu_get_i32_m 12
+put apu_pids w pid
+put apu_gofd w apu_get_i32_m 4
+put apu_rsfd w apu_get_i32_m 8
+put apu_busy w 0
+end
+
+fn apu_pool_start ntot ulong to void
+oflush
+for w ulong ntot bound 20
+  apu_spawn_one w
+end
+for w2 ulong ntot bound 20
+  if not apu_pipe_rd get apu_rsfd w2 8
+    exit 70
+  end
+end
+end
+
+fn apu_pool_stop ntot ulong to void
+st = new uchar 4 0
+for w ulong ntot bound 20
+  apu_send_job get apu_gofd w 0 0 0 0
+  c1 = fclose get apu_gofd w
+  c2 = fclose get apu_rsfd w
+  wp = waitpid int get apu_pids w st 0 4 0
+end
+end
+
+note ---- Non-Blocking pollfds Event Loop & Co-Execution Scheduler ----
+
+fn apu_find_free_pslot to long
+for i ulong APU_PREF_SLOTS
+  if eq get apu_pslot_use i 0
+    ret long i
+  end
+end
+ret long -1
+end
+
+fn apu_find_free_wslot to long
+nw = get apu_shm 12
+for i ulong nw bound 32
+  if eq get apu_slot_use i 0
+    ret long i
+  end
+end
+ret long -1
+end
+
+fn apu_find_idle_worker ntot ulong want_role ulong to long
+for w ulong ntot bound 20
+  if and eq get apu_role w want_role eq get apu_busy w 0
+    ret long w
+  end
+end
+ret long -1
+end
+
+fn apu_count_busy ntot ulong want_role ulong to ulong
+c = ulong 0
+for w ulong ntot bound 20
+  if and eq get apu_role w want_role ne get apu_busy w 0
+    c = add c 1
+  end
+end
+ret c
+end
+
+fn apu_count_cmd ntot ulong want_cmd ulong to ulong
+c = ulong 0
+for w ulong ntot bound 20
+  if and ne get apu_busy w 0 eq get apu_wcmd w want_cmd
+    c = add c 1
+  end
+end
+ret c
+end
+
+fn apu_pq_push shrd ulong ps ulong to void
+tail = get apu_pq_st 1
+put apu_pq_sh and tail 63 shrd
+put apu_pq_ps and tail 63 ps
+put apu_pq_st 1 add tail 1
+end
+
+fn apu_pq_len to ulong
+ret sub get apu_pq_st 1 get apu_pq_st 0
+end
+
+fn apu_vq_push shrd ulong ws ulong to void
+tail = get apu_vq_st 1
+put apu_vq_sh and tail 2047 shrd
+put apu_vq_ws and tail 2047 ws
+put apu_vq_st 1 add tail 1
+end
+
+fn apu_vq_len to ulong
+ret sub get apu_vq_st 1 get apu_vq_st 0
+end
+
+fn apu_touch_cpu_span to void
+now = onsnow
+if eq get apu_cfg 21 0
+  put apu_cfg 21 now
+end
+put apu_cfg 22 now
+end
+
+fn apu_done_pref shrd ulong slot ulong to void
+put apu_cfg 14 add get apu_cfg 14 apu_get_u64_m 40
+put apu_pslot_sh slot shrd
+put apu_pslot_nw slot apu_get_u64_m 16
+put apu_pslot_nh slot apu_get_u64_m 24
+nov = apu_get_u64_m 32
+put apu_pslot_nov slot nov
+put apu_s_nov shrd nov
+apu_pq_push shrd slot
+end
+
+fn apu_done_cryst shrd ulong slot ulong to void
+dt = apu_get_u64_m 48
+fbytes = apu_get_u64_m 40
+put apu_cfg 14 add get apu_cfg 14 dt
+put apu_cfg 15 add get apu_cfg 15 fbytes
+put apu_s_toks shrd apu_get_u64_m 16
+put apu_s_bcal shrd apu_get_u64_m 24
+put apu_s_ccal shrd apu_get_u64_m 32
+put apu_s_pb shrd fbytes
+put apu_s_cms shrd div dt 1000000
+apu_vq_push shrd slot
+end
+
+fn apu_emit_v_s1 shrd ulong bev ulong wev ulong to void
+sid = get apu_sids shrd
+toks = get apu_s_toks shrd
+bc = get apu_s_bcal shrd
+cc = get apu_s_ccal shrd
+apu_print_strand1 sid toks bc cc bev wev
+end
+
+fn apu_emit_v_s2 shrd ulong vms ulong trc ulong to void
+pb = get apu_s_pb shrd
+gms = get apu_s_gms shrd
+cms = get apu_s_cms shrd
+nov = get apu_s_nov shrd
+apu_print_strand2 pb gms cms vms trc nov
+end
+
+fn apu_done_verif shrd ulong slot ulong to void
+dt = apu_get_u64_m 40
+vrc = apu_get_u64_m 32
+trc = apu_get_u64_m 48
+bev = apu_get_u64_m 16
+wev = apu_get_u64_m 24
+put apu_cfg 14 add get apu_cfg 14 dt
+put apu_slot_use slot 0
+if ne vrc 0
+  exit int vrc
+end
+if eq trc 61
+  put apu_cfg 16 add get apu_cfg 16 1
+end
+put apu_cfg 17 add get apu_cfg 17 bev
+put apu_cfg 18 add get apu_cfg 18 wev
+apu_emit_v_s1 shrd bev wev
+apu_emit_v_s2 shrd div dt 1000000 trc
+end
+
+fn apu_handle_worker_done w ulong to void
+if not apu_pipe_rd get apu_rsfd w 64
+  exit 70
+end
+put apu_busy w 0
+apu_touch_cpu_span
+wcmd = get apu_wcmd w
+put apu_wcmd w 0
+shrd = apu_get_u64_m 0
+slot = apu_get_u64_m 8
+if eq wcmd 1
+  apu_done_pref shrd slot
+  ret
+end
+if eq wcmd 2
+  apu_done_cryst shrd slot
+  ret
+end
+apu_done_verif shrd slot
+end
+
+fn apu_set_pfd j ulong fd int to void
+u = ulong uint fd
+b = mul j 8
+put apu_pfd b uchar and u 255
+put apu_pfd add b 1 uchar and shr u 8 255
+put apu_pfd add b 2 uchar and shr u 16 255
+put apu_pfd add b 3 uchar and shr u 24 255
+put apu_pfd add b 4 1
+put apu_pfd add b 5 0
+put apu_pfd add b 6 0
+put apu_pfd add b 7 0
+end
+
+note Poll all busy workers; harvest every ready worker (timeout_ns = 0 for non-blocking, > 0 to wait for any 1).
+fn apu_poll_workers ntot ulong timeout_ns long to ulong
+m = ulong 0
+for w ulong ntot bound 20
+  if ne get apu_busy w 0
+    apu_set_pfd m get apu_rsfd w
+    put apu_pidx m w
+    m = add m 1
+  end
+end
+if eq m 0
+  ret 0
+end
+r = pollfds apu_pfd 0 mul m 8 timeout_ns
+if le r 0
+  ret 0
+end
+done = ulong 0
+for j ulong m bound 20
+  if ne get apu_pfd add mul j 8 6 0
+    apu_handle_worker_done get apu_pidx j
+    done = add done 1
+  end
+end
+ret done
+end
+
+fn apu_kick_verifs ntot ulong force_steal bool to void
+while gt apu_vq_len 0 bound 20
+  vw = apu_find_idle_worker ntot 2
+  if lt vw 0
+    if or force_steal or ge apu_vq_len 4 lt apu_find_free_wslot 0
+      vw = apu_find_idle_worker ntot 1
+    end
+  end
+  if lt vw 0
+    break
+  end
+  hd = get apu_vq_st 0
+  shrd = get apu_vq_sh and hd 2047
+  ws = get apu_vq_ws and hd 2047
+  put apu_vq_st 0 add hd 1
+  put apu_busy ulong vw 1
+  put apu_wcmd ulong vw 3
+  apu_touch_cpu_span
+  apu_send_job get apu_gofd ulong vw 3 shrd ws 0
+end
+end
+
+fn apu_kick_prefs ntot ulong next_pref ulong n_shards ulong to ulong
+np = next_pref
+while lt np n_shards bound 20
+  pw = apu_find_idle_worker ntot 0
+  if lt pw 0
+    break
+  end
+  ps = apu_find_free_pslot
+  if lt ps 0
+    break
+  end
+  put apu_pslot_use ulong ps 1
+  put apu_busy ulong pw 1
+  put apu_wcmd ulong pw 1
+  apu_touch_cpu_span
+  apu_send_job get apu_gofd ulong pw 1 np ulong ps 0
+  np = add np 1
+end
+ret np
+end
+
+note Pack up to `max_k` prefetched shards whose windows fit in one GPU B-batch, run producer, and immediately
+note dispatch EVERY shard in the batch to idle Grace Cholesky workers (ZERO waiting for all 64 shards!).
+fn apu_pack_one k ulong hd ulong ps ulong cw ulong ws ulong to void
+put apu_pq_st 0 add hd 1
+put apu_slot_use ws 1
+put apu_busy cw 1
+put apu_wcmd cw 2
+put apu_bsh k get apu_pq_sh and hd 63
+put apu_bps k ps
+put apu_bws k ws
+put apu_bnw k get apu_pslot_nw ps
+put apu_bnh k get apu_pslot_nh ps
+put apu_wslot k cw
+end
+
+fn apu_batch_cap to ulong
+if eq get apu_cfg 7 0
+  ret 1
+end
+ret get og 6
+end
+
+fn apu_try_pack_head ntot ulong k ulong used_w ulong to ulong
+hd = get apu_pq_st 0
+ps = get apu_pq_ps and hd 63
+tw = add get apu_pslot_nw ps get apu_pslot_nh ps
+if and gt k 0 gt add used_w tw apu_batch_cap
+  ret 0
+end
+cw = apu_find_idle_worker ntot 1
+ws = apu_find_free_wslot
+if or lt cw 0 lt ws 0
+  ret 0
+end
+apu_pack_one k hd ps ulong cw ulong ws
+ret tw
+end
+
+fn apu_pack_batch ntot ulong to ulong
+k = ulong 0
+used_w = ulong 0
+while gt apu_pq_len 0 bound 16
+  tw = apu_try_pack_head ntot k used_w
+  if eq tw 0
+    break
+  end
+  used_w = add used_w tw
+  k = add k 1
+  if ge k 16
+    break
+  end
+end
+ret k
+end
+
+fn apu_dispatch_one_batch ntot ulong to ulong
+k = apu_pack_batch ntot
+if eq k 0
+  ret 0
+end
+t0 = monons
+apu_be_run_batch k
+gns = sub ulong monons ulong t0
+put apu_cfg 13 add get apu_cfg 13 gns
+gms = div gns 1000000
+for i ulong k bound 16
+  shrd = get apu_bsh i
+  put apu_pslot_use get apu_bps i 0
+  put apu_s_gms shrd div gms k
+  apu_touch_cpu_span
+  apu_send_job get apu_gofd get apu_wslot i 2 shrd get apu_bws i 0
+end
+put apu_cfg 20 add get apu_cfg 20 1
+apu_print_wave get apu_cfg 20 k gms apu_pq_len apu_count_cmd ntot 2 apu_count_cmd ntot 3
+ret k
+end
+
+fn apu_target_k to ulong
+if eq get apu_cfg 7 0
+  ret 1
+end
+tk = div get og 6 add get apu_cfg 10 get apu_cfg 11
+if eq tk 0
+  tk = ulong 1
+end
+if gt tk APU_PREF_SLOTS
+  tk = APU_PREF_SLOTS
+end
+if gt tk get apu_cfg 5
+  tk = get apu_cfg 5
+end
+ret tk
+end
+
+fn apu_wait_pref ntot ulong tk ulong rem_s ulong to void
+want_k = tk
+if lt rem_s want_k
+  want_k = rem_s
+end
+for tries ulong 6 bound 6
+  if or ge apu_pq_len want_k eq apu_count_cmd ntot 1 0
+    break
+  end
+  h0 = apu_poll_workers ntot 2000000
+end
+end
+
+fn apu_fabric_run to void
+apu_discover_shards
+n_shards = get apu_cfg 0
+ntot = apu_assign_topology
+apu_shm_init
+apu_pool_start ntot
+put apu_cfg 7 apu_be_open
+put apu_pq_st 0 0
+put apu_pq_st 1 0
+put apu_vq_st 0 0
+put apu_vq_st 1 0
+tk = apu_target_k
+next_pref = ulong 0
+dispatched = ulong 0
+h = ulong 0
+while lt dispatched n_shards bound 10000000
+  next_pref = apu_kick_prefs ntot next_pref n_shards
+  h = apu_poll_workers ntot 0
+  apu_kick_verifs ntot false
+  apu_wait_pref ntot tk sub n_shards dispatched
+  next_pref = apu_kick_prefs ntot next_pref n_shards
+  did = apu_dispatch_one_batch ntot
+  if gt did 0
+    dispatched = add dispatched did
+    next_pref = apu_kick_prefs ntot next_pref n_shards
+    h = apu_poll_workers ntot 0
+  else
+    h = apu_poll_workers ntot 5000000
+  end
+  apu_kick_verifs ntot false
+end
+while or gt apu_count_cmd ntot 2 0 or gt apu_count_cmd ntot 3 0 gt apu_vq_len 0 bound 10000000
+  apu_kick_verifs ntot true
+  h = apu_poll_workers ntot 10000000
+  apu_kick_verifs ntot true
+end
+apu_be_close
+apu_pool_stop ntot
+h = ulong mapdrop get apu_shmh 0
+end

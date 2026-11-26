@@ -21,6 +21,7 @@ om2'
   BT_POOL="lpool.om"
   BT_PLAT="mio.om"
   BT_REV="rev.om"
+  BT_APU="apu_fabric_macos.om"
 elif [ "$ARCH" = x86_64 ] || [ "$ARCH" = amd64 ]; then
   OUT="$OUT" TARGET=x86linux sh "$here/scripts/build.sh"
   BIN="$OUT/ollm-x86linux"
@@ -29,6 +30,7 @@ om2'
   BT_POOL="xpool.om"
   BT_PLAT="lio.om"
   BT_REV="norev.om"
+  BT_APU="apu_fabric_linux.om apu_fabric_nogpu.om"
 else
   OUT="$OUT" TARGET=aarch64 sh "$here/scripts/build.sh"
   OUT="$OUT" TARGET=gb10 sh "$here/scripts/build.sh"
@@ -37,6 +39,7 @@ else
   BT_POOL="lpool.om"
   BT_PLAT="lio.om"
   BT_REV="rev.om"
+  BT_APU="apu_fabric_linux.om apu_fabric_nogpu.om"
 fi
 
 OMC=${OMC:-$(command -v omc 2>/dev/null || printf '%s' "$HOME/.local/bin/omc")}
@@ -121,7 +124,7 @@ EOF
 src=$here/native
 {
   printf '%s\n' "$BT_HDR"
-  for u in math.om data.om "$BT_POOL" model.om adam.om ckpt.om bpe.om spec.om "$BT_REV" arboris.om sp_solve.om spiral.om omg.om pillars_cli.om cli.om "$BT_PLAT" noserve.om nogpu.om; do
+  for u in math.om data.om "$BT_POOL" model.om adam.om ckpt.om bpe.om spec.om "$BT_REV" arboris.om sp_solve.om spiral.om apu_weave.om omg.om pillars_cli.om cli.om "$BT_PLAT" noserve.om nogpu.om $BT_APU; do
     sed 's/^fn main to int$/fn ocpumain to int/' "$src/$u"
   done
   cat "$work/sim_main.om" "$src/gpu/gm.om" "$src/gpu/ring.om" "$src/gpu/ejit.om" "$work/bt_driver.om"
@@ -189,5 +192,18 @@ t_rc=0
 "$BIN" spweval "$work/base.ck" "$work/corpus.txt" 1 1 "$work/s1_tamper.sp2" >/dev/null 2>&1 || t_rc=$?
 [ "$t_rc" -eq 61 ] || { echo "FAIL: expected rc=61 on 1-bit OLLMSP02 tamper, got $t_rc" >&2; exit 1; }
 echo "SPIRAL_WEAVE_OM_PASS"
+
+echo "=== 12. Full-APU Simultaneous Co-Execution Fabric (apuweave -> W4 OLLMSP02 -> spweval + 1-bit tamper rc=61) ==="
+mkdir -p "$work/apu_shards" "$work/apu_out"
+cp "$work/corpus.txt" "$work/apu_shards/s01_alpha.tok"
+cp "$work/corpus.txt" "$work/apu_shards/s02_beta.tok"
+printf '%s\n%s\n' "$work/apu_shards/s01_alpha.tok" "$work/apu_shards/s02_beta.tok" > "$work/apu_list.txt"
+"$BIN" apuweave "$work/base.ck" "$work/apu_list.txt" "$work/apu_out" 32 100 128 4 2 > "$work/apuweave.out"
+cat "$work/apuweave.out"
+awk '$1=="APU_SUMMARY" && $2==2 && $13==2 { ok=1 } END { exit ok ? 0 : 1 }' "$work/apuweave.out"
+"$BIN" spweval "$work/base.ck" "$work/corpus.txt" 2 4 "$work/apu_out/s01_alpha.sp2" "$work/apu_out/s02_beta.sp2" > "$work/apu_spweval.out"
+cat "$work/apu_spweval.out"
+awk 'NR==1 && $1=="SPWEVAL" && $6 < $5 { ok=1 } END { exit ok ? 0 : 1 }' "$work/apu_spweval.out"
+echo "APU_WEAVE_OM_PASS"
 
 echo "OMEGA_HELIX_PURE_OM_PASS"

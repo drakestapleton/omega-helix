@@ -219,6 +219,7 @@ om_file="$OUT/$bin.om"
       "$src/arboris.om" \
       "$src/sp_solve.om" \
       "$src/spiral.om" \
+      "$src/apu_weave.om" \
       "$src/omg.om" \
       "$src/pillars_cli.om"
   else
@@ -234,6 +235,9 @@ fn cmdspweval to void
 exit 2
 end
 fn cmdspwsamp to void
+exit 2
+end
+fn cmdapuweave to void
 exit 2
 end
 fn sp2_is_sp2 ai ulong to bool
@@ -258,6 +262,11 @@ EOF
     "$src/$plat" \
     "$post"
   [ "$TARGET" = gb10 ] || cat "$src/nogpu.om"
+  if [ "$TARGET" = macos ]; then
+    cat "$src/apu_fabric_macos.om"
+  elif [ "$TARGET" = aarch64 ] || [ "$TARGET" = x86linux ]; then
+    cat "$src/apu_fabric_linux.om" "$src/apu_fabric_nogpu.om"
+  fi
 } > "$om_file"
 
 if [ "$TARGET" = gb10 ]; then
@@ -274,7 +283,9 @@ if [ "$TARGET" = gb10 ]; then
     "$g/gt.om" \
     "$g/gm.om" \
     "$g/ring.om" \
-    "$g/ejit.om" >> "$om_file"
+    "$g/ejit.om" \
+    "$src/apu_fabric_linux.om" \
+    "$src/apu_fabric_gb10.om" >> "$om_file"
 fi
 
 "$OMC" < "$om_file" > "$OUT/$bin.tmp"

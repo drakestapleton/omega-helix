@@ -1,0 +1,121 @@
+note SPDX-License-Identifier: AGPL-3.0-only
+note native/apu_fabric_nogpu.om: CPU producer backend for Linux multi-core apuweave (aarch64 & x86linux).
+
+fn apu_be_open to ulong
+ret 0
+end
+
+fn apu_be_close to void
+end
+
+fn apu_load_pref_win1 pbase ulong wi ulong dst_b ulong to void
+sh = get apu_shmh 0
+tt = get og 1
+src_w = mul wi mul tt 8
+for t ulong tt bound 512
+  o = add pbase add src_w mul t 8
+  put obx add dst_b t mapget sh o 4
+  put oby add dst_b t mapget sh add o 4 4
+end
+end
+
+fn apu_load_pref_windows ps ulong w_start ulong nw ulong b0 ulong to void
+tt = get og 1
+pbase = add apu_pref_base ps APU_SLOT_HDR
+for w ulong nw bound 32
+  apu_load_pref_win1 pbase add w_start w mul add b0 w tt
+end
+end
+
+fn apu_cpu_store_zr wb ulong row ulong zo ulong to void
+sh = get apu_shmh 0
+d = get og 2
+r = long 0
+for j ulong d bound 2048
+  off = mul add mul row d j 4
+  dst = add add wb get apu_shm 4 off
+  val = ulong bitcast uint f32 get oa add zo j
+  r = mapset sh dst 4 val
+  dst = add add wb get apu_shm 5 off
+  val = ulong bitcast uint f32 get sp2_rvec j
+  r = mapset sh dst 4 val
+end
+end
+
+fn apu_cpu_train_tok wb ulong row ulong t ulong to void
+zo = add get og 17 mul t get og 2
+yt = get oby t
+surp = sp2_tok_grad zo yt
+apu_cpu_store_zr wb row zo
+sh = get apu_shmh 0
+dst = add add wb get apu_shm 6 mul row 4
+val = ulong bitcast uint f32 surp
+r = mapset sh dst 4 val
+dst = add add wb get apu_shm 7 mul row 4
+r = mapset sh dst 4 yt
+end
+
+fn apu_cpu_train_win ps ulong w ulong wb ulong to void
+tt = get og 1
+apu_load_pref_windows ps w 1 0
+dl = ofwd 0
+for t ulong tt bound 512
+  apu_cpu_train_tok wb add mul w tt t t
+end
+end
+
+fn apu_cpu_held_copy base ulong zo2 ulong d ulong to void
+sh = get apu_shmh 0
+r = long 0
+for j2 ulong d bound 2048
+  val = ulong bitcast uint f32 get oa add zo2 j2
+  r = mapset sh add base mul j2 4 4 val
+end
+end
+
+fn apu_cpu_held_tok wb ulong row2 ulong t2 ulong to void
+d = get og 2
+base = add add wb get apu_shm 8 mul mul row2 d 4
+apu_cpu_held_copy base add get og 17 mul t2 d d
+sh = get apu_shmh 0
+yb = add add wb get apu_shm 9 mul row2 4
+yt = get oby t2
+r = mapset sh yb 4 yt
+end
+
+fn apu_cpu_held_win ps ulong nw ulong wh ulong wb ulong to void
+tt = get og 1
+apu_load_pref_windows ps add nw wh 1 0
+dl2 = ofwd 0
+for t2 ulong tt bound 512
+  apu_cpu_held_tok wb add mul wh tt t2 t2
+end
+end
+
+fn apu_cpu_run_one idx ulong to void
+shrd = get apu_bsh idx
+ps = get apu_bps idx
+wb = apu_work_base get apu_bws idx
+nw = get apu_bnw idx
+nh = get apu_bnh idx
+for w ulong nw bound 32
+  apu_cpu_train_win ps w wb
+end
+for wh ulong nh bound 4
+  apu_cpu_held_win ps nw wh wb
+end
+sh = get apu_shmh 0
+tt = get og 1
+r7 = mapset sh wb 8 shrd
+r8 = mapset sh add wb 8 8 get apu_sids shrd
+r9 = mapset sh add wb 16 8 mul nw tt
+r10 = mapset sh add wb 24 8 mul nh tt
+r11 = mapset sh add wb 32 8 bitcast ulong 1.0f64
+cpufence
+end
+
+fn apu_be_run_batch k ulong to void
+for idx ulong k bound 16
+  apu_cpu_run_one idx
+end
+end

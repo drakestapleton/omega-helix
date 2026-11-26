@@ -66,9 +66,9 @@ g=$src/gpu
 
 {
   printf 'om2\n'
-  cat "$src/math.om" "$src/data.om" "$src/lpool.om" "$src/model.om" "$src/adam.om" "$src/ckpt.om" "$src/bpe.om" "$src/spec.om" "$src/rev.om" "$src/arboris.om" "$src/sp_solve.om" "$src/spiral.om" "$src/omg.om" "$src/pillars_cli.om" "$src/cli.om" "$src/lio.om" "$src/noserve.om" |
+  cat "$src/math.om" "$src/data.om" "$src/lpool.om" "$src/model.om" "$src/adam.om" "$src/ckpt.om" "$src/bpe.om" "$src/spec.om" "$src/rev.om" "$src/arboris.om" "$src/sp_solve.om" "$src/spiral.om" "$src/apu_weave.om" "$src/omg.om" "$src/pillars_cli.om" "$src/cli.om" "$src/lio.om" "$src/noserve.om" |
     sed 's/^fn main to int$/fn ocpumain to int/'
-  cat "$g/context.om" "$g/vector.om" "$g/launch.om" "$g/batch.om" "$g/gk.om" "$g/gr.om" "$g/gb.om" "$g/gg.om" "$g/gt.om" "$g/gm.om" "$g/ring.om" "$g/ejit.om"
+  cat "$g/context.om" "$g/vector.om" "$g/launch.om" "$g/batch.om" "$g/gk.om" "$g/gr.om" "$g/gb.om" "$g/gg.om" "$g/gt.om" "$g/gm.om" "$g/ring.om" "$g/ejit.om" "$src/apu_fabric_linux.om" "$src/apu_fabric_gb10.om"
   sed "s/^grset 256 32 64 2 128 2\$/grset $SHAPE/" "$here/tests/gpu-dump.om"
 } > "$OUT/gpu-dump.om"
 grep -qx "grset $SHAPE" "$OUT/gpu-dump.om" || { echo "SHAPE_NOT_SET $SHAPE" >&2; exit 2; }
