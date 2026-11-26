@@ -1,0 +1,382 @@
+note SPDX-License-Identifier: AGPL-3.0-only
+note aien_m16: Pure seeded Omega M16 hardware gate over /dev/aien-gpu (ZERO C, ZERO nvidia.ko, ZERO CUDA).
+note Verifies:
+note   1. AGPU_INFO (abi=1, state=4 RM_READY, GB20B BOOT_0=0x1bb000a1, BOOT_42=0x1bba1000)
+note   2. 4x GPU-uncached AGPU_MEM_ALLOC + maphold + mapbind (fifo, pushbuffer, marker, notifier)
+note   3. AGPU_CHAN_CREATE (compute_class=0xcec0, bit-30 token, 64 KiB doorbell BAR0 page)
+note   4. NEGATIVE CONTROL: GP entry + GPPut written, doorbell withheld 100 ms -> marker MUST remain 0
+note   5. DOORBELL CAUSALITY: write token to BAR0+0x90 -> marker becomes 0x16c0ffee within 2 s
+note   6. Clean AGPU_CHAN_DESTROY + 4x AGPU_MEM_FREE + close
+text agpath "/dev/aien-gpu"
+text mpass "AIEN_GPU_M16_OM: PASS marker=0x16c0ffee chid="
+text mtok " token="
+text mcls " class="
+text mneg " neg_ctrl=0\n"
+text mfail "AIEN_GPU_M16_OM: FAIL step="
+text merr " err="
+text mnl "\n"
+text mhex "0123456789abcdef"
+global agfd int 1
+global agpar uchar 256
+global agout uchar 256
+global agon ulong 1
+global agm long 4
+global agh uint 4
+global agva ulong 4
+global agbar long 1
+global agch uint 1
+global agchid uint 1
+global agtok uint 1
+global agcls uint 1
+global agnext ulong 1
+global agerr long 1
+global agstep uint 1
+fn agzero to void
+for i ulong 256
+put agpar i 0
+end
+end
+fn agp32 o ulong v uint to void
+for i ulong 4
+put agpar add o i uchar and shr v mul i 8 255
+end
+end
+fn agp64 o ulong v ulong to void
+for i ulong 8
+put agpar add o i uchar and shr v mul i 8 255
+end
+end
+fn agg32 o ulong to uint
+v = uint 0
+for i ulong 4
+v = or v shl uint get agpar add o i mul i 8
+end
+ret v
+end
+fn agg64 o ulong to ulong
+v = ulong 0
+for i ulong 8
+v = or v shl ulong get agpar add o i mul i 8
+end
+ret v
+end
+fn agchb c uchar to void
+n = get agon 0
+if lt n 256
+put agout n c
+put agon 0 add n 1
+end
+end
+fn agdec v ulong to void
+d = new uchar 24 0
+n = ulong 0
+x = v
+put d n uchar add rem x 10 48
+n = add n 1
+x = div x 10
+while gt x 0 bound 24
+put d n uchar add rem x 10 48
+n = add n 1
+x = div x 10
+end
+while gt n 0 bound 24
+n = sub n 1
+agchb get d n
+end
+end
+fn aghex32 v uint to void
+agchb 48
+agchb 120
+for i ulong 8
+sh = mul sub 7 i 4
+nib = ulong and shr v sh 15
+agchb get mhex nib
+end
+end
+fn agflush to void
+n = get agon 0
+if gt n 0
+r = write 1 agout 0 n
+put agon 0 0
+end
+end
+fn agtxt1 to void
+for i ulong len mpass
+agchb get mpass i
+end
+end
+fn agtxt2 to void
+for i ulong len mtok
+agchb get mtok i
+end
+end
+fn agtxt3 to void
+for i ulong len mcls
+agchb get mcls i
+end
+end
+fn agtxt4 to void
+for i ulong len mneg
+agchb get mneg i
+end
+end
+fn agtxtf to void
+for i ulong len mfail
+agchb get mfail i
+end
+end
+fn agtxte to void
+for i ulong len merr
+agchb get merr i
+end
+end
+fn agtxtn to void
+for i ulong len mnl
+agchb get mnl i
+end
+end
+fn agfail step uint e long to int
+put agstep 0 step
+put agerr 0 e
+put agon 0 0
+agtxtf
+agdec ulong step
+agtxte
+if lt e 0
+agchb 45
+agdec ulong neg e
+else
+agdec ulong e
+end
+agtxtn
+agflush
+ret 1
+end
+fn agzmap m long sz ulong to void
+agzero
+off = ulong 0
+while lt off sz bound 1024
+n = sub sz off
+if gt n 256
+n = ulong 256
+end
+r = mapwrite m off agpar 0 n
+off = add off n
+end
+end
+fn agalloc1 slot ulong sz ulong to bool
+va = get agnext 0
+m = maphold va sz
+if le m 0
+put agerr 0 m
+ret false
+end
+put agnext 0 add va add sz 4096
+agzero
+agp64 0 sz
+agp64 8 mapaddr m
+agp32 16 1
+r = devctl get agfd 0 uint 3224387873 agpar 0 48
+if ne r 0
+d = mapdrop m
+put agerr 0 r
+ret false
+end
+if ne agg32 32 1
+d = mapdrop m
+put agerr 0 long agg32 36
+ret false
+end
+h = agg32 20
+mo = agg64 24
+r = mapbind m get agfd 0 mo 3
+if ne r 0
+d = mapdrop m
+put agerr 0 r
+ret false
+end
+agzmap m sz
+put agm slot m
+put agh slot h
+put agva slot mapaddr m
+ret true
+end
+fn agcleanup to void
+if ne get agch 0 0
+agzero
+agp32 0 get agch 0
+r = devctl get agfd 0 uint 3222815012 agpar 0 24
+put agch 0 0
+end
+if gt get agbar 0 0
+r = mapdrop get agbar 0
+put agbar 0 0
+end
+for i ulong 4
+if gt get agm i 0
+r = mapdrop get agm i
+put agm i 0
+end
+if ne get agh i 0
+agzero
+agp32 0 get agh i
+r = devctl get agfd 0 uint 3222815010 agpar 0 24
+put agh i 0
+end
+end
+if ge get agfd 0 0
+r = fclose get agfd 0
+put agfd 0 neg int 1
+end
+end
+fn agopen_check to uint
+fd = fopen agpath 0 len agpath 524290 0
+if lt fd 0
+put agerr 0 fd
+ret 1
+end
+put agfd 0 int fd
+agzero
+r = devctl get agfd 0 uint 2154840336 agpar 0 112
+if ne r 0
+put agerr 0 r
+ret 2
+end
+if ne agg32 0 1
+put agerr 0 long agg32 0
+ret 3
+end
+if ne agg32 4 4
+put agerr 0 long agg32 4
+ret 4
+end
+if ne agg32 8 464519329
+put agerr 0 long agg32 8
+ret 5
+end
+if ne agg32 12 465178624
+put agerr 0 long agg32 12
+ret 6
+end
+if not agalloc1 0 65536
+ret 10
+end
+if not agalloc1 1 4096
+ret 11
+end
+if not agalloc1 2 4096
+ret 12
+end
+if not agalloc1 3 4096
+ret 13
+end
+ret 0
+end
+fn agmkchan to uint
+agzero
+agp32 0 get agh 0
+agp32 4 1024
+agp64 8 0
+agp32 16 get agh 0
+agp32 20 get agh 3
+agp64 24 8192
+r = devctl get agfd 0 uint 3225960739 agpar 0 72
+if ne r 0
+put agerr 0 r
+ret 20
+end
+if ne agg32 56 1
+put agerr 0 long agg32 60
+ret 21
+end
+put agchid 0 agg32 32
+put agtok 0 agg32 36
+dboff = agg64 40
+put agch 0 agg32 48
+put agcls 0 agg32 52
+bar = mapnew get agfd 0 dboff 65536 3 1
+if le bar 0
+put agerr 0 bar
+ret 22
+end
+put agbar 0 bar
+ret 0
+end
+fn agrun_m16 to uint
+mva = get agva 2
+pb = get agm 1
+r = mapset pb 0 4 536944640
+r = mapset pb 4 4 ulong get agcls 0
+r = mapset pb 8 4 537198615
+r = mapset pb 12 4 and mva 4294967295
+r = mapset pb 16 4 shr mva 32
+r = mapset pb 20 4 381747182
+r = mapset pb 24 4 0
+r = mapset pb 28 4 1048577
+cpufence
+gpe = or or get agva 1 shl ulong 8 42 ulong 2199023255552
+fifo = get agm 0
+r = mapset fifo 0 8 gpe
+cpufence
+r = mapset fifo 8332 4 1
+cpufence
+r = sleepns long 100000000
+negv = mapget get agm 2 0 4
+if ne negv 0
+put agerr 0 long negv
+ret 30
+end
+r = mapset get agbar 0 144 4 ulong get agtok 0
+cpufence
+t0 = monons
+got = ulong 0
+while true bound 30000
+got = mapget get agm 2 0 4
+if eq got 381747182
+break
+end
+now = monons
+if ge sub now t0 long 2000000000
+break
+end
+r = sleepns long 100000
+end
+if ne got 381747182
+put agerr 0 long got
+ret 40
+end
+ret 0
+end
+fn main to int
+put agfd 0 neg int 1
+put agnext 0 274877906944
+s = agopen_check
+if ne s 0
+agcleanup
+ret agfail s get agerr 0
+end
+s = agmkchan
+if ne s 0
+agcleanup
+ret agfail s get agerr 0
+end
+s = agrun_m16
+if ne s 0
+agcleanup
+ret agfail s get agerr 0
+end
+chid = get agchid 0
+tok = get agtok 0
+cls = get agcls 0
+agcleanup
+put agon 0 0
+agtxt1
+agdec ulong chid
+agtxt2
+aghex32 tok
+agtxt3
+aghex32 cls
+agtxt4
+agflush
+ret 0
+end
