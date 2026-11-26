@@ -2064,8 +2064,14 @@ tg = 26
 end
 ret or or 3426304 shl tg 23 sm
 end
+global gkqi uint 1
+global gkbat uint 1
 fn gkqmd id uint gx uint gy uint gz uint to void
+if eq get gkqi 0 0
 gkqq
+gkqcb
+put gkqi 0 1
+end
 code = add mapaddr get gbmem 4 mul ulong id 16384
 put gbq1 32 gblo shr code 4
 put gbq1 33 or uint and shr code 36 2097151 20971520
@@ -2076,7 +2082,10 @@ put gbq1 36 gksmw id
 put gbq1 39 gx
 put gbq1 40 gy
 put gbq1 41 gz
-gkqcb
+cb = mapaddr get gbmem 1
+e = add cb add 896 mul ulong get gkna 0 4
+put gbcb 212 gbhi e
+put gbcb 213 gblo e
 put gbcb 216 get gkthr id
 end
 note set after host writes to the arena; the next launch invalidates GPU L2 sysmem lines first
@@ -2091,7 +2100,10 @@ note ham/launch-batch 3b4f5807, vendored) stacks bodies under one gbtail.
 fn gkbody id uint gx uint gy uint gz uint to void
 gkqmd id gx gy gz
 put gbused 0 0
+fast = and eq get gkbat 0 1 gt get gbst 1 0
+if not fast
 gbsetup
+end
 if ne get gkinv 0 0
 note L2_SYSMEM_NCOH_INVALIDATE (clc96f.h:73, MEM_OP_D operation 0x11 in bits 31:27): drop L2 lines
 note the host rewrote in the arena; the previous launch ended with L2_FLUSH_DIRTY, so none is dirty
@@ -2104,9 +2116,16 @@ put gkinv 0 0
 end
 cb = mapaddr get gbmem 1
 q = mapaddr get gbmem 2
+if fast
+gbdma add cb 848 5
+for i ulong 5
+gbemit get gbcb add 212 i
+end
+else
 gbdma cb 224
 for i ulong 224
 gbemit get gbcb i
+end
 end
 na = get gkna 0
 gbdma add cb 896 na
@@ -2244,7 +2263,6 @@ put gkt 3 w
 end
 ret w
 end
-global gkbat uint 1
 fn gklaunch id uint gx uint gy uint gz uint to bool
 if or or or eq gx 0 eq gy 0 eq gz 0 ne get nvfault 0 0
 put nverr 0 neg long 22
@@ -2293,6 +2311,7 @@ ret ok
 end
 note Open the chip: slots 0 cmd, 1 cbank, 2 qmd, 3 marks, 4 code, 5 arena of asz bytes.
 fn gkopen asz ulong to bool
+put gkqi 0 0
 if not nvfull
 ret false
 end
@@ -2325,7 +2344,13 @@ put nverr 0 neg long 7
 ret false
 end
 r = mapwrite get gbmem 4 0 gkcode 0 1572864
-ret eq r long 1572864
+if ne r long 1572864
+ret false
+end
+gkqq
+gkqcb
+put gkqi 0 1
+ret true
 end
 fn gkbase to ulong
 ret mapaddr get gbmem 5
