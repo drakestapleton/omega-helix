@@ -279,10 +279,10 @@ def normalize_spec(raw: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"arch must be one of {'|'.join(univ_backend.ARCHES)}, got {arch!r}")
 
     tokenizer = str(raw.get("tokenizer") or "byte").strip().lower()
-    if tokenizer not in ("bpe", "byte", "u32"):
-        raise ValueError(f"tokenizer must be bpe|byte|u32, got {tokenizer!r}")
+    if tokenizer not in ("bpe", "byte", "u32", "omg"):
+        raise ValueError(f"tokenizer must be bpe|byte|u32|omg, got {tokenizer!r}")
 
-    default_v = 256 if tokenizer == "byte" else (70000 if tokenizer == "u32" else 300)
+    default_v = 256 if tokenizer in ("byte", "omg") else (70000 if tokenizer == "u32" else 300)
     V = _as_int(raw.get("V") if raw.get("V") is not None else raw.get("vocab"), default_v, "V")
     T = _as_int(raw.get("T"), 32, "T")
     D = _as_int(raw.get("D"), 32, "D")
@@ -347,6 +347,7 @@ def normalize_spec(raw: dict[str, Any]) -> dict[str, Any]:
             "add_layers": _as_int(sr.get("add_layers"), 1, f"strand[{sid}].add_layers"),
             "growth": growth,
             "use_fcachem": bool(sr.get("use_fcachem", True)),
+            "use_spforge": bool(sr.get("use_spforge", raw.get("use_spforge", False))),
             "steps": _as_int(sr.get("steps"), 15, f"strand[{sid}].steps"),
             "lr_micro": _as_int(sr.get("lr_micro"), 2000, f"strand[{sid}].lr_micro"),
             "weight": _as_int(sr.get("weight"), 500, f"strand[{sid}].weight"),
@@ -389,6 +390,7 @@ def normalize_spec(raw: dict[str, Any]) -> dict[str, Any]:
         "adapt_thresh_micro": adapt_thresh_micro,
         "msg_gain_micro": msg_gain_micro,
         "use_gpu": bool(raw.get("use_gpu", False)),
+        "use_spforge": bool(raw.get("use_spforge", False)),
         "gpu_precision": gpu_precision,
         "save_every": save_every,
         "base_steps": base_steps,
@@ -474,8 +476,8 @@ def estimate_chain(raw_spec: dict[str, Any]) -> dict[str, Any]:
         errors.append("lr_micro must be >= 1")
     if D > 0 and H > 0 and D % H != 0:
         errors.append(f"D={D} must be divisible by H={H}")
-    if spec["tokenizer"] == "byte" and V < 256:
-        errors.append("tokenizer=byte requires V >= 256")
+    if spec["tokenizer"] in ("byte", "omg") and V < 256:
+        errors.append(f"tokenizer={spec['tokenizer']} requires V >= 256")
     if spec["tokenizer"] == "bpe" and not (256 < V <= 65535):
         errors.append("tokenizer=bpe requires 256 < V <= 65535")
     if spec["tokenizer"] == "u32" and V <= 65535:
@@ -717,13 +719,16 @@ def estimate_chain(raw_spec: dict[str, Any]) -> dict[str, Any]:
             pl = strand_depth.get(s["parent_id"], L) if s["parent_id"] else L
             nl = pl + s["add_layers"]
             s_ev_cmd = min(s["steps"], spec["save_every"]) if spec.get("save_every", 0) > 0 else max(1, s["steps"] // 3)
-            cmds.append(f"ollm {s['growth']} parent.ck {s['id']}.ck {nl} {s['steps']} {s['lr_micro']}")
-            if s["use_fcachem"] and not spec["use_gpu"]:
-                cmds.append(f"ollm fcache parent.ck {s['id']}.tok W {s['id']}.hc && ollm trainfc {s['id']}.ck {s['id']}.hc {s['steps']} {s_ev_cmd} {pl}")
+            if (s.get("use_spforge") or spec.get("use_spforge")) and not spec["use_gpu"] and s["add_layers"] == 1:
+                cmds.append(f"ollm fcache parent.ck {s['id']}.tok W {s['id']}.hc && ollm spforge parent.ck {s['id']}.hc {s['id']}.sp 10000 1")
             else:
-                strand_gpu_op = "gtrainb" if spec.get("gpu_precision", "bf16") == "bf16" else "gtrainf"
-                cmds.append(f"ollm {strand_gpu_op if spec['use_gpu'] else 'trainf'} {s['id']}.ck {s['id']}.tok {s['steps']} {s_ev_cmd} {pl}")
-            cmds.append(f"ollm spext parent.ck {s['id']}.ck {s['id']}.sp")
+                cmds.append(f"ollm {s['growth']} parent.ck {s['id']}.ck {nl} {s['steps']} {s['lr_micro']}")
+                if s["use_fcachem"] and not spec["use_gpu"]:
+                    cmds.append(f"ollm fcache parent.ck {s['id']}.tok W {s['id']}.hc && ollm trainfc {s['id']}.ck {s['id']}.hc {s['steps']} {s_ev_cmd} {pl}")
+                else:
+                    strand_gpu_op = "gtrainb" if spec.get("gpu_precision", "bf16") == "bf16" else "gtrainf"
+                    cmds.append(f"ollm {strand_gpu_op if spec['use_gpu'] else 'trainf'} {s['id']}.ck {s['id']}.tok {s['steps']} {s_ev_cmd} {pl}")
+                cmds.append(f"ollm spext parent.ck {s['id']}.ck {s['id']}.sp")
         if spec["mode"] == "hybrid" or spec["export_hf"] or spec["export_gguf"]:
             cmds.append("ollm-interchange upgrade merged.ck model_v4.ck")
     else:
@@ -1261,7 +1266,12 @@ class ChainManager:
                     return int(parts[3]) / 1e6, int(parts[4]) / 1e6
             return None
 
-        ev_before_out = self._run_stream(run, [str(bins["ollm"]), "eval", str(base_ck), str(eval_data), str(eval_w)], "base_train")
+        ev_args_extra = [str(merges_path)] if merges_path is not None else []
+        ev_before_out = self._run_stream(
+            run,
+            [str(bins["ollm"]), "eval", str(base_ck), str(eval_data), str(eval_w)] + ev_args_extra,
+            "base_train",
+        )
         ev_before = _parse_eval_line(ev_before_out)
         if ev_before:
             run.emit("metric", stage="base_train", step=0, loss=ev_before[0], bpb=ev_before[1], tok_s=0.0)
@@ -1297,7 +1307,11 @@ class ChainManager:
             line_cb=_on_train_line,
         )
 
-        ev_after_out = self._run_stream(run, [str(bins["ollm"]), "eval", str(base_ck), str(eval_data), str(eval_w)], "base_train")
+        ev_after_out = self._run_stream(
+            run,
+            [str(bins["ollm"]), "eval", str(base_ck), str(eval_data), str(eval_w)] + ev_args_extra,
+            "base_train",
+        )
         ev_after = _parse_eval_line(ev_after_out)
         base_ck_hdr = ow_bridge.read_ollm_checkpoint_header(base_ck)
         if ev_after:
@@ -1374,11 +1388,7 @@ class ChainManager:
 
             strand_ck = run_dir / f"strand_{sid}.ck"
             strand_sp = run_dir / f"strand_{sid}.sp"
-            self._run_stream(
-                run,
-                [str(bins["ollm"]), s["growth"], str(parent_ck), str(strand_ck), str(new_L), str(s["steps"]), str(s["lr_micro"])],
-                f"strand:{sid}",
-            )
+            use_spforge_strand = bool(s.get("use_spforge") or spec.get("use_spforge")) and not use_gb10 and s["add_layers"] == 1
 
             if spec.get("save_every", 0) > 0:
                 s_every = max(1, min(s["steps"], int(spec["save_every"])))
@@ -1423,15 +1433,7 @@ class ChainManager:
                     except ValueError:
                         pass
 
-            if use_gb10:
-                strand_gpu_op = "gtrainb" if spec.get("gpu_precision", "bf16") == "bf16" else "gtrainf"
-                self._run_stream(
-                    run,
-                    [str(ollm_bin), strand_gpu_op, str(strand_ck), str(s_train), str(s["steps"]), str(s_every), str(parent_L)],
-                    f"strand:{sid}",
-                    line_cb=_on_strand_line,
-                )
-            elif s["use_fcachem"]:
+            if use_spforge_strand:
                 hc_path = run_dir / f"strand_{sid}.hc"
                 fc_w = max(1, min(32, (s_train_toks - 1) // T))
                 self._run_stream(
@@ -1441,30 +1443,64 @@ class ChainManager:
                 )
                 self._run_stream(
                     run,
-                    [str(bins["ollm"]), "trainfc", str(strand_ck), str(hc_path), str(s["steps"]), str(s_every), str(parent_L)],
+                    [str(bins["ollm"]), "spforge", str(parent_ck), str(hc_path), str(strand_sp), "10000", "1"],
                     f"strand:{sid}",
-                    line_cb=_on_strand_line,
                 )
+                self._run_stream(
+                    run,
+                    [str(bins["ollm"]), "spapp", str(parent_ck), str(strand_sp), str(strand_ck)],
+                    f"strand:{sid}",
+                )
+                global_step_offset += 1
             else:
                 self._run_stream(
                     run,
-                    [str(bins["ollm"]), "trainf", str(strand_ck), str(s_train), str(s["steps"]), str(s_every), str(parent_L)],
+                    [str(bins["ollm"]), s["growth"], str(parent_ck), str(strand_ck), str(new_L), str(s["steps"]), str(s["lr_micro"])],
                     f"strand:{sid}",
-                    line_cb=_on_strand_line,
                 )
 
-            global_step_offset += s["steps"]
+                if use_gb10:
+                    strand_gpu_op = "gtrainb" if spec.get("gpu_precision", "bf16") == "bf16" else "gtrainf"
+                    self._run_stream(
+                        run,
+                        [str(ollm_bin), strand_gpu_op, str(strand_ck), str(s_train), str(s["steps"]), str(s_every), str(parent_L)],
+                        f"strand:{sid}",
+                        line_cb=_on_strand_line,
+                    )
+                elif s["use_fcachem"]:
+                    hc_path = run_dir / f"strand_{sid}.hc"
+                    fc_w = max(1, min(32, (s_train_toks - 1) // T))
+                    self._run_stream(
+                        run,
+                        [str(bins["ollm"]), "fcache", str(parent_ck), str(s_train), str(fc_w), str(hc_path)],
+                        f"strand:{sid}",
+                    )
+                    self._run_stream(
+                        run,
+                        [str(bins["ollm"]), "trainfc", str(strand_ck), str(hc_path), str(s["steps"]), str(s_every), str(parent_L)],
+                        f"strand:{sid}",
+                        line_cb=_on_strand_line,
+                    )
+                else:
+                    self._run_stream(
+                        run,
+                        [str(bins["ollm"]), "trainf", str(strand_ck), str(s_train), str(s["steps"]), str(s_every), str(parent_L)],
+                        f"strand:{sid}",
+                        line_cb=_on_strand_line,
+                    )
 
-            # Extract Merkle-verified OLLMSP01 specialist pack
-            self._run_stream(
-                run,
-                [str(bins["ollm"]), "spext", str(parent_ck), str(strand_ck), str(strand_sp)],
-                f"strand:{sid}",
-            )
+                global_step_offset += s["steps"]
+
+                # Extract Merkle-verified OLLMSP01 specialist pack
+                self._run_stream(
+                    run,
+                    [str(bins["ollm"]), "spext", str(parent_ck), str(strand_ck), str(strand_sp)],
+                    f"strand:{sid}",
+                )
             sp_hdr = read_sp_header(strand_sp)
             s_ev_out = self._run_stream(
                 run,
-                [str(bins["ollm"]), "eval", str(strand_ck), str(s_eval), str(s_eval_w)],
+                [str(bins["ollm"]), "eval", str(strand_ck), str(s_eval), str(s_eval_w)] + ev_args_extra,
                 f"strand:{sid}",
             )
             s_ev = _parse_eval_line(s_ev_out)
@@ -1672,7 +1708,7 @@ class ChainManager:
             "export_dir": str(verified_export_dir),
             "workdir": str(run_dir / "universal"),
             "arch": spec["arch"],
-            "tokenizer": spec["tokenizer"],
+            "tokenizer": "byte" if spec["tokenizer"] == "omg" else spec["tokenizer"],
             "vocab": spec["V"],
             "held_mod": spec["held_mod"],
             "T": spec["T"],

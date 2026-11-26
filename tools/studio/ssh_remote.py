@@ -464,8 +464,13 @@ def _bootstrap_remote_studio(
         f"fi; "
         f"[ -n \"$BIN\" ] || {{ echo 'omega-helix not found on remote' >&2; exit 12; }}; "
         f"LOG=/tmp/omega-helix-studio-{rport}.log; "
-        f"setsid -f \"$BIN\" studio --headless --no-pairing --bind 127.0.0.1 --port {rport} "
-        f"--pairing-address 127.0.0.1:{lport} --json >\"$LOG\" 2>&1 </dev/null; "
+        f"if command -v setsid >/dev/null 2>&1; then "
+        f"  setsid -f \"$BIN\" studio --headless --no-pairing --bind 127.0.0.1 --port {rport} "
+        f"    --pairing-address 127.0.0.1:{lport} --json >\"$LOG\" 2>&1 </dev/null; "
+        f"else "
+        f"  nohup \"$BIN\" studio --headless --no-pairing --bind 127.0.0.1 --port {rport} "
+        f"    --pairing-address 127.0.0.1:{lport} --json >\"$LOG\" 2>&1 </dev/null & "
+        f"fi; "
         f"sleep 0.6; head -n 5 \"$LOG\" 2>/dev/null || true"
     )
     r = subprocess.run(_ssh_base_cmd(t, ssh_port) + [remote_cmd], capture_output=True, text=True, check=False, timeout=12)
