@@ -9,11 +9,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import subprocess
 import sys
 import threading
 import time
-import webbrowser
 from pathlib import Path
 from typing import Any
 
@@ -75,7 +75,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     print(f"  {cyan('Platform')}   : {topo.get('platform_label', info['os'] + ' ' + info['arch'])} · Python {info['python']}")
     print(f"  {cyan('Topology')}   : {topo.get('topology')} · mode={topo.get('mode')} · browser={topo.get('browser_kind')} · ssh_tunnel={'skip' if topo.get('should_skip_ssh_tunnel') else 'active'}")
     print(f"  {violet('Compiler')}   : {emerald(info['omc']) if info['omc'] else amber('omc not found (install via brew or interplane.io/omega)')}")
-    gpu_str = emerald('detected (/dev/nvidiactl or /dev/aien-gpu)') if info['has_gb10'] else dim('not detected (CPU mode ready)')
+    gpu_devs = [
+        dev for flag, dev in ((info.get("has_aien_gpu_dev"), "/dev/aien-gpu"), (info.get("has_nvidia_dev"), "/dev/nvidiactl"))
+        if flag
+    ]
+    gpu_str = emerald(f"detected ({', '.join(gpu_devs) or 'gb10'})") if info["has_gb10"] else dim("not detected (CPU mode ready)")
     print(f"  {emerald('GB10 GPU')}   : {gpu_str}")
     print(f"  {amber('OpenWALDO')}  : {cat['count']} indexed corpora · waldo CLI: {'installed' if info['has_waldo_cli'] else 'not installed (local/preset mode ready)'}")
     print(f"  {dim('Runs Dir')}   : {info['runs_dir']}")
@@ -255,7 +259,7 @@ def _run_studio_once(args: argparse.Namespace) -> int:
             "url": url,
             "pairing_url": pair_url,
             "topology": topo,
-            "ssh_forward_cmd": f"ssh -N -L 18421:127.0.0.1:{bound_port} {os.environ.get('USER', 'user')}@{os.uname().nodename}",
+            "ssh_forward_cmd": f"ssh -N -L 18421:127.0.0.1:{bound_port} {os.environ.get('USER', 'user')}@{platform.node() or 'host'}",
         }), flush=True)
     else:
         print_banner("Sovereign Studio Server — Zero Telemetry, 100% Pure-Omega")

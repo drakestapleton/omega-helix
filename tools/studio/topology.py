@@ -104,7 +104,7 @@ def detect_topology(
         platform_label = f"Windows 10/11 ({distro}, {sys_arch})"
         binary_target = "aarch64" if is_arm64 else "x86linux"
         signing_mode = "sha256"
-        has_display = not headless_flag
+        has_display = (not headless_flag) and (not is_ssh_session)
         if has_display and not no_open_flag:
             if which_fn("wslview"):
                 browser_cmd = ["wslview", url]
@@ -214,6 +214,14 @@ def detect_topology(
     }
 
 
+def _safe_http_url(url: str) -> bool:
+    if not isinstance(url, str):
+        return False
+    if not (url.startswith("http://") or url.startswith("https://")):
+        return False
+    return not any(ord(ch) < 32 or ch in "\x7f" for ch in url)
+
+
 def open_studio_browser(
     url: str,
     topo: Mapping[str, Any],
@@ -221,11 +229,12 @@ def open_studio_browser(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Open the Studio URL using the topology-appropriate launcher (never blindly calling webbrowser)."""
-    if topo.get("open_action") != "browser" or not topo.get("browser_cmd"):
+    if topo.get("open_action") != "browser" or not topo.get("browser_cmd") or not _safe_http_url(url):
         return {"opened": False, "action": "print_url", "cmd": None, "url": url}
-    cmd = [url if tok == topo.get("url") else tok for tok in topo["browser_cmd"]]
-    if not cmd or cmd[-1] != url:
-        cmd = list(topo["browser_cmd"][:-1]) + [url]
+    launch_url = url.replace("&", "^&") if topo["browser_cmd"][0] == "cmd.exe" else url
+    cmd = [launch_url if tok == topo.get("url") else tok for tok in topo["browser_cmd"]]
+    if not cmd or cmd[-1] != launch_url:
+        cmd = list(topo["browser_cmd"][:-1]) + [launch_url]
     if dry_run:
         return {"opened": False, "action": "dry_run_browser", "cmd": cmd, "url": url}
     try:

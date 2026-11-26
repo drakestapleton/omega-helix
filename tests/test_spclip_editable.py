@@ -441,6 +441,31 @@ def main() -> int:
         ollm("spclip", "edit", str(rec1), "--out", str(w / "z.spclip"), "--splice", "4:3:1000,all,all", expect_rc=2)
         ollm("spclip", "edit", str(rec1), "--out", str(w / "z.spclip"), "--splice", "1:3:1000,all,all", expect_rc=2)
         ollm("spclip", "edit", str(rec1), "--out", str(w / "z.spclip"), "--splice", "2:3:2001,all,all", expect_rc=2)
+        # Adversarial parser/trap hardening: signed overflow (must NOT trap 105), long splice/flags (must NOT trap 104), splice-0 ambiguity
+        ollm("spclip", "edit", str(rec1), "--out", str(w / "z.spclip"), "--set-weight", "0", "9223372036854775808", expect_rc=2)
+        ollm("spclip", "edit", str(rec1), "--out", str(w / "z.spclip"), "--set-weight", "0", "9999999999999999999", expect_rc=2)
+        ollm("spclip", "create", str(w / "z.spclip"), str(base_ck), "2", "9223372036854775808", "1", str(sp_a1), "100", "1", str(sp_b), expect_rc=2)
+        ollm("spclip", str(base_ck), "0", "fn ", "4", "0", "1", "-", "2", "9223372036854775808", "1", str(sp_a1), "100", "1", str(sp_b), expect_rc=2)
+        ollm("spclip", "edit", str(rec1), "--out", str(w / "z.spclip"), "--splice", "a" * 200, expect_rc=2)
+        ollm("spclip", "edit", str(rec1), "--out", str(w / "z.spclip"), *(["--tau", "1000"] * 66), expect_rc=2)
+        ollm("spclip", "edit", str(rec1), "--out", str(w / "z.spclip"), "--splice", "0:3:1000,all,all", expect_rc=2)
+        ollm("spclip", "edit", str(rec1), "--out", str(w / "z.spclip"), "--splice", "3:0:1000,all,all", expect_rc=2)
+        ollm("spclip", "edit", str(rec1), "--out", str(w / "z.spclip"), "--splice", "0,all,all", expect_rc=2)
+        ollm("spclip", "edit", str(rec1), "--out", str(w / "z.spclip"), "--splice", "0:0:1000,all,all", expect_rc=2)
+        ollm("spclip", "edit", str(rec1), "--out", str(w / "z.spclip"), "--set-splice", "0", "0:3:1000", expect_rc=2)
+        # Single-END shorthand (--splice 3,all,all) must persist explicit trunk_L:END (2:3:1000), not ambiguous 0:3:1000
+        rec_sh = w / "shorthand.spclip"
+        ollm("spclip", "edit", str(rec1), "--out", str(rec_sh), "--splice", "3,all,all", expect_rc=0)
+        check("splice 2:3:1000" in rec_sh.read_text(encoding="utf-8"), f"single-END splice did not canonicalize to 2:3:1000: {rec_sh.read_text()}")
+        # Half-zero splice in a resealed .spclip file must fail closed with rc=60
+        rec_hz = w / "halfzero.spclip"
+        rec_hz.write_bytes(reseal_spclip(rec1.read_text(encoding="utf-8").replace("splice 0:0:1000", "splice 0:3:1000", 1)))
+        ollm("spclip", "verify", str(rec_hz), expect_rc=60)
+        rec_hz2 = w / "halfzero2.spclip"
+        rec_hz2.write_bytes(reseal_spclip(rec1.read_text(encoding="utf-8").replace("splice 0:0:1000", "splice 3:0:1000", 1)))
+        ollm("spclip", "verify", str(rec_hz2), expect_rc=60)
+        # Overlong tune output path (len + 8 > 1024 for auto .lineage) must fail fast with rc=2
+        ollm("spclip", "tune", str(rec1), str(dom_user), "/" + "x" * 1020, "0", "0", expect_rc=2)
         ollm("spclip", "create", str(w / "s1.spclip"), str(base_ck), "--strand", str(sp_a1), expect_rc=2)
         ollm("spclip", "create", str(w / "s5.spclip"), str(base_ck), "--strand", str(sp_a1), "--strand", str(sp_b), "--strand", str(sp_c), "--strand", str(sp_d), "--strand", str(sp_a1), expect_rc=2)
         # Sealed recipe with zero weights must also fail closed with rc=2
@@ -481,7 +506,7 @@ def main() -> int:
              "--splice", "2:2:1000,2:2:1000,2:2:1000", "--add-layers", "1", expect_rc=0)
         ollm("spclip", "verify-lineage", str(z1_sp) + ".lineage")
 
-        print("PASS [7] All 27 fail-closed negative controls + 0-depth splice recovery verified (rc=60/61/62/2)")
+        print("PASS [7] All 41 fail-closed negative controls + 0-depth splice recovery verified (rc=60/61/62/2)")
 
         # 8. Edge cases: OLLMCK03 looped-core trunk + FIPS 180-4 SHA-256 padding boundary sizes (55, 56, 63, 64, 65 bytes)
         for blen in (55, 56, 63, 64, 65):
@@ -518,7 +543,21 @@ def main() -> int:
         ollm("spclip", "tune", str(rec_lp), str(dom_user), str(lp_child), "6", "40000", "--batch", "4")
         ollm("spclip", "verify-lineage", str(lp_child) + ".lineage")
         ollm("spapp", str(lp_base), str(lp_child), str(w / "loop_child.ck"))
-        print("PASS [8] OLLMCK03 looped-core spclip + SHA-256 boundary lengths (55/56/63/64/65 B) verified")
+
+        # MODE=1 extreme tau=1 fexp-underflow regression on asymmetric depths (L=4 high-H vs L=3 low-H)
+        dom_lowh = w / "lowh.txt"
+        dom_lowh.write_text("A" * 512, encoding="utf-8")
+        ck_lh, sp_lh = w / "lh.ck", w / "lh.sp"
+        ollm("growpro", str(base_ck), str(ck_lh), "3", "120", "200000")
+        ollm("trainf", str(ck_lh), str(dom_lowh), "120", "120", "2")
+        ollm("spext", str(base_ck), str(ck_lh), str(sp_lh))
+        rec_tau1 = w / "tau1_asym.spclip"
+        ollm("spclip", "create", str(rec_tau1), str(base_ck), "--strand", f"{sp_a1},{sp_a2}", "--strand", str(sp_lh), "--weights", "500,500", "--mode", "1", "--tau", "1")
+        tau1_child = w / "tau1_child.sp"
+        ollm("spclip", "tune", str(rec_tau1), str(dom_lowh), str(tau1_child), "4", "4000", "--batch", "4")
+        ollm("spclip", "verify-lineage", str(tau1_child) + ".lineage")
+        ollm("spapp", str(base_ck), str(tau1_child), str(w / "tau1_child.ck"))
+        print("PASS [8] OLLMCK03 looped-core spclip + SHA-256 boundary lengths (55/56/63/64/65 B) + extreme tau=1 underflow fallback verified")
         print("SPCLIP_EDITABLE_SUITE_PASS")
     return 0
 

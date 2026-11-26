@@ -170,7 +170,13 @@ end
 v = add mul v 10 sub c 48
 end
 if eq negf 1
+if gt v 9223372036854775807
+exit 2
+end
 ret neg long v
+end
+if gt v 9223372036854775807
+exit 2
 end
 ret long v
 end
