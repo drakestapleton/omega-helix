@@ -632,7 +632,10 @@ def cmd_forge(args: argparse.Namespace) -> int:
 
     est = runner.estimate_chain(spec)
     if not est["valid"]:
-        print(red(f"ERROR: {est['error']}"), file=sys.stderr)
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": False, "error": est["error"]}))
+        else:
+            print(red(f"ERROR: {est['error']}"), file=sys.stderr)
         return 1
 
     mgr = runner.ChainManager(runs_dir=args.workspace_dir, bin_dir=args.bin_dir)
@@ -776,7 +779,10 @@ def cmd_distill_run(args: argparse.Namespace) -> int:
 
     est = d_pipeline.estimate_distill(spec)
     if not est["valid"]:
-        print(red(f"ERROR: {est['error']}"), file=sys.stderr)
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": False, "error": est["error"]}))
+        else:
+            print(red(f"ERROR: {est['error']}"), file=sys.stderr)
         return 1
 
     mgr = d_pipeline.DistillManager(runs_dir=args.workspace_dir, bin_dir=args.bin_dir)
@@ -859,9 +865,13 @@ def cmd_runtime_guard(args: argparse.Namespace) -> int:
     bins = runner.ensure_binaries(["ollm"], bin_dir=args.bin_dir)
     strands: list[dict[str, Any]] = []
     for item in args.strand:
-        w_s, _, p_s = item.partition(":")
+        if ":" in item:
+            w_s, _, p_s = item.partition(":")
+            weight = int(w_s)
+        else:
+            weight, p_s = 1000, item
         packs = [x.strip() for x in p_s.split(",") if x.strip()]
-        strands.append({"weight_milli": int(w_s), "packs": packs})
+        strands.append({"weight_milli": weight, "packs": packs})
     res = rt.run_firewall_decode(
         bins["ollm"], args.base_ck, strands,
         prompt=args.prompt, n_tokens=args.n_tokens, temp_milli=args.temp_milli,
@@ -892,6 +902,7 @@ def cmd_runtime_green(args: argparse.Namespace) -> int:
     res = rt.run_compile_until_green(
         bins["ollm"], args.ck_path, args.prompt,
         verifier=args.verifier, max_attempts=args.max_attempts, out_dir=args.out_dir,
+        temp_milli=args.temp_milli, merges=args.merges,
     )
     print(json.dumps(res, indent=2))
     return 0 if res.get("passed") else 1
@@ -1515,6 +1526,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_grn.add_argument("--verifier", default="omc_compile")
     p_grn.add_argument("--max-attempts", dest="max_attempts", type=int, default=3)
     p_grn.add_argument("--out-dir", dest="out_dir", required=True)
+    p_grn.add_argument("--temp-milli", dest="temp_milli", type=int, default=0)
+    p_grn.add_argument("--merges", default="-", help="BPE merges.bin path when ck_path has V > 256")
     p_grn.add_argument("--json", action="store_true")
     p_grn.set_defaults(func=cmd_runtime_green)
 
@@ -1655,7 +1668,10 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         return 130
     except Exception as exc:
-        print(red(f"ERROR: {exc}"), file=sys.stderr)
+        if getattr(ns, "json", False) or ("--json" in args_in):
+            print(json.dumps({"ok": False, "error": str(exc)}))
+        else:
+            print(red(f"ERROR: {exc}"), file=sys.stderr)
         return 1
 
 

@@ -340,7 +340,7 @@ mkdir -p "$STAGE/bin"
 
 step "Copying sources"
 (cd "$SRC" && COPYFILE_DISABLE=1 tar -cf - --exclude=__pycache__ --exclude='*.pyc' --exclude=.DS_Store --exclude='._*' \
-   native scripts tools docs bin README.md LICENSE llms.txt 2>/dev/null) | tar -C "$STAGE" -xf -
+   native scripts tools docs bin tests/oracle.py README.md LICENSE llms.txt 2>/dev/null) | tar -C "$STAGE" -xf -
 chmod +x "$STAGE/bin/omega-helix" "$STAGE/scripts/"*.sh 2>/dev/null || true
 
 # --- build ------------------------------------------------------------------

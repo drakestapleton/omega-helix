@@ -969,6 +969,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                     verifier=str(body.get("verifier", "omc_compile")),
                     max_attempts=int(body.get("max_attempts", 3)),
                     out_dir=body["out_dir"],
+                    merges=str(body.get("merges") or body.get("merges_bin") or "-"),
                 )
                 self._send_json(HTTPStatus.OK, {"ok": True, "receipt": res})
             except Exception as exc:
