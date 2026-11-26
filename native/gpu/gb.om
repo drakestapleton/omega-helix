@@ -637,8 +637,12 @@ end
 
 note gprofb: gprof with gkbf 1
 fn gbprof to void
+if ggnv4_env
+ggsnv4 1
+end
 put gkbf 0 1
 ggprof
+ggsnv4 0
 end
 
 note gbfrag CK: every BF16 kernel (ids 27..36) on fixed data with exact f32 sums, compared element by
@@ -1359,6 +1363,7 @@ gbvd 49 false
 end
 ggupw
 ggf2b ggp5 gga1 0 gga1 38
+ggquant_w
 t0 = monons
 lg = ggpass false
 t1 = monons
@@ -1680,7 +1685,7 @@ exit 52
 end
 
 fn gn4gemm_run m ulong n ulong k ulong fl uint al f64 to void
-ggmm4_ab gn4p 2 gn4p 3 gn4p 4 gn4p 5 k
+ggmm4_ab gn4p 2 gn4p 3 gn4p 4 gn4p 5 m n
 if ne and fl 2 0
 gkopc gn4p 7 uint mul n 2 2 0 0 f32 al
 else

@@ -1879,66 +1879,234 @@ gkldgq1 96 112 false p
 gkldgq1 100 114 true p
 gkldgp 104 116 0 true p
 end
-fn gknv4_sts to void
+fn gklds_f d uint a uint off uint sb uint wt uint to void
+gkq or or 31108 shl d 16 shl a 24 shl off 8 3072 gkcw 1 sb 7 wt
+end
+fn gklds32_f d uint a uint off uint sb uint wt uint to void
+gkq or or 31108 shl d 16 shl a 24 shl off 8 2048 gkcw 1 sb 7 wt
+end
+fn gksts_f a uint off uint b uint more bool to void
+w = get gkpend 0
+if more
+w = and w 4294967293
+end
+gkq or 31112 shl a 24 or b shl off 8 134220031 gkcw 1 7 1 w
+put gkpend 0 or w 2
+end
+fn gknv4_sts stg uint to void
 for i uint 4
-gksts2 118 mul i 4 add 96 i ne i 0
+gksts_f 118 add stg mul i 16 add 96 i ne i 0
 end
 for i uint 4
-gksts2 118 add 4096 mul i 4 add 100 i true
+gksts_f 1 add stg mul i 16 add 100 i true
 end
-gksts 119 0 104 true
+gksts 119 stg 104 true
 end
 fn gknv4_adv to void
-gkmovi 8 32
-gkmovi 9 4
-gkimadw1 112 8 1 112
-gkimadw1 114 8 1 114
-gkimadw 116 9 1 116
+gkimadw1 112 124 1 112
+gkimadw1 114 7 1 114
+gkimadw 116 111 1 116
 end
-fn gknv4_lds0 to void
-gklds32 80 120 0 3 0
-gklds32 81 120 256 3 0
-gklds32 82 120 16 3 0
-gklds32 83 120 272 3 0
-gklds32 84 120 512 3 0
-gklds32 85 120 768 3 0
-gklds32 86 120 528 3 0
-gklds32 87 120 784 3 0
-gklds32 105 122 0 3 0
-gklds32 106 122 64 3 0
+fn gknv4_lds0 stg uint to void
+gklds_f 80 120 stg 3 0
+gklds_f 84 120 add stg 512 3 0
+gklds_f 88 121 stg 3 0
+gklds_f 92 121 add stg 512 3 0
+gklds32_f 105 122 stg 3 0
+gklds32_f 106 122 add stg 64 3 0
 for nj uint 4
-off = mul nj 256
-gklds32 add 88 mul nj 2 121 off 3 0
-gklds32 add 89 mul nj 2 121 add off 16 3 0
-gklds32 add 107 nj 123 mul nj 32 3 0
+gklds32_f add 107 nj 123 add stg mul nj 32 3 0
 end
 end
-fn gknv4_lds1 to void
-for nj uint 4
-off = add 1024 mul nj 256
-gklds32 add 8 mul nj 2 121 off 4 0
-gklds32 add 9 mul nj 2 121 add off 16 4 0
+fn gknv4_lds_bhi stg uint to void
+gklds_f 8 121 add stg 1024 4 0
+gklds_f 12 121 add stg 1536 4 0
 end
-for nj uint 4
-gklds32 add 107 nj 123 add 128 mul nj 32 4 0
-end
-end
-fn gknv4_mma hi uint to void
+fn gknv4_mma0 stg uint to void
 w = uint 8
-bb = uint 88
-if eq hi 1
-w = 16
-bb = 8
-end
-n0 = add 16 mul hi 16
 for nj uint 4
-gkommasf2 add n0 mul nj 4 80 add bb mul nj 2 105 add 107 nj w
+gkommasf2 add 16 mul nj 4 80 add 88 mul nj 2 105 add 107 nj w
 w = 0
 end
 for nj uint 4
-gkommasf2 add add n0 32 mul nj 4 84 add bb mul nj 2 106 add 107 nj 0
+gkommasf2 add 48 mul nj 4 84 add 88 mul nj 2 106 add 107 nj 0
+end
+for nj uint 4
+gklds32_f add 107 nj 123 add add stg 128 mul nj 32 4 0
 end
 end
+fn gknv4_mma1 to void
+w = uint 16
+for nj uint 4
+gkommasf2 add 32 mul nj 4 80 add 8 mul nj 2 105 add 107 nj w
+w = 0
+end
+for nj uint 4
+gkommasf2 add 64 mul nj 4 84 add 8 mul nj 2 106 add 107 nj 0
+end
+end
+fn gkiadd_f d uint a uint b uint to void
+gkq or or 29200 shl d 16 shl a 24 b 134209791 gkcw 2 7 7 0
+end
+fn gkisge_f p uint a uint imm uint st uint to void
+gkq or 30732 shl a 24 imm or 66085488 shl p 17 gkcw st 7 7 0
+end
+fn gknv4_step stg_r uint stg_w uint to ulong
+gkisge_f 1 125 2 6
+gknv4_lds0 stg_r
+gknv4_ld 1
+gknv4_lds_bhi stg_r
+gkiadd_f 125 125 4
+gknv4_mma0 stg_r
+gkisge_f 0 125 1 2
+gknv4_mma1
+pd = get gkpend 0
+put gkpend 0 0
+p_done = grbfwd_mk 8
+put gkpend 0 pd
+gknv4_sts stg_w
+gksync
+gknv4_adv
+ret p_done
+end
+fn gknv4_epi_q mi uint to void
+gksync
+gkldc 84 1000 false
+gkldc64 80 920
+gkldc64 82 952
+gkldc 31 1004 false
+gkmovi 24 grf div 1.0f64 6.0f64
+gkmovi 25 grf 448.0f64
+gkmovi 27 grf 0.015625f64
+gkmovi 28 120
+gkshr 86 0 5
+gkandi 85 0 31
+gkandi 88 85 3
+gkisetp 2 88 255 2
+gkisetp 3 85 255 2
+gkshr 98 85 2
+gkimadi 98 98 4 255
+gkmovi 87 16
+topq = div get gkat 0 16
+gkandi 88 86 1
+gkshr 89 86 1
+gkimadi 90 89 256 255
+gkimadi 90 88 128 90
+gkimadi 90 85 4 90
+gklds32 32 90 0 3 0
+gkq 31000 0 0 gkcw 1 7 7 8
+gkimadi 34 32 65536 255
+gkandi 35 32 4294901760
+grqnv4_core
+gkshr 91 89 4
+gkimadi 91 91 32 255
+gkandi 92 89 15
+gkiadd 91 91 92
+gkimadi 91 3 128 91
+if eq mi 1
+gkmovi 92 16
+gkiadd 91 91 92
+end
+gkimadi 92 2 2 88
+gkimad 93 92 84 91
+gkimadw 94 93 32 80
+gkimadw 94 98 1 94
+gkimadw 96 93 4 82
+gkstgp 94 42 0 false 2
+gkstgp 96 38 0 true 3
+gkmovi 88 8
+gkiadd 86 86 88
+gkiadd 87 87 4
+gkisge 0 87 1
+gkbra 0 ulong topq
+gksync
+end
+
+fn gknv4_qsts qi uint to void
+gkq 31000 0 0 gkcw 1 7 7 get gkpend 0
+put gkpend 0 0
+p_ns = grbfwd_mk 12
+for p uint 8
+o0 = add mul qi 64 mul shr p 1 16
+o1 = add o0 mul and p 1 2048
+if eq p 7
+gksts 122 o1 add 80 p true
+else
+gksts2 122 o1 add 80 p ne p 0
+end
+end
+grbfwd_fx 12 p_ns
+end
+
+fn gknv4_qtr mi uint qi uint ep uint to void
+hc = gkqb128 mi qi 112 116
+hy = gkqb128 mi qi 114 118
+a0 = add add 16 mul mi 32 mul qi 16
+if eq ep 2
+gkhadrb128 hy
+gkhld32_128
+end
+for e uint 16
+gkfmulf add a0 e add a0 e 121
+end
+if eq ep 2
+t = gkthm 120
+for e uint 16
+gkepm add a0 e add 80 e t
+end
+end
+if eq ep 1
+for e uint 16
+gkepm add a0 e add a0 e 255
+end
+gkhadrb128 hy
+gkhst32_128 a0
+else
+gkhadrb128 hc
+gkhst32_128 a0
+end
+gknv4_qsts qi
+end
+
+fn gknv4_epih128 ep uint to void
+gkbt 12 6 3 32 true
+gkbt 12 2 7 1 false
+gkimadi 12 3 128 12
+gkbt 13 5 1 64 true
+gkbt 13 0 3 2 false
+gkimadi 13 2 128 13
+gkldc 14 968 false
+gkldc 15 972 true
+gkimad 12 12 14 255
+gkimad 12 13 15 12
+gkldc 10 976 false
+gkldc 11 980 true
+gkimad 12 6 10 12
+gkimad 12 7 11 12
+gkldc64 10 960
+gkimadw 112 12 1 10
+gkldc64 10 1016
+gkimadw 114 12 1 10
+gkldc 121 996 false
+gkldc 10 1004 false
+gkisetp 4 10 255 5
+gkbt 122 6 3 4096 true
+gkbt 122 2 7 256 false
+gkbt 122 5 1 128 false
+gkbt 122 0 3 4 false
+for mi uint 2
+for qi uint 2
+gknv4_qtr mi qi ep
+end
+gkq 31000 0 0 gkcw 1 7 7 get gkpend 0
+put gkpend 0 0
+p_sk = grbfwd_mk 12
+gknv4_epi_q mi
+grbfwd_fx 12 p_sk
+end
+gkexit
+end
+
 fn gkgemmnv4_128 beta bool ep uint out_bf bool to void
 put gkpend 0 0
 gkldc 1 892 false
@@ -1953,58 +2121,66 @@ gkldc 9 992 true
 gkimadh 6 5 8 255
 gkimad 7 6 9 5
 gkswiz
-note Setup A_nv4 ptr (R112:113) and B_nv4 ptr (R114:115)
-gkshr 11 0 1
-gkandi 12 0 1
-gkimadi 12 12 16 255
-gkimadi 13 3 128 11
-gkldc 14 912 false
-gkldc 15 920 true
-gkimad 13 13 14 12
-gkimad 13 6 15 13
+note Setup coalesced [K/64, M, 32B] A_nv4 (R112:113) and B_nv4 (R114:115) ptrs
+gkimadi 12 0 16 255
+gkimadi 13 3 4096 12
+if eq ep 0
+gkldc 15 920 false
+gkimad 13 5 15 13
+end
 gkldc64 8 896
 gkimadw 112 13 1 8
-gkimadi 13 2 128 11
-gkldc 14 944 false
-gkldc 15 952 true
-gkimad 13 13 14 12
-gkimad 13 6 15 13
+gkimadi 13 2 4096 12
+if eq ep 0
+gkldc 15 952 false
+gkimad 13 5 15 13
+end
 gkldc64 8 928
 gkimadw 114 13 1 8
-note Setup S_nv4 ptr (R116:117): Sa for tid < 128, Sb for tid >= 128
+note Setup coalesced [K/64, M, 4B] S_nv4 ptr (R116:117) and k_blk stride (R111)
 gkandi 11 0 127
 gkshr 10 0 7
 gkisetp 0 10 255 5
 p_sb = grbfwd_mk 0
-gkimadi 13 3 128 11
-gkldc 14 916 false
+gkimadi 13 3 512 255
+gkimadi 13 11 4 13
+gkldc 111 916 false
+if eq ep 0
 gkldc 15 924 true
-gkimad 13 13 14 255
-gkimad 13 6 15 13
+gkimad 13 5 15 13
+end
 gkldc64 8 904
 gkimadw 116 13 1 8
 p_sd = grbfwd_mk 7
 grbfwd_fx 0 p_sb
-gkimadi 13 2 128 11
-gkldc 14 948 false
+gkimadi 13 2 512 255
+gkimadi 13 11 4 13
+gkldc 111 948 false
+if eq ep 0
 gkldc 15 956 true
-gkimad 13 13 14 255
-gkimad 13 6 15 13
+gkimad 13 5 15 13
+end
 gkldc64 8 936
 gkimadw 116 13 1 8
 grbfwd_fx 7 p_sd
-note SMEM STS bases: R118 = tid*16, R119 = 8192 + tid*4
-gkimadi 118 0 16 255
+note SMEM STS bases: R118 A frag-packed, R1 B frag-packed, R119 S linear
+gkbt 118 5 7 512 true
+gkbt 118 1 7 64 false
+gkbt 118 0 1 8 false
+gkbt 118 4 1 4 false
+gkmovi 1 4096
+gkbt 1 5 7 512 false
+gkbt 1 1 7 64 false
+gkbt 1 4 1 8 false
+gkbt 1 0 1 4 false
 gkmovi 10 8192
 gkimadi 119 0 4 10
-note SMEM LDS bases: R120 A, R121 B, R122 Sa, R123 Sb
+note SMEM LDS.128 bases (0-way bank conflict): R120 A, R121 B; R122 Sa, R123 Sb
 gkbt 120 6 3 1024 true
-gkbt 120 2 7 32 false
-gkbt 120 0 3 4 false
+gkbt 120 0 31 16 false
 gkmovi 121 4096
 gkbt 121 5 1 2048 false
-gkbt 121 2 7 32 false
-gkbt 121 0 3 4 false
+gkbt 121 0 31 16 false
 gkmovi 122 8192
 gkbt 122 6 3 128 false
 gkbt 122 2 7 4 false
@@ -2012,40 +2188,31 @@ gkbt 122 0 1 32 false
 gkmovi 123 8704
 gkbt 123 5 1 256 false
 gkbt 123 2 7 4 false
-gkldc 124 984 false
+gkldc 125 984 false
+gkldc 124 912 true
+gkldc 7 944 true
 gkmovi 4 4294967295
 for i uint 64
 gkmovz add 16 i
 end
 put gkpend 0 63
 gknv4_ld 7
-gknv4_sts
+gknv4_sts 0
 gksync
 gknv4_adv
-gkmovi 125 9216
-gkiadd 118 118 125
-gkiadd 119 119 125
 top = div get gkat 0 16
-gkisge 1 124 2
-gknv4_lds0
-gknv4_ld 1
-gknv4_mma 0
-gknv4_lds1
-gknv4_mma 1
-gknv4_sts
-gksync
-gknv4_adv
-gkiadd 120 120 125
-gkiadd 121 121 125
-gkiadd 122 122 125
-gkiadd 123 123 125
-gkimad 125 125 4 255
-gkiadd 118 118 125
-gkiadd 119 119 125
-gkiadd 124 124 4
-gkisge 0 124 1
-gkbra 0 ulong top
+p0 = gknv4_step 0 9216
+p1 = gknv4_step 9216 0
+gkbra 7 ulong top
+grbfwd_fx 8 p0
+grbfwd_fx 8 p1
+gkldc 9 992 false
+gkimad 7 6 9 5
+if and not beta and out_bf ne ep 0
+gknv4_epih128 ep
+else
 gkepih128 beta ep out_bf
+end
 end
 fn gkemitnv4_128 id uint bt bool ep uint out_bf bool to bool
 gkslot id

@@ -1480,6 +1480,54 @@ gkf2fp add 32 u add 48 u add 40 u 0
 end
 end
 end
+fn grf2fp_e4m3 d uint a uint b uint c uint to void
+gkfx or or 29246 shl d 16 shl a 24 b or 75526144 c
+end
+fn grf2fp_e2m1 d uint a uint b uint c uint to void
+gkfx or or 29246 shl d 16 shl a 24 b or 69234688 c
+end
+fn grrmsf_nv4_u rev uint rod uint pn uint ps uint to void
+gkandi 36 rev 2147483647
+gkandi 37 rod 2147483647
+grfmax 36 36 37
+grshfl 37 36 4
+grfmax 36 36 37
+grshfl 37 36 2
+grfmax 36 36 37
+grshfl 37 36 1
+grfmax 36 36 37
+gkfmulf 37 36 24
+grfsetp 1 37 25 4
+grfsel 37 25 37 1
+grfmax 37 37 27
+grfsetp 1 36 255 4
+grfsel 37 37 255 1
+grf2fp_e4m3 38 37 37 255
+gkandi 38 38 127
+gkshr 34 38 3
+gkiadd 34 34 28
+gkandi 35 38 7
+gkimadi 35 35 1048576 255
+gkimadi 34 34 8388608 35
+grmufu 39 34 4096
+grfsel 39 39 255 1
+gkfmulf 34 rev 39
+gkfmulf 35 rod 39
+grf2fp_e2m1 32 35 34 255
+gkandi 32 32 255
+grshfl 33 32 1
+gkimadi 32 33 256 32
+grshfl 33 32 2
+gkimadi 32 33 65536 32
+grshfl 33 38 8
+gkimadi 38 33 256 38
+grshfl 33 38 16
+gkimadi 38 33 65536 38
+gkstgp pn 32 0 false 2
+gkstgp ps 38 0 true 3
+gkimadw pn 18 32 pn
+gkimadw ps 18 4 ps
+end
 fn grrmsf_bf1 to void
 d = uint get grd 2
 d2 = mul d 2
@@ -1518,6 +1566,26 @@ gkf2fp add 32 u add 48 u add 40 u 0
 end
 end
 grstw 16 32 nh
+gkldc 19 grarg 15 false
+gkisetp 0 19 255 2
+gkexitp 0
+gkldc 18 grarg 14 false
+gkmovi 24 grf div 1.0f64 6.0f64
+gkmovi 25 grf 448.0f64
+gkmovi 27 grf 0.015625f64
+gkmovi 28 120
+gkandi 19 9 3
+gkisetp 2 19 255 2
+gkisetp 3 9 255 2
+gkldc64 12 grarg 10
+gkimadw 12 8 32 12
+gkshr 19 9 2
+gkimadw 12 19 4 12
+gkldc64 14 grarg 12
+gkimadw 14 8 4 14
+for u uint nh
+grrmsf_nv4_u add 40 u add 48 u 12 14
+end
 gkexit
 ret
 end
@@ -1548,6 +1616,22 @@ gkffmaf 65 64 24 25
 grmufu 66 65 5120
 grptr 12 7 8 4
 gkstg 12 66 0 false
+gkldc 19 grarg 15 false
+gkisetp 4 19 255 5
+gkldc 18 grarg 14 false
+gkmovi 24 grf div 1.0f64 6.0f64
+gkmovi 25 grf 448.0f64
+gkmovi 27 grf 0.015625f64
+gkmovi 28 120
+gkandi 19 9 3
+gkisetp 2 19 255 2
+gkisetp 3 9 255 2
+gkldc64 20 grarg 10
+gkimadw 20 8 32 20
+gkshr 19 9 2
+gkimadw 20 19 4 20
+gkldc64 22 grarg 12
+gkimadw 22 8 4 22
 grrptr 10 1 d2
 gkldc64 14 grarg 4
 gkimadw 14 9 8 14
@@ -1556,6 +1640,11 @@ top2 = grtop 30 it
 grldw 32 10 c true
 grrmsf_bf1_c2 c
 grstw 16 32 c
+p_sk = grbfwd_mk 12
+for u uint c
+grrmsf_nv4_u add 40 u add 48 u 20 22
+end
+grbfwd_fx 12 p_sk
 gradv 10 adv2
 gradv 14 adv4
 gradv 16 adv2
@@ -2517,12 +2606,7 @@ note 88 GRQNV4 (row-major BF16 [M,K] -> NVFP4 E2M1 + UE4M3 block-16, sm=0)
 note 89 GRQNV4T (transposed BF16 [K,M] -> NVFP4 [M,K] E2M1 + UE4M3, sm=4096)
 note Args (gkna=10): 0..1 X_bf16, 2..3 X_nv4, 4..5 Sx_nv4, 6 M, 7 K, 8 src_stride_bytes, 9 flags
 note =========================================================================
-fn grf2fp_e4m3 d uint a uint b uint c uint to void
-gkfx or or 29246 shl d 16 shl a 24 b or 75526144 c
-end
-fn grf2fp_e2m1 d uint a uint b uint c uint to void
-gkfx or or 29246 shl d 16 shl a 24 b or 69234688 c
-end
+
 note Quantize 64 f32 values across one warp (lane l holds elements 2l in R34 and 2l+1 in R35).
 note Expects constants: R24 = 1/6, R25 = 448.0, R27 = 0.015625 (2^-6), R28 = 120, R31 = f32 pre-scale S.
 note Outputs: R42 = packed 8x E2M1 u32 at (lane&3)==0; R38 = packed 4x UE4M3 u32 at lane==0.
@@ -2583,52 +2667,38 @@ put gkpend 0 0
 gkldc 1 892 false
 gks2r 0 33 true
 gks2r 2 37 true
+gks2r 3 38 true
 gkq 4278482860 27392 134220288 or gkcw 4 2 7 get gkpend 0 8192
 put gkpend 0 4
 gkldc 18 920 false
-gkldc 19 924 true
 gkldc 20 928 true
-gkisetp 0 2 18 6
-gkexitp 0
 gkshr 8 0 5
 gkandi 9 0 31
-gkshr 21 19 6
-gkshr 22 19 1
-gkshr 23 19 4
-gkisetp 0 8 21 6
+gkimadi 22 2 8 8
+gkisetp 0 22 18 6
 gkexitp 0
 grqnv4_consts
 gkandi 44 9 3
 gkisetp 2 44 255 2
 gkisetp 3 9 255 2
 gkldc64 10 896
-gkimadwr 10 2 20 10
-gkimadi 44 8 128 255
+gkimadwr 10 22 20 10
+gkimadi 44 3 128 255
 gkimadi 44 9 4 44
 gkimadw 10 44 1 10
+gkimad 45 3 18 22
 gkldc64 12 904
-gkimadwr 12 2 22 12
+gkimadw 12 45 32 12
 gkshr 44 9 2
-gkimadi 44 44 4 255
-gkimadi 44 8 32 44
-gkimadw 12 44 1 12
+gkimadw 12 44 4 12
 gkldc64 14 912
-gkimadwr 14 2 23 14
-gkimadw 14 8 4 14
-gkiadd 30 8 255
-top = div get gkat 0 16
+gkimadw 14 45 4 14
 gkldg 32 10 0 false
 gkimadi 34 32 65536 255
 gkandi 35 32 4294901760
 grqnv4_core
 gkstgp 12 42 0 false 2
 gkstgp 14 38 0 true 3
-gkimadw 10 26 1024 10
-gkimadw 12 26 256 12
-gkimadw 14 26 32 14
-gkiadd 30 30 29
-gkisetp 0 30 21 1
-gkbra 0 ulong top
 gkexit
 end
 fn grqnv4t to void
@@ -2642,8 +2712,8 @@ put gkpend 0 4
 gkldc 18 920 false
 gkldc 19 924 true
 gkldc 20 928 true
-gkshr 22 19 1
-gkshr 23 19 4
+gkmovi 22 32
+gkmovi 23 4
 grqnv4_consts
 note Phase 1: load 64x32 BF16 tile [k0..k0+63, m0..m0+31] into SMEM[64][16 u32] (4096 B)
 gkandi 44 0 15
@@ -2678,17 +2748,15 @@ gkandi 9 0 31
 gkandi 44 9 3
 gkisetp 2 44 255 2
 gkisetp 3 9 255 2
-gkshr 44 9 2
-gkimadi 44 44 4 255
-gkimadi 44 3 32 44
-gkldc64 12 904
-gkimadw 12 44 1 12
-gkldc64 14 912
-gkimadw 14 3 4 14
-gkimadi 46 2 32 255
+gkimad 46 3 18 255
+gkimadi 46 2 32 46
 gkimadi 46 8 4 46
-gkimadwr 12 46 22 12
-gkimadwr 14 46 23 14
+gkshr 44 9 2
+gkldc64 12 904
+gkimadw 12 46 32 12
+gkimadw 12 44 4 12
+gkldc64 14 912
+gkimadw 14 46 4 14
 for p uint 2
 gkimadi 45 8 2 255
 if eq p 1

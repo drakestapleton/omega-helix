@@ -1,0 +1,7 @@
+{"window_id": "20261126T232906Z-724174", "name": "gb10-nvfp4-fused-20261126", "owner": "drakestapleton@pid1725246", "lease_min": 10, "gb10": "exclusive", "waited_s": 1, "state": {"utc": "2026-11-26T23:29:07Z", "loadavg": "9.29 10.70 9.96 9/2328 1813328", "mem_avail_kB": 112199888, "gpu_util_pct": "NVIDIA-SMIhasfailedbecauseitcouldn'tcommunicatewiththeNVIDIAdriver.MakesurethatthelatestNVIDIAdriverisinstalledandrunning.", "gpu_W": "NVIDIA-SMIhasfailedbecauseitcouldn'tcommunicatewiththeNVIDIAdriver.MakesurethatthelatestNVIDIAdriverisinstalledandrunning.",
+ "gb10_lock_holders": "holds exclusive pid 1812838 (s) (set by a finished flock; processes with /tmp/aien-gb10.lock open now: pid 1812807 /bin/sh /home/drakestapleton/.local/bin/spark-window _hold 20261126T23); ",
+ "quiet_lock_holders": "holds exclusive pid 1812840 (s) (set by a finished flock; processes with /tmp/aien-quiet.lock open now: pid 1812807 /bin/sh /home/drakestapleton/.local/bin/spark-window _hold 20261126T23); ",
+ "quiet_waiters": "",
+ "gpu_apps": "NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver. Make sure that the latest NVIDIA driver is installed and running.;;",
+ "sensors_row": "1795735746,2026-11-26T17:29:06-06:00,90,NVIDIA-SMIhasfailedbecauseitcouldn'tcommunicatewiththeNVIDIAdriver.MakesurethatthelatestNVIDIAdriverisinstalledandrunning.,NVIDIA-SMIhasfailedbecauseitcouldn'tcommunicatewiththeNVIDIAdriver.MakesurethatthelatestNVIDIAdriverisinstalledandrunning.,9.29,112622612,0,11581", "sensors_row_age_s": 1}
+}
