@@ -171,7 +171,7 @@ OLLM_WALDO_BIN="$OUT/ollm-waldo" OLLM_UNIV_BIN="$OUT/ollm-univ" \
 OLLM_INTERCHANGE_BIN="$OUT/ollm-interchange" OLLM_BIN="$BIN" \
   python3 -m unittest discover -s "$here/tools/openwaldo" -p "test_*.py" -v
 
-echo "--- 4b. Omega Helix Studio, OpenWALDO catalog, installer CLI & SSE forge suite ---"
+echo "--- 4b. Omega Studio, OpenWALDO catalog, installer CLI & SSE forge suite ---"
 OLLM_WALDO_BIN="$OUT/ollm-waldo" OLLM_UNIV_BIN="$OUT/ollm-univ" \
 OLLM_INTERCHANGE_BIN="$OUT/ollm-interchange" OLLM_BIN="$BIN" \
   python3 -W error::ResourceWarning -m unittest discover -s "$here/tools/studio" -p "test_*.py" -v

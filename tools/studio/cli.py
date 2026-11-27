@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Omega Helix Studio ANSI CLI: studio, doctor, catalog, setup, forge, sample.
+"""Omega Studio ANSI CLI: studio, doctor, catalog, setup, forge, sample.
 
 Python 3 standard library only — zero external dependencies, zero telemetry.
 """
@@ -54,7 +54,7 @@ def print_banner(subtitle: str = "Sovereign Pure-Omega Model Forge") -> None:
     s2 = violet("╔═══")
     s3 = emerald("═══╗")
     s4 = amber("╔═══")
-    print(f"  {s1}{s2}{s3}{s4}  {bold('OMEGA HELIX STUDIO')}")
+    print(f"  {s1}{s2}{s3}{s4}  {bold('OMEGA STUDIO')}")
     print(f"  {cyan('║')}  {violet('╚══')} {emerald('══╝')}  {amber('║')}  {dim(subtitle)}")
     print()
 
@@ -280,7 +280,7 @@ def _run_studio_once(args: argparse.Namespace) -> int:
         srv.serve_forever(poll_interval=0.25)
     except KeyboardInterrupt:
         if not getattr(args, "json", False):
-            print(f"\n  {dim('Omega Helix Studio stopped.')}")
+            print(f"\n  {dim('Omega Studio stopped.')}")
     finally:
         srv.server_close()
     return 0
@@ -1254,13 +1254,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = argparse.ArgumentParser(
         prog="omega-helix",
-        description="Omega Helix Studio — Zero-Dependency Pure-Omega Model Forge",
+        description="Omega Studio — Zero-Dependency Pure-Omega Model Forge",
     )
     p.add_argument("--workspace-dir", default=None, help="Directory for forged runs")
     p.add_argument("--bin-dir", default=None, help="Directory containing pure-Omega binaries")
     sub = p.add_subparsers(dest="cmd")
 
-    p_studio = sub.add_parser("studio", parents=[common], help="Launch local or headless Omega Helix Studio server")
+    p_studio = sub.add_parser("studio", parents=[common], help="Launch local or headless Omega Studio server")
     p_studio.add_argument("--host", default="127.0.0.1")
     p_studio.add_argument("--bind", default=None, help="Bind IP (e.g. 127.0.0.1, 0.0.0.0, Tailscale IP)")
     p_studio.add_argument("--port", type=int, default=18420)

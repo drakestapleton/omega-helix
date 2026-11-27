@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host machine & desktop/headless/WSL 2 topology auto-detection for Omega Helix Studio.
+"""Host machine & desktop/headless/WSL 2 topology auto-detection for Omega Studio.
 
 Python 3 standard library only — zero external dependencies, zero telemetry.
 Never assumes a MacBook SSHing to Spark: supports Direct Spark/Linux (desktop or

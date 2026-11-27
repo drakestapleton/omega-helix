@@ -1,4 +1,4 @@
-/* Omega Helix Studio — Zero-Dependency Offline Client */
+/* Omega Studio — Zero-Dependency Offline Client */
 (() => {
   "use strict";
 

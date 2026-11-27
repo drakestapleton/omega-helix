@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Automated unit & dry-run topology detection tests for Omega Helix Studio & install.sh.
+"""Automated unit & dry-run topology detection tests for Omega Studio & install.sh.
 
 Covers all 4 topologies without assuming a MacBook SSHing to Spark:
   1. Direct DGX Spark / Native Linux with monitor attached ($DISPLAY / $WAYLAND_DISPLAY -> xdg-open, skip SSH tunnel)

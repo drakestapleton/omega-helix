@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Omega Helix Studio — Spiral-2048 Pure-Omega Razor MoE planner, crystallizer, evaluator & router.
+"""Omega Studio — Spiral-2048 Pure-Omega Razor MoE planner, crystallizer, evaluator & router.
 
 Python 3 standard library only — zero external dependencies, zero telemetry.
 """

@@ -450,7 +450,7 @@ case "$TOPOLOGY" in
   spark-desktop|linux-desktop)
     cat <<EOF
   Quick start (Direct local Linux/Spark with monitor — no SSH tunnel needed):
-    omega-helix            bind localhost & open Studio via $BROWSER_CMD
+    omega-helix            bind localhost & open Omega Studio via $BROWSER_CMD
     omega-helix doctor     check topology, binaries, GPU and OpenWALDO
     omega-helix setup      guided first-run setup
 EOF
@@ -465,7 +465,7 @@ EOF
   macos-arm64|wsl2)
     cat <<EOF
   Quick start ($TOPOLOGY — local mode OR optional remote Spark SSH tunnel):
-    omega-helix                         launch local Studio (opens via $BROWSER_CMD)
+    omega-helix                         launch local Omega Studio (opens via $BROWSER_CMD)
     omega-helix studio --remote spark   connect to a remote DGX Spark over SSH tunnel
     omega-helix doctor                  check topology, binaries and hardware
 EOF
@@ -479,6 +479,6 @@ EOF
     ;;
 esac
 if ! command -v python3 >/dev/null 2>&1; then
-  warn "python3 not found: the omega-helix Studio CLI needs python3 (stdlib only)"
+  warn "python3 not found: the Omega Studio CLI (omega-helix) needs python3 (stdlib only)"
 fi
 exit 0

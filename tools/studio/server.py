@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Omega Helix Studio local HTTP & SSE server (Python 3 stdlib only, zero telemetry)."""
+"""Omega Studio local HTTP & SSE server (Python 3 stdlib only, zero telemetry)."""
 
 from __future__ import annotations
 
@@ -1094,7 +1094,7 @@ def create_server(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Omega Helix Studio server (stdlib-only)")
+    parser = argparse.ArgumentParser(description="Omega Studio server (stdlib-only)")
     parser.add_argument("--host", "--bind", dest="host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=18420, help="Port (default: 18420)")
     parser.add_argument("--pairing-address", default=None, help="Advertised host:port for pairing links / SSH forwards")
@@ -1129,11 +1129,11 @@ def main(argv: list[str] | None = None) -> int:
             "url": url,
         }), flush=True)
     else:
-        print(f"Omega Helix Studio listening on http://{host}:{port}/ (Ctrl-C to stop)", flush=True)
+        print(f"Omega Studio listening on http://{host}:{port}/ (Ctrl-C to stop)", flush=True)
     try:
         srv.serve_forever(poll_interval=0.25)
     except KeyboardInterrupt:
-        print("\nShutting down Omega Helix Studio.", flush=True)
+        print("\nShutting down Omega Studio.", flush=True)
     finally:
         srv.server_close()
     return 0

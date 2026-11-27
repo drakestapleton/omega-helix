@@ -1,4 +1,4 @@
-"""Omega Helix Studio — zero-dependency pure-stdlib backend, server, and ANSI CLI."""
+"""Omega Studio — zero-dependency pure-stdlib backend, server, and ANSI CLI."""
 
 from __future__ import annotations
 

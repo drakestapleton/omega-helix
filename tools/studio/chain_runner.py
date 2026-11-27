@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Omega Helix Studio chain estimator, DNA/Universal/Hybrid executor, and interactive sampler.
+"""Omega Studio chain estimator, DNA/Universal/Hybrid executor, and interactive sampler.
 
 Python 3 standard library only — zero external dependencies, zero telemetry.
 """
@@ -264,7 +264,7 @@ def _as_int(val: Any, default: int, name: str) -> int:
 
 
 def normalize_spec(raw: dict[str, Any]) -> dict[str, Any]:
-    """Normalize a user/UI/CLI Helix Studio chain spec with clean defaults."""
+    """Normalize a user/UI/CLI Omega Studio chain spec with clean defaults."""
     if not isinstance(raw, dict):
         raise ValueError("spec must be a JSON object")
 
