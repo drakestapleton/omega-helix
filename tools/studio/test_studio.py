@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Comprehensive stdlib unittest suite for Omega Helix Studio backend, server, and CLI."""
+"""Comprehensive stdlib unittest suite for Omega Studio backend, server, and CLI."""
 
 from __future__ import annotations
 

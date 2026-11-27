@@ -146,7 +146,7 @@ You only need Python 3 (built in on macOS/Linux) and the seeded Omega compiler *
 git clone https://github.com/drakestapleton/omega-helix.git
 cd omega-helix
 sh install.sh        # builds all pure-Omega engines for your OS/GPU into ~/.local/opt/omega-helix
-omega-helix          # launches Omega Helix Studio in your browser (http://127.0.0.1:18420)
+omega-helix          # launches Omega Studio in your browser (http://127.0.0.1:18420)
 ```
 
 With **`omega-helix`** installed, you can visually or via CLI:
@@ -274,7 +274,7 @@ mkdir -p hf-out
 | [`install.sh`](install.sh) / [`bin/`](bin/) | One-command cross-platform installer (`install.sh`) and `omega-helix` CLI launcher (`studio`, `setup`, `catalog`, `forge`, `sample`, `doctor`). |
 | [`native/`](native/) | Pure-Omega transformer core (`model.om`, `adam.om`, `ckpt.om`, `bpe.om`, `spec.om`, `cli.om`, `serve.om`), universal zero-cap engine & HF/GGUF interchange (`univ/`), platform I/O (`lio.om`, `mio.om`, `eio.om`), HTTP/JSON (`net/`), standalone BPE (`tok/`), and raw SM121 Blackwell GPU kernels (`gpu/`). |
 | [`scripts/`](scripts/) | One-command multi-target builder ([`build.sh`](scripts/build.sh)), independent verification suite ([`verify.sh`](scripts/verify.sh)), CPU smoke test ([`quickstart-cpu.sh`](scripts/quickstart-cpu.sh)), OpenWALDO pipeline ([`openwaldo-train.sh`](scripts/openwaldo-train.sh)), and 85k tok/s GB10 BF16 training launcher ([`train-gb10-bf16.sh`](scripts/train-gb10-bf16.sh)). |
-| [`tools/`](tools/) | Omega Helix Studio local web app & OpenWALDO directory search (`studio/`), OpenWALDO pure-Omega ingestor, BOM bridge & multi-arch training backend (`openwaldo/`), pure-Omega training driver (`wdrive/`), 165-task coding benchmark (`bench/`), contrast training (`contrast/`), learned controller (`controller/`), and weight-patch tools (`wpatch/`, `wscore/`, `wgate/`). |
+| [`tools/`](tools/) | Omega Studio local web app & OpenWALDO directory search (`studio/`), OpenWALDO pure-Omega ingestor, BOM bridge & multi-arch training backend (`openwaldo/`), pure-Omega training driver (`wdrive/`), 165-task coding benchmark (`bench/`), contrast training (`contrast/`), learned controller (`controller/`), and weight-patch tools (`wpatch/`, `wscore/`, `wgate/`). |
 | [`docs/`](docs/) | Architecture contracts (`CONTRACT.md`, `CONTRACT-V1..V4.md`, `CONTRACT-BF16.md`), OpenWALDO integration ([`OPENWALDO.md`](docs/OPENWALDO.md)), DNA specialists ([`SPECIALISTS.md`](docs/SPECIALISTS.md), [`OM-BUNDLES.md`](docs/OM-BUNDLES.md)), looped core & adaptive exit ([`LOOP.md`](docs/LOOP.md)), and checkpoint growth ([`GROW.md`](docs/GROW.md)). |
 | [`tests/`](tests/) | Python `f64` referee oracles (`oracle.py`, `oracle_universal.py`), HF/GGUF interchange tests (`test_interchange.py`), adaptive loop suite (`test_adaptive_loop.py`), GB10 frozen-core & BF16 loop suite (`test_gpu_spec_loop.sh`), core receipts (`core-receipts.sh`), GPU SASS guard (`gpu-disasm.sh`), and metrics benchmark (`ollm_metrics_bench.py`). |
 | [`evidence/`](evidence/) | Complete immutable receipts for the entire rung ladder (`v0`, `v1`/Rung 3, Rung 4 `gpu`, Rung 5 `gpu-max`, Rung 6 `gpu-r6`, kernel rounds `gpu-k1`–`gpu-k9`, Rungs 7–10, `gpu-bf`, `v3`, `bf16-inference`, `specialists`, `serve`, `x86`, `efi`, `a64efi`, and the `2026-11-21` looped-core study). |

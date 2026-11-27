@@ -197,7 +197,7 @@ class InstanceLock:
             old_host = str(existing.get("host") or "")
             if old_host == socket.gethostname() and _pid_alive(old_pid) and old_pid != os.getpid():
                 raise RuntimeError(
-                    f"Another Omega Helix Studio already holds {self.path} (pid={old_pid}, port={self.port}). "
+                    f"Another Omega Studio already holds {self.path} (pid={old_pid}, port={self.port}). "
                     "Use --reclaim-stale-lock if stale."
                 )
         payload = {

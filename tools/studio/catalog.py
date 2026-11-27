@@ -868,7 +868,7 @@ def materialize_waldo(corpus_path: str, out_dir: str | Path) -> dict[str, Any]:
             "guidance": [
                 "Install the OpenWALDO CLI (https://github.com/openwaldo/waldo) to pull public corpora directly.",
                 f"Then run: waldo index export --format jsonl {corpus_path} {out}",
-                "Alternatively, point Omega Helix Studio at an existing EXPORT.json directory, any local folder, or the built-in 'omega-starter' preset.",
+                "Alternatively, point Omega Studio at an existing EXPORT.json directory, any local folder, or the built-in 'omega-starter' preset.",
             ],
             "commands": [
                 f"waldo index export --format jsonl {corpus_path} {out}",
