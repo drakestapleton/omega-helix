@@ -247,7 +247,7 @@ fn bf_gemmh_tt m ulong n ulong k ulong a_va ulong b_va ulong c_va ulong to void
 gkoph 0 a_va uint mul k 2 2 0 0
 gkoph 1 b_va uint mul k 2 2 0 0
 gkopc c_va uint mul n 2 2 0 0 f32 1.0f64
-if not gkmmh uint m uint n uint k 1 0 2
+if not gkmmh uint m uint n uint k 1 1 2
   bf_fail_stop 99
 end
 end
@@ -256,7 +256,7 @@ fn bf_gemmh_tt_add m ulong n ulong k ulong a_va ulong b_va ulong c_va ulong to v
 gkoph 0 a_va uint mul k 2 2 0 0
 gkoph 1 b_va uint mul k 2 2 0 0
 gkopc c_va uint mul n 2 2 0 0 f32 1.0f64
-if not gkmmh uint m uint n uint k 1 0 3
+if not gkmmh uint m uint n uint k 1 1 3
   bf_fail_stop 99
 end
 end
@@ -265,7 +265,7 @@ fn bf_gemmh_f32 m ulong n ulong k ulong a_va ulong b_va ulong c_va ulong to void
 gkoph 0 a_va uint mul k 2 2 0 0
 gkoph 1 b_va uint mul k 2 2 0 0
 gkopc c_va uint mul n 4 4 0 0 f32 1.0f64
-if not gkmmh uint m uint n uint k 1 0 0
+if not gkmmh uint m uint n uint k 1 1 0
   bf_fail_stop 99
 end
 end
@@ -274,7 +274,7 @@ fn bf_gemmh_bwd_wlm m ulong d ulong v ulong a_va ulong b_va ulong c_va ulong to 
 gkoph 0 a_va uint mul v 2 2 0 0
 gkoph 1 b_va 2 uint mul d 2 0 0
 gkopc c_va uint mul d 2 2 0 0 f32 1.0f64
-if not gkmmh uint m uint d uint v 1 0 2
+if not gkmmh uint m uint d uint v 1 1 2
   bf_fail_stop 99
 end
 end
