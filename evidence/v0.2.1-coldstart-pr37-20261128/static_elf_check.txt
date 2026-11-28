@@ -1,0 +1,24 @@
+=== ollm-gb10 ===
+build/ollm-gb10: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, no section header
+
+There is no dynamic section in this file.
+=== ollm ===
+build/ollm: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, no section header
+
+There is no dynamic section in this file.
+=== ollm-interchange ===
+build/ollm-interchange: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, no section header
+
+There is no dynamic section in this file.
+=== ollm-dna ===
+build/ollm-dna: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, no section header
+
+There is no dynamic section in this file.
+=== ollm-dna-gb10 ===
+build/ollm-dna-gb10: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, no section header
+
+There is no dynamic section in this file.
+=== ollm-x86linux ===
+build/ollm-x86linux: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, no section header
+
+There is no dynamic section in this file.

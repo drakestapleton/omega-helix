@@ -1,0 +1,20 @@
+=== Omega Helix 5-Minute External Reproducer Receipt ===
+Date (UTC): 2026-11-28T15:04:10Z
+Machine / OS: macOS 26.6.2 (arm64 / Mac14,2 / Apple M2)
+Git Commit: fab38345dc4b
+Compiler (omc): ~/.local/bin/omc (sha256=68a590c37dfb1ec37a183f0032e02db1570db299266f574f65556edfc70feb9c)
+Binary SHA-256s:
+  ollm-macos: sha256=daa0250b97b401489b95c3d8c01513509fa77725657fbbfc25ceb66bf5583862 bytes=789872
+  ollm-interchange: sha256=c6955d5ca34e0ef0281cbe8f5999f22a5ec0e832bd21d219df3f25fe694f9823 bytes=231728
+  ollm-dna: sha256=e5da58b10282fd1c3d7f3a4d52d2cf2fd727a2e38360d4a48d960320d3220715 bytes=166064
+  ollm-metal: sha256=36861da8c277a894e56654ac944ee6643d60f0cd47ff8bab8a9d93192b098ab8 bytes=395920
+Linkage Proof:
+  ollm-macos: Mach-O arm64, deps=[/usr/lib/libSystem.B.dylib], zero CUDA
+  ollm-interchange: Mach-O arm64, deps=[/usr/lib/libSystem.B.dylib], zero CUDA
+  ollm-dna: Mach-O arm64, deps=[/usr/lib/libSystem.B.dylib], zero CUDA
+  ollm-metal: Mach-O arm64, deps=[/usr/lib/libSystem.B.dylib], zero CUDA
+Accelerator Checks: METAL_STATUS=PASS (MDEV Apple_M2 unified=1 max_ws=5726633984 pipelines=17 max_tg=1024 simd=32 PASS | MGEMM 256 256 256 5 1254625 13372 4308 PASS | GC 8528 60520 204998677120 295 5544082 5544081 3995542 5000 1000000000 1312375 | eval_diff=0u | MT 4 14714084 368 869915)
+Oracle Parity: PASS (xprep, xinit, xgrad, xstep, xeval PASS (f64 rtol<=1e-9); interchange upgrade PASS)
+Negative Controls: PASS (OLLMSP01_tamper=rc:61(PASS); OLLM_ORACLE_MUTANT=tiemaxa:rc:1(PASS); OLLMBF01_tamper=rc:61(PASS); OLLMCK05_tamper=rc:14(PASS))
+Elapsed Seconds: 3
+VERDICT=REPRO_5MIN_PASS

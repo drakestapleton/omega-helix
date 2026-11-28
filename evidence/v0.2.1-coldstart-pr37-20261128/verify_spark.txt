@@ -1,0 +1,1329 @@
+=== verify-om.sh ===
+=== Omega Helix Pure-Omega Zero-Python Gate (Linux aarch64) ===
+built /home/drakestapleton/work/helix-v021/build/verify-om/ollm (1054868 bytes, target=aarch64, omc=/home/drakestapleton/canon/omega-mv/seed/out/omc)
+built /home/drakestapleton/work/helix-v021/build/verify-om/ollm-gb10 (1921736 bytes, target=gb10, omc=/home/drakestapleton/canon/omega-mv/seed/out/omc)
+=== 1. Adam self-check (adamck) ===
+A 5 3cd046ce38e38e38 0
+=== 2. Initialize tiny byte model (V=256, T=16, D=16, H=2, F=32, L=2, B=4) ===
+I 8528
+=== 3. Finite-difference gradient check (gcheck) ===
+c 3265 -100602154 -100602193
+c 2762 -566978802 -566978464
+c 157 -832134583 -832134805
+c 1598 2135456144 2135455368
+c 4195 2472071052 2472070992
+c 4236 10635504276 10635503588
+c 4234 -44269278276 -44269278465
+c 4302 -1203522959 -1203523503
+c 4360 10866022 10865530
+c 4363 -60446305 -60446758
+c 4360 10866022 10865530
+c 4359 109042633 109041664
+c 4456 -2693302 -2693845
+c 4442 -583443 -583533
+c 4428 -1723351 -1723954
+c 4602 1063148 1062705
+c 4801 7600260 7599698
+c 4826 21337869 21337598
+c 4788 243284 243360
+c 4780 9559704 9559908
+c 5125 685508128 685508094
+c 4946 -2145039868 -2145039701
+c 5090 2245180110 2245180041
+c 4919 -87543331 -87542861
+c 5313 116885392 116885612
+c 5204 6313597919 6313598088
+c 5340 -9591041953 -9591042182
+c 5367 131652186 131652466
+c 5404 -140928981 -140928602
+c 5393 -364433875 -364434260
+c 5403 -6620799 -6620481
+c 5395 -168215226 -168215219
+c 5429 -4265034018 -4265034103
+c 5539 2428134479 2428134582
+c 5891 2931953970 2931954234
+c 5489 -3980075337 -3980074936
+c 6391 -9003950942 -9003951806
+c 6303 -7232815154 -7232814791
+c 6048 -5356780770 -5356780796
+c 6312 17379288811 17379289118
+c 6438 -2463137 -2462474
+c 6432 -331691664 -331691119
+c 6434 105901358 105900621
+c 6433 -111594997 -111594733
+c 6637 -3539782 -3538946
+c 6484 -17937925 -17937207
+c 6667 -4507896 -4507949
+c 6517 6955518 6955769
+c 6909 6059375 6059597
+c 6903 4437697 4437339
+c 6806 3231334 3231637
+c 6804 -101426 -101252
+c 7088 2486801979 2486802319
+c 7093 -4589032719 -4589033153
+c 7169 1652875361 1652875614
+c 6979 -263527092 -263526978
+c 7463 438600839 438600267
+c 7302 -2175320769 -2175320368
+c 7338 -2707086610 -2707087443
+c 7239 -1168137051 -1168137586
+c 7484 116758269 116758602
+c 7481 424193603 424194013
+c 7485 290629116 290629298
+c 7473 -361535312 -361534802
+c 7780 -898370226 -898370711
+c 7515 226090825 226090701
+c 7727 1649275594 1649275382
+c 7774 7104311841 7104311805
+c 8324 -11830148907 -11830148860
+c 8452 -11243530330 -11243530106
+c 8046 -758189444 -758189067
+c 8256 541423196 541422906
+c 8526 -1472930956 -1472930666
+c 8525 -294328782 -294328561
+c 8520 -3682912387 -3682912197
+c 8520 -3682912387 -3682912197
+C 76 3f3b56b743d07b97 417155 4602 0
+=== 4. Eval before training ===
+E 0 8 5536247 7987116
+=== 5. Train 20 steps on CPU ===
+T 5 5546306
+T 10 5517875
+T 15 5454665
+T 20 5397322
+=== 6. Eval after training ===
+E 20 8 5377157 7757597
+=== 7. Sample 48 bytes ===
+¸*FV
+Ü8ÈV›5y|§4~­ô–œF»Åñ±ÆÕ¤Å¢bDÀ„)EÃªR$
+=== 8. BPE fit / encode / decode byte-exact roundtrip (V=300) ===
+M 300 3012 22252 62350
+K 62350 51043
+D 51043 62350
+BPE_ROUNDTRIP_OK
+=== 9. Bit-exact KV-cache parity check (kvcmp) ===
+I 9232
+KI 0 5 0 169 71681
+KI 1 6 5 78 14592
+KI 2 7 6 149 14097
+KI 3 8 7 149 15520
+KI 4 9 4 149 46720
+KI 5 10 9 284 14992
+KI 6 11 10 284 15152
+KI 7 12 11 284 15456
+KF 0 5 169 0 118704
+KF 1 6 78 0 124609
+KF 2 7 149 0 145505
+KF 3 8 149 0 166609
+KF 4 9 149 0 185938
+KF 5 10 284 0 208497
+KF 6 11 284 0 233346
+KF 7 12 284 0 255490
+KVCMP 8 0 208210 1438698
+=== 10. DNA Merkle Specialist Chain (growpro -> trainf -> spext -> spchainsamp) ===
+GP 2 3 11312
+F 5 2 5716243
+SPEXT 2 3 2096
+DNA_SPEC_CHAIN_OK
+=== 11. Looped-Core OLLMCK03 init & train (LP=1, LC=2, NP=2) ===
+I 13392
+T 2 5694486
+QUICKSTART_CPU_OK
+=== 9. Pure-Omega 8-Pillar + 4 Byte-Traceability Locks (zero Python) ===
+OMG_METRICS V=256 V_BASE=4096 LOGIT_REDUCTION=16x CE_TABLE_BYTES_V256=2048 CE_TABLE_BYTES_V4096=32768
+OMG_SELFTEST PASS samples=200 sem_id=50c566e6a8ae10b7 ntok=47 src_bytes=204
+ARBORIS_SELFTEST PASS
+PASS I1 3cac000000000000 0
+PASS G1 3e27231de9063d01 512
+PASS I2 3cac000000000000 0
+PASS G2 3e33bc5fdc800000 5
+PASS TR 4006ffdaa1b8a2b4 1
+PASS Q32 0 8
+PASS DETBWD 0 2064
+BTLOCK_OK
+I 8528
+T 5 5520301
+FCACHE 8 16 16 2
+SPFORGE 2 3 128 0 5531624 5367067 2096
+SPAPP 2 3 2096
+E 5 8 5367067 7743041
+=== 10. Unified 8-Pillar Loop (omg pack/decode/samp -> omc, arboris guide -> omc, rev train) ===
+OMGPACK 183 47 50c566e6a8ae10b7
+OMGDEC 47 206
+I 8528
+T 5 5534605
+OMGSAMP 63 374 3495a1c9b6494dc5
+ARBGUIDE 47 44 3 206 50c566e6a8ae10b7
+REVTRAIN 8 0 0 3289221 2574596
+=== 11. Spiral-2048 Pure-Omega Razor MoE (OLLMSP02 spcryst W4/f64 -> spweval -> spsamp -> 1-bit tamper rc=61) ===
+SPCRYST 2 16 32 1 4 256 5531624 5528325 448 23
+SPCRYST 2 16 32 2 64 256 5531624 5528569 4224 22
+SPWEVAL 2 2 4 5521798 5518226 7961118
+SPIRAL_WEAVE_OM_PASS
+=== 12. Full-APU Simultaneous Co-Execution Fabric (apuweave -> W4 OLLMSP02 -> spweval + 1-bit tamper rc=61) ===
+APU_WAVE 1 1 3 0 1 0 0
+APU_WAVE 2 1 4 0 2 0 0
+APU_STRAND 1 128 5531624 5526102 5535294 5533159 528 3 10 0 61 819
+APU_STRAND 2 128 5531624 5526899 5535294 5534099 528 4 6 0 61 819
+APU_SUMMARY 2 4 18 7 17 111111 1333 1056 5535294 5533629 1665 2 0
+APU_OVERLAP 18 7 17 17 1333 1333
+SPWEVAL 2 2 4 5521798 5516707 7958925
+APU_WEAVE_OM_PASS
+--- 13. pure-Omega serve.om scaling build + live /health check ---
+M 300 36 229 1253
+I 9232
+{"status":"ok","in_flight":0,"max_slots":4,"busy":false,"max_ctx":8192,"strands":0,"kv_cache":{"entries":0,"capacity":128,"hits":0,"misses":0,"tokens_saved":0,"collisions_rejected":0,"evictions":0}}
+SERVE_SCALING_OM_PASS
+=== 13b. Pure-Omega Dynamic Editable spclip (.spclip create/edit/verify/eval/run/tune/verify-lineage + rc=60/61/62/2) ===
+GP 2 3 10608
+F 6 2 5510777
+SPEXT 2 3 2096
+GP 2 3 10608
+F 6 2 5503009
+SPEXT 2 3 2096
+SPCLIP_CREATE 2 1 1000 29911ff0bb6e082c20a5743de485e8c16ce26d385a1504c3d26b38e385c7fad4
+SPCLIP_VERIFY OK 2 1 1000 2 2 3 29911ff0bb6e082c20a5743de485e8c16ce26d385a1504c3d26b38e385c7fad4
+SPCLIP_EDIT 2 1 500 ae0c3ac64b4562c59c5c66d69c1aa5c7c1f37d9f25674876b9c0aa987eded8f6
+SPCLIP_VERIFY OK 2 1 500 2 2 3 ae0c3ac64b4562c59c5c66d69c1aa5c7c1f37d9f25674876b9c0aa987eded8f6
+SPCLIP_EVAL 4 5506011 7943495 2 1 500
+SPCLIP_TUNE 2 3 2096 8 5529100 5493463 d30ae6ea16b4c160caba3fbbc329f84f3786fac8523dbf333f1b5e0e291ef67d 44f04351e9cfee8d14a0372fd7cd3fe595d50bb2ab9b41bc7848ea9f6e5b18b1
+SPCLIP_LINEAGE_VERIFY OK d30ae6ea16b4c160caba3fbbc329f84f3786fac8523dbf333f1b5e0e291ef67d 2 3 44f04351e9cfee8d14a0372fd7cd3fe595d50bb2ab9b41bc7848ea9f6e5b18b1
+SPAPP 2 3 2096
+SPCLIP_EDITABLE_OM_PASS
+OMEGA_HELIX_PURE_OM_PASS
+=== verify.sh ===
+=== Omega Helix Independent Verification (Linux aarch64) ===
+--- 1. Build native CPU, universal zero-cap engine, interchange & OpenWALDO ingestor ---
+built /home/drakestapleton/work/helix-v021/build/verify/ollm (1054868 bytes, target=aarch64, omc=/home/drakestapleton/canon/omega-mv/seed/out/omc)
+built /home/drakestapleton/work/helix-v021/build/verify/ollm-gb10 (1921736 bytes, target=gb10, omc=/home/drakestapleton/canon/omega-mv/seed/out/omc)
+built /home/drakestapleton/work/helix-v021/build/verify/ollm-x86linux (4681785 bytes, target=x86linux, omc=/home/drakestapleton/canon/omega-mv/seed/out/omc)
+built /home/drakestapleton/work/helix-v021/build/verify/ollm.efi (2901504 bytes, target=x86efi, omc=/home/drakestapleton/canon/omega-mv/seed/out/omc)
+built /home/drakestapleton/work/helix-v021/build/verify/ollm-aa64.efi (433664 bytes, target=a64efi, omc=/home/drakestapleton/canon/omega-mv/seed/out/omc)
+built /home/drakestapleton/work/helix-v021/build/verify/ollm-tok (30108 bytes)
+built /home/drakestapleton/work/helix-v021/build/verify/wtrain (58260 bytes)
+built /home/drakestapleton/work/helix-v021/build/verify/ollm-waldo (44040 bytes, target=openwaldo, omc=/home/drakestapleton/canon/omega-mv/seed/out/omc)
+built /home/drakestapleton/work/helix-v021/build/verify/ollm-univ (122184 bytes, target=univ, omc=/home/drakestapleton/canon/omega-mv/seed/out/omc)
+built /home/drakestapleton/work/helix-v021/build/verify/ollm-interchange (184088 bytes, target=interchange, omc=/home/drakestapleton/canon/omega-mv/seed/out/omc)
+built /home/drakestapleton/work/helix-v021/build/verify/ollm-dna (121372 bytes, target=dna, omc=/home/drakestapleton/canon/omega-mv/seed/out/omc)
+built /home/drakestapleton/work/helix-v021/build/verify/ollm-dna-gb10 (527592 bytes, target=dna-gb10, omc=/home/drakestapleton/canon/omega-mv/seed/out/omc)
+STATIC_ELF_ZERO_CUDA_OK
+--- 2. End-to-end CPU smoke suite (adamck, gcheck, train, eval, BPE, kvcmp, DNA, loop) ---
+=== 1. Adam self-check (adamck) ===
+A 5 3cd046ce38e38e38 0
+=== 2. Initialize tiny byte model (V=256, T=16, D=16, H=2, F=32, L=2, B=4) ===
+I 8528
+=== 3. Finite-difference gradient check (gcheck) ===
+c 3265 -100602154 -100602193
+c 2762 -566978802 -566978464
+c 157 -832134583 -832134805
+c 1598 2135456144 2135455368
+c 4195 2472071052 2472070992
+c 4236 10635504276 10635503588
+c 4234 -44269278276 -44269278465
+c 4302 -1203522959 -1203523503
+c 4360 10866022 10865530
+c 4363 -60446305 -60446758
+c 4360 10866022 10865530
+c 4359 109042633 109041664
+c 4456 -2693302 -2693845
+c 4442 -583443 -583533
+c 4428 -1723351 -1723954
+c 4602 1063148 1062705
+c 4801 7600260 7599698
+c 4826 21337869 21337598
+c 4788 243284 243360
+c 4780 9559704 9559908
+c 5125 685508128 685508094
+c 4946 -2145039868 -2145039701
+c 5090 2245180110 2245180041
+c 4919 -87543331 -87542861
+c 5313 116885392 116885612
+c 5204 6313597919 6313598088
+c 5340 -9591041953 -9591042182
+c 5367 131652186 131652466
+c 5404 -140928981 -140928602
+c 5393 -364433875 -364434260
+c 5403 -6620799 -6620481
+c 5395 -168215226 -168215219
+c 5429 -4265034018 -4265034103
+c 5539 2428134479 2428134582
+c 5891 2931953970 2931954234
+c 5489 -3980075337 -3980074936
+c 6391 -9003950942 -9003951806
+c 6303 -7232815154 -7232814791
+c 6048 -5356780770 -5356780796
+c 6312 17379288811 17379289118
+c 6438 -2463137 -2462474
+c 6432 -331691664 -331691119
+c 6434 105901358 105900621
+c 6433 -111594997 -111594733
+c 6637 -3539782 -3538946
+c 6484 -17937925 -17937207
+c 6667 -4507896 -4507949
+c 6517 6955518 6955769
+c 6909 6059375 6059597
+c 6903 4437697 4437339
+c 6806 3231334 3231637
+c 6804 -101426 -101252
+c 7088 2486801979 2486802319
+c 7093 -4589032719 -4589033153
+c 7169 1652875361 1652875614
+c 6979 -263527092 -263526978
+c 7463 438600839 438600267
+c 7302 -2175320769 -2175320368
+c 7338 -2707086610 -2707087443
+c 7239 -1168137051 -1168137586
+c 7484 116758269 116758602
+c 7481 424193603 424194013
+c 7485 290629116 290629298
+c 7473 -361535312 -361534802
+c 7780 -898370226 -898370711
+c 7515 226090825 226090701
+c 7727 1649275594 1649275382
+c 7774 7104311841 7104311805
+c 8324 -11830148907 -11830148860
+c 8452 -11243530330 -11243530106
+c 8046 -758189444 -758189067
+c 8256 541423196 541422906
+c 8526 -1472930956 -1472930666
+c 8525 -294328782 -294328561
+c 8520 -3682912387 -3682912197
+c 8520 -3682912387 -3682912197
+C 76 3f3b56b743d07b97 417155 4602 0
+=== 4. Eval before training ===
+E 0 8 5536247 7987116
+=== 5. Train 20 steps on CPU ===
+T 5 5546306
+T 10 5517875
+T 15 5454665
+T 20 5397322
+=== 6. Eval after training ===
+E 20 8 5377157 7757597
+=== 7. Sample 48 bytes ===
+¸*FV
+Ü8ÈV›5y|§4~­ô–œF»Åñ±ÆÕ¤Å¢bDÀ„)EÃªR$
+=== 8. BPE fit / encode / decode byte-exact roundtrip (V=300) ===
+M 300 3012 22252 62350
+K 62350 51043
+D 51043 62350
+BPE_ROUNDTRIP_OK
+=== 9. Bit-exact KV-cache parity check (kvcmp) ===
+I 9232
+KI 0 5 0 169 38976
+KI 1 6 5 78 6576
+KI 2 7 6 149 6417
+KI 3 8 7 149 7376
+KI 4 9 4 149 21888
+KI 5 10 9 284 6864
+KI 6 11 10 284 7072
+KI 7 12 11 284 7136
+KF 0 5 169 0 49552
+KF 1 6 78 0 55393
+KF 2 7 149 0 65216
+KF 3 8 149 0 74657
+KF 4 9 149 0 83585
+KF 5 10 284 0 93920
+KF 6 11 284 0 103089
+KF 7 12 284 0 113921
+KVCMP 8 0 102305 639333
+=== 10. DNA Merkle Specialist Chain (growpro -> trainf -> spext -> spchainsamp) ===
+GP 2 3 11312
+F 5 2 5716243
+SPEXT 2 3 2096
+DNA_SPEC_CHAIN_OK
+=== 11. Looped-Core OLLMCK03 init & train (LP=1, LC=2, NP=2) ===
+I 13392
+T 2 5694486
+QUICKSTART_CPU_OK
+--- 3. Python f64 referee oracle selftests & binary cross-checks ---
+PASS fnv1a64(b'') = cbf29ce484222325
+PASS fnv1a64(b'a') = af63dc4c8601ec8c
+PASS fnv1a64(b'foobar') = 85944171f73967e8
+PASS fnv1a64(b'OLLMCK01') = 29c48bb36358f164
+PASS splitmix64(0) = e220a8397b1dcdaf
+PASS splitmix64(1) = 910a2dec89025cc1
+PASS splitmix64(18446744073709551615) = e4d971771b652c20
+PASS splitmix64(42) = bdd732262feb6e95
+PASS batch offset KAT 533
+PASS init draw KAT S=42 i=5
+PASS small P = 8400
+PASS v0 P = 119104
+PASS init value i=5
+PASS checkpoint round trip
+PASS hash mismatch refused
+PASS loss finite 6.246743
+PASS grad wte    [3834] analytic -4.5680498908e-04 numeric -4.5680503824e-04 relerr 1.08e-07
+PASS grad wte    [3549] analytic -1.0531652888e-03 numeric -1.0531652883e-03 relerr 4.63e-10
+PASS grad wte    [816] analytic -2.3987618636e-03 numeric -2.3987618114e-03 relerr 2.18e-08
+PASS grad wte    [3521] analytic -4.3759780164e-02 numeric -4.3759780199e-02 relerr 8.04e-10
+PASS grad wpe    [11] analytic -5.9517326888e-03 numeric -5.9517326623e-03 relerr 4.45e-09
+PASS grad wpe    [124] analytic 1.5111830344e-01 numeric 1.5111830356e-01 relerr 7.62e-10
+PASS grad wpe    [72] analytic -3.9166849203e-02 numeric -3.9166849186e-02 relerr 4.40e-10
+PASS grad g1.0   [3] analytic -2.4856611241e-02 numeric -2.4856611258e-02 relerr 6.81e-10
+PASS grad g1.0   [4] analytic 2.5982101718e-02 numeric 2.5982101715e-02 relerr 1.15e-10
+PASS grad g1.0   [13] analytic 8.2433990622e-02 numeric 8.2433990611e-02 relerr 1.34e-10
+PASS grad wq.0   [46] analytic -2.8775402498e-03 numeric -2.8775402061e-03 relerr 1.52e-08
+PASS grad wq.0   [230] analytic 3.5250311719e-02 numeric 3.5250311647e-02 relerr 2.03e-09
+PASS grad wq.0   [26] analytic -1.1610702702e-02 numeric -1.1610702710e-02 relerr 7.20e-10
+PASS grad wk.0   [57] analytic 1.8258121047e-02 numeric 1.8258121059e-02 relerr 6.80e-10
+PASS grad wk.0   [178] analytic 1.7242380858e-02 numeric 1.7242380856e-02 relerr 9.68e-11
+PASS grad wk.0   [24] analytic -1.2878796622e-03 numeric -1.2878796696e-03 relerr 5.76e-09
+PASS grad wv.0   [88] analytic -9.1024208247e-03 numeric -9.1024208615e-03 relerr 4.04e-09
+PASS grad wv.0   [110] analytic -7.4551017814e-03 numeric -7.4551017804e-03 relerr 1.42e-10
+PASS grad wv.0   [249] analytic -7.5640888527e-02 numeric -7.5640888486e-02 relerr 5.39e-10
+PASS grad wo.0   [240] analytic -4.8012022259e-02 numeric -4.8012022225e-02 relerr 7.18e-10
+PASS grad wo.0   [137] analytic 2.7419393520e-02 numeric 2.7419393422e-02 relerr 3.57e-09
+PASS grad wo.0   [90] analytic -1.7518288124e-02 numeric -1.7518288153e-02 relerr 1.67e-09
+PASS grad g2.0   [11] analytic -7.5041881865e-02 numeric -7.5041881864e-02 relerr 8.77e-12
+PASS grad g2.0   [2] analytic -8.7323551002e-02 numeric -8.7323551012e-02 relerr 1.22e-10
+PASS grad g2.0   [13] analytic -3.2535626238e-02 numeric -3.2535626193e-02 relerr 1.39e-09
+PASS grad w1.0   [244] analytic 3.0654616630e-02 numeric 3.0654616667e-02 relerr 1.20e-09
+PASS grad w1.0   [154] analytic 6.2103706444e-02 numeric 6.2103706444e-02 relerr 8.68e-12
+PASS grad w1.0   [179] analytic -5.6123551905e-02 numeric -5.6123551895e-02 relerr 1.80e-10
+PASS grad w2.0   [265] analytic 1.5887254012e-02 numeric 1.5887254001e-02 relerr 6.76e-10
+PASS grad w2.0   [119] analytic -1.6103404825e-02 numeric -1.6103404832e-02 relerr 3.93e-10
+PASS grad w2.0   [197] analytic -9.9797253282e-03 numeric -9.9797252684e-03 relerr 5.99e-09
+PASS grad g1.1   [6] analytic -2.2299245257e-02 numeric -2.2299245206e-02 relerr 2.29e-09
+PASS grad g1.1   [13] analytic 6.1500164543e-02 numeric 6.1500164561e-02 relerr 2.92e-10
+PASS grad g1.1   [1] analytic -6.3805725486e-04 numeric -6.3805729589e-04 relerr 6.43e-08
+PASS grad wq.1   [1] analytic -3.1426986295e-03 numeric -3.1426986347e-03 relerr 1.64e-09
+PASS grad wq.1   [48] analytic 1.0763595499e-02 numeric 1.0763595482e-02 relerr 1.64e-09
+PASS grad wq.1   [249] analytic 1.9190082270e-04 numeric 1.9190085077e-04 relerr 1.46e-07
+PASS grad wk.1   [194] analytic 5.6002280324e-03 numeric 5.6002280591e-03 relerr 4.76e-09
+PASS grad wk.1   [235] analytic -7.3240813302e-03 numeric -7.3240813414e-03 relerr 1.53e-09
+PASS grad wk.1   [68] analytic -1.2312486132e-02 numeric -1.2312486142e-02 relerr 8.24e-10
+PASS grad wv.1   [198] analytic 1.0660267997e-02 numeric 1.0660268046e-02 relerr 4.60e-09
+PASS grad wv.1   [252] analytic -9.2161341405e-04 numeric -9.2161345222e-04 relerr 4.14e-08
+PASS grad wv.1   [21] analytic -5.8782375605e-04 numeric -5.8782374524e-04 relerr 1.84e-08
+PASS grad wo.1   [70] analytic 3.3198445541e-03 numeric 3.3198444882e-03 relerr 1.99e-08
+PASS grad wo.1   [203] analytic -1.1907547267e-01 numeric -1.1907547264e-01 relerr 2.43e-10
+PASS grad wo.1   [163] analytic 7.1961008081e-02 numeric 7.1961007997e-02 relerr 1.17e-09
+PASS grad g2.1   [9] analytic 7.2640284829e-03 numeric 7.2640284898e-03 relerr 9.59e-10
+PASS grad g2.1   [11] analytic -1.0227873219e-02 numeric -1.0227873215e-02 relerr 3.81e-10
+PASS grad g2.1   [6] analytic 1.5961679331e-03 numeric 1.5961679090e-03 relerr 1.52e-08
+PASS grad w1.1   [270] analytic -5.2516256471e-03 numeric -5.2516256677e-03 relerr 3.91e-09
+PASS grad w1.1   [405] analytic -8.0098371703e-04 numeric -8.0098372379e-04 relerr 8.44e-09
+PASS grad w1.1   [443] analytic -7.8077144888e-03 numeric -7.8077145638e-03 relerr 9.60e-09
+PASS grad w2.1   [64] analytic -1.6410177199e-02 numeric -1.6410177173e-02 relerr 1.61e-09
+PASS grad w2.1   [377] analytic 1.8789684527e-02 numeric 1.8789684519e-02 relerr 4.09e-10
+PASS grad w2.1   [197] analytic -9.1890026525e-03 numeric -9.1890026699e-03 relerr 1.89e-09
+PASS grad gf     [5] analytic 1.1258914229e-02 numeric 1.1258914201e-02 relerr 2.53e-09
+PASS grad gf     [1] analytic 2.3590282107e-02 numeric 2.3590282172e-02 relerr 2.75e-09
+PASS grad gf     [0] analytic 9.8240787311e-02 numeric 9.8240787239e-02 relerr 7.33e-10
+selftest worst finite-difference relerr 1.463e-07
+PASS adam step 0 = -lr/100 * g/(|g|+eps)
+PASS clip to norm 1
+PASS prep KAT
+PASS base direct = counted
+SELFTEST PASS (0 failures)
+PASS chunk rule KAT
+PASS overlapping count (a,a)=2
+PASS tie: smallest a, then smallest b
+PASS exit 28 when pairs run out
+PASS rank-order encode = sequential merges
+PASS decode(encode(text)) == text
+PASS merges round trip, prefix use
+PASS merges hash refused 26
+PASS CK02 round trip
+PASS G=2 gradient = G=1 within rtol
+SELFTEST-V1 PASS (0 failures)
+$ /home/drakestapleton/work/helix-v021/build/verify/ollm prep /tmp/omega-helix-oracle.rLGU2c/raw.txt /tmp/omega-helix-oracle.rLGU2c/ollm-train.bin /tmp/omega-helix-oracle.rLGU2c/ollm-held.bin
+  rc=0 0.02s stdout='P 30 27 3 1809 201\n'
+PASS rc 0
+PASS stdout
+PASS TRAIN sha256 identical
+PASS HELD sha256 identical
+XPREP PASS
+$ /home/drakestapleton/work/helix-v021/build/verify/ollm base /tmp/omega-helix-oracle.rLGU2c/ollm-train.bin /tmp/omega-helix-oracle.rLGU2c/ollm-held.bin
+  rc=0 0.00s stdout='B 4331748 3382892\n'
+PASS rc 0
+PASS stdout micro values
+XBASE PASS
+$ /home/drakestapleton/work/helix-v021/build/verify/ollm init /tmp/tmpytpt3l7d/ck 256 8 16 2 32 2 2 42 50 3000
+  rc=0 0.01s stdout='I 8400\n'
+PASS rc 0
+PASS stdout 'I P'
+PASS params bit-identical
+PASS m, v zero
+PASS header
+PASS lr bits = 3000/1e6
+PASS whole file sha256 identical
+XINIT PASS
+$ /home/drakestapleton/work/helix-v021/build/verify/ollm grad /tmp/tmpmgwt3o75/ck.init /tmp/omega-helix-oracle.rLGU2c/ollm-train.bin /tmp/tmpmgwt3o75/offs.init /tmp/tmpmgwt3o75/gr.init
+  rc=0 0.01s stdout='G 401623d141bc3951 5534978\n'
+PASS init: rc 0
+PASS init: loss
+PASS init: OLLMGR01 header
+  wte    maxerr 3.781e-14 at 1894 (got -2.2117540842725035e-05 ref -2.2117540842714599e-05)
+  wpe    maxerr 1.071e-14 at 40 (got 0.00032402715172683005 ref 0.00032402715172682658)
+  g1.0   maxerr 1.191e-15 at 9 (got 2.8455433578395888e-05 ref 2.8455433578395922e-05)
+  wq.0   maxerr 2.766e-14 at 111 (got -2.220509865918264e-07 ref -2.2205098659182026e-07)
+  wk.0   maxerr 1.207e-13 at 10 (got -6.9867068056647666e-08 ref -6.9867068056656096e-08)
+  wv.0   maxerr 6.840e-14 at 26 (got -2.4567232451948082e-05 ref -2.4567232451949762e-05)
+  wo.0   maxerr 2.106e-14 at 56 (got -0.0002523030815676238 ref -0.00025230308156761849)
+  g2.0   maxerr 2.098e-15 at 12 (got -9.0420321158932e-05 ref -9.042032115893181e-05)
+  w1.0   maxerr 2.054e-13 at 84 (got -2.3226027497271927e-05 ref -2.3226027497276697e-05)
+  w2.0   maxerr 4.677e-14 at 345 (got -1.6696793580027298e-05 ref -1.6696793580029209e-05)
+  g1.1   maxerr 2.236e-15 at 5 (got 8.4867394838707803e-05 ref 8.4867394838707993e-05)
+  wq.1   maxerr 6.636e-14 at 192 (got -5.1693042343426279e-07 ref -5.1693042343422849e-07)
+  wk.1   maxerr 5.469e-14 at 244 (got -5.0915044870788276e-07 ref -5.0915044870785491e-07)
+  wv.1   maxerr 3.552e-14 at 205 (got 2.9376616504358806e-05 ref 2.9376616504359849e-05)
+  wo.1   maxerr 5.937e-14 at 216 (got 6.9389626585584412e-05 ref 6.9389626585580292e-05)
+  g2.1   maxerr 1.675e-15 at 13 (got -0.00017801923422533584 ref -0.00017801923422533554)
+  w1.1   maxerr 3.549e-14 at 228 (got 1.3477257202546174e-05 ref 1.3477257202545523e-05)
+  w2.1   maxerr 1.169e-13 at 57 (got -2.8258593305076915e-05 ref -2.8258593305082553e-05)
+  gf     maxerr 1.060e-14 at 13 (got -0.00010479837073486647 ref -0.00010479837073486536)
+PASS init: gradient (rtol 1e-09)
+$ /home/drakestapleton/work/helix-v021/build/verify/ollm grad /tmp/tmpmgwt3o75/ck.perturbed /tmp/omega-helix-oracle.rLGU2c/ollm-train.bin /tmp/tmpmgwt3o75/offs.perturbed /tmp/tmpmgwt3o75/gr.perturbed
+  rc=0 0.01s stdout='G 401c2299a467d51d 7033789\n'
+PASS perturbed: rc 0
+PASS perturbed: loss
+PASS perturbed: OLLMGR01 header
+  wte    maxerr 6.929e-14 at 1760 (got -0.0015021088395178531 ref -0.001502108839517749)
+  wpe    maxerr 3.340e-14 at 82 (got 0.0016101848578711775 ref 0.0016101848578711237)
+  g1.0   maxerr 6.503e-15 at 8 (got 0.004668115605839099 ref 0.0046681156058391293)
+  wq.0   maxerr 7.804e-14 at 188 (got 0.0011781552193828523 ref 0.0011781552193829443)
+  wk.0   maxerr 5.657e-14 at 199 (got -0.00012253334697144135 ref -0.00012253334697143138)
+  wv.0   maxerr 4.561e-14 at 37 (got 0.00086534624776651923 ref 0.0008653462477665587)
+  wo.0   maxerr 1.842e-13 at 112 (got -0.00060272853048383424 ref -0.00060272853048372321)
+  g2.0   maxerr 6.350e-15 at 10 (got -0.0068292259288755437 ref -0.0068292259288755004)
+  w1.0   maxerr 7.835e-14 at 342 (got -0.00039854106127693023 ref -0.00039854106127696146)
+  w2.0   maxerr 7.086e-14 at 296 (got 0.00073445289012068638 ref 0.00073445289012063434)
+  g1.1   maxerr 4.737e-15 at 4 (got 0.004943553396638419 ref 0.0049435533966384424)
+  wq.1   maxerr 8.927e-14 at 37 (got -2.9175237203980624e-07 ref -2.9175237204327568e-07)
+  wk.1   maxerr 3.899e-14 at 231 (got 0.00031008072858265841 ref 0.0003100807285826705)
+  wv.1   maxerr 1.485e-13 at 66 (got 0.00024826386389866927 ref 0.0002482638638986324)
+  wo.1   maxerr 2.260e-14 at 244 (got -0.0038770137424935834 ref -0.003877013742493671)
+  g2.1   maxerr 3.212e-15 at 7 (got 0.0025654375689888086 ref 0.0025654375689888004)
+  w1.1   maxerr 5.193e-14 at 109 (got -0.00066809975968789778 ref -0.00066809975968786309)
+  w2.1   maxerr 6.542e-14 at 494 (got -0.00089161666946591838 ref -0.00089161666946597671)
+  gf     maxerr 6.486e-14 at 2 (got -0.00042711438225052109 ref -0.00042711438225054879)
+PASS perturbed: gradient (rtol 1e-09)
+XGRAD PASS
+PASS step0-init: covers clip=True
+$ /home/drakestapleton/work/helix-v021/build/verify/ollm train /tmp/tmp8l1q2dcj/ck.step0-init /tmp/omega-helix-oracle.rLGU2c/ollm-train.bin 1 1
+  rc=0 0.01s stdout='T 1 5534978\n'
+PASS step0-init: rc 0
+PASS step0-init: stdout
+PASS step0-init: step
+PASS step0-init: header unchanged
+params
+  wte    maxerr 2.176e-16 at 145 (got 0.00024912968527763 ref 0.00024912968527763006)
+  wpe    maxerr 0.000e+00 at 0 (got 0.02525523140467778 ref 0.02525523140467778)
+  g1.0   maxerr 0.000e+00 at 0 (got 1.0000299983157044 ref 1.0000299983157044)
+  wq.0   maxerr 1.315e-16 at 27 (got 0.00082467317412575662 ref 0.00082467317412575672)
+  wk.0   maxerr 1.325e-16 at 11 (got -0.026186024432861655 ref -0.026186024432861651)
+  wv.0   maxerr 0.000e+00 at 0 (got -0.030648690935978273 ref -0.030648690935978273)
+  wo.0   maxerr 2.027e-16 at 40 (got 0.00026744207481180509 ref 0.00026744207481180503)
+  g2.0   maxerr 0.000e+00 at 0 (got 0.99997000047314366 ref 0.99997000047314366)
+  w1.0   maxerr 1.880e-16 at 215 (got 0.00057668273758617683 ref 0.00057668273758617673)
+  w2.0   maxerr 1.507e-16 at 96 (got -0.00017989673898774217 ref -0.0001798967389877422)
+  g1.1   maxerr 0.000e+00 at 0 (got 0.99997000060123586 ref 0.99997000060123586)
+  wq.1   maxerr 1.550e-16 at 110 (got -0.0006994102921853404 ref -0.00069941029218534029)
+  wk.1   maxerr 1.757e-16 at 115 (got -0.00061702828501263008 ref -0.00061702828501263018)
+  wv.1   maxerr 0.000e+00 at 0 (got 0.031502986898790011 ref 0.031502986898790011)
+  wo.1   maxerr 2.096e-16 at 118 (got 3.2329517328314947e-05 ref 3.2329517328314954e-05)
+  g2.1   maxerr 0.000e+00 at 0 (got 0.99997000053107932 ref 0.99997000053107932)
+  w1.1   maxerr 1.866e-16 at 155 (got -0.0046489953242370144 ref -0.0046489953242370135)
+  w2.1   maxerr 1.605e-16 at 40 (got 0.0013513205036659647 ref 0.0013513205036659649)
+  gf     maxerr 0.000e+00 at 0 (got 1.0000299999641933 ref 1.0000299999641933)
+PASS step0-init: params (rtol 1e-09)
+m
+  wte    maxerr 3.791e-14 at 1894 (got -1.3218775061881933e-06 ref -1.321877506187568e-06)
+  wpe    maxerr 1.190e-14 at 40 (got 1.9365814956901552e-05 ref 1.9365814956901322e-05)
+  g1.0   maxerr 2.129e-15 at 12 (got -9.5487749448821134e-06 ref -9.548774944882093e-06)
+  wq.0   maxerr 2.892e-14 at 111 (got -1.3271104888642185e-08 ref -1.3271104888641802e-08)
+  wk.0   maxerr 1.195e-13 at 10 (got -4.1756769590313697e-09 ref -4.1756769590318685e-09)
+  wv.0   maxerr 6.706e-14 at 26 (got -1.468285836949568e-06 ref -1.4682858369496665e-06)
+  wo.0   maxerr 2.224e-14 at 56 (got -1.5079152363175454e-05 ref -1.5079152363175119e-05)
+  g2.0   maxerr 3.448e-15 at 12 (got -5.4040632045048956e-06 ref -5.4040632045048769e-06)
+  w1.0   maxerr 2.041e-13 at 84 (got -1.3881273476590322e-06 ref -1.3881273476593155e-06)
+  w2.0   maxerr 4.681e-14 at 292 (got -3.9809567036755095e-06 ref -3.9809567036753231e-06)
+  g1.1   maxerr 1.912e-15 at 11 (got -5.3159534928751992e-06 ref -5.315953492875189e-06)
+  wq.1   maxerr 6.768e-14 at 192 (got -3.0894876779524487e-08 ref -3.0894876779522396e-08)
+  wk.1   maxerr 5.611e-14 at 244 (got -3.0429898612980389e-08 ref -3.0429898612978681e-08)
+  wv.1   maxerr 3.583e-14 at 0 (got 1.2151847090074968e-06 ref 1.2151847090074498e-06)
+  wo.1   maxerr 6.087e-14 at 216 (got 4.1471421799794075e-06 ref 4.1471421799791551e-06)
+  g2.1   maxerr 2.866e-15 at 13 (got -1.0639502061492555e-05 ref -1.0639502061492524e-05)
+  w1.1   maxerr 3.653e-14 at 228 (got 8.0548209531252923e-07 ref 8.0548209531248921e-07)
+  w2.1   maxerr 1.161e-13 at 57 (got -1.6889038031905868e-06 ref -1.6889038031909216e-06)
+  gf     maxerr 1.190e-14 at 13 (got -6.2633820796201627e-06 ref -6.2633820796200882e-06)
+PASS step0-init: m (rtol 1e-09)
+v
+  wte    maxerr 1.232e-14 at 1583 (got 4.8113384992296385e-07 ref 4.8113384992295792e-07)
+  wpe    maxerr 6.503e-15 at 8 (got 1.9132235467403513e-07 ref 1.9132235467403389e-07)
+  g1.0   maxerr 4.111e-15 at 12 (got 9.1179102948008514e-11 ref 9.1179102948008139e-11)
+  wq.0   maxerr 2.189e-14 at 27 (got 9.2401324623850548e-15 ref 9.2401324623848433e-15)
+  wk.0   maxerr 2.059e-14 at 66 (got 9.6487445895566876e-15 ref 9.6487445895569574e-15)
+  wv.0   maxerr 1.096e-14 at 147 (got 1.8308107700684508e-09 ref 1.8308107700684307e-09)
+  wo.0   maxerr 5.634e-15 at 175 (got 3.875775331128198e-08 ref 3.8757753311281762e-08)
+  g2.0   maxerr 6.639e-15 at 12 (got 2.9203899118283753e-11 ref 2.9203899118283559e-11)
+  w1.0   maxerr 1.266e-14 at 9 (got 2.6126298374183855e-09 ref 2.6126298374183524e-09)
+  w2.0   maxerr 1.495e-14 at 89 (got 7.1906770238173283e-09 ref 7.1906770238172208e-09)
+  g1.1   maxerr 4.002e-15 at 11 (got 2.8259361538412071e-11 ref 2.8259361538411958e-11)
+  wq.1   maxerr 8.198e-15 at 230 (got 8.3141432087504636e-14 ref 8.3141432087503955e-14)
+  wk.1   maxerr 2.379e-14 at 84 (got 1.6414223449855753e-14 ref 1.6414223449855293e-14)
+  wv.1   maxerr 1.033e-14 at 28 (got 1.4153852560497369e-09 ref 1.4153852560497192e-09)
+  wo.1   maxerr 1.203e-14 at 185 (got 1.1827088212808982e-08 ref 1.1827088212808839e-08)
+  g2.1   maxerr 5.937e-15 at 13 (got 1.131990041165045e-10 ref 1.1319900411650383e-10)
+  w1.1   maxerr 1.125e-14 at 357 (got 1.6361379088006476e-09 ref 1.6361379088006292e-09)
+  w2.1   maxerr 1.290e-14 at 382 (got 9.1044797505849225e-09 ref 9.104479750584805e-09)
+  gf     maxerr 5.348e-15 at 11 (got 2.3973300525476282e-09 ref 2.3973300525476411e-09)
+PASS step0-init: v (rtol 1e-09)
+PASS step1-chain: covers clip=True
+$ /home/drakestapleton/work/helix-v021/build/verify/ollm train /tmp/tmp8l1q2dcj/ck.step1-chain /tmp/omega-helix-oracle.rLGU2c/ollm-train.bin 2 1
+  rc=0 0.01s stdout='T 2 5553747\n'
+PASS step1-chain: rc 0
+PASS step1-chain: stdout
+PASS step1-chain: step
+PASS step1-chain: header unchanged
+params
+  wte    maxerr 3.561e-16 at 3937 (got -7.6116498805491528e-05 ref -7.6116498805491555e-05)
+  wpe    maxerr 1.340e-16 at 120 (got -0.025895464088697227 ref -0.02589546408869723)
+  g1.0   maxerr 0.000e+00 at 0 (got 1.0000490197049685 ref 1.0000490197049685)
+  wq.0   maxerr 1.839e-16 at 160 (got 0.0023582055586918896 ref 0.00235820555869189)
+  wk.0   maxerr 5.813e-16 at 16 (got 3.497110388089995e-05 ref 3.497110388089997e-05)
+  wv.0   maxerr 2.204e-16 at 37 (got -0.00024598113885712381 ref -0.00024598113885712387)
+  wo.0   maxerr 4.750e-16 at 153 (got 8.5599907973812949e-05 ref 8.5599907973812989e-05)
+  g2.0   maxerr 0.000e+00 at 0 (got 0.99993683607056849 ref 0.99993683607056849)
+  w1.0   maxerr 5.857e-16 at 506 (got 1.0508196932051346e-05 ref 1.0508196932051326e-05)
+  w2.0   maxerr 3.835e-16 at 487 (got 0.00028274877810375177 ref 0.00028274877810375188)
+  g1.1   maxerr 0.000e+00 at 0 (got 0.99991266101783738 ref 0.99991266101783738)
+  wq.1   maxerr 1.845e-16 at 177 (got 0.00058771593487037886 ref 0.00058771593487037897)
+  wk.1   maxerr 1.549e-16 at 201 (got -0.0013994463971041848 ref -0.0013994463971041845)
+  wv.1   maxerr 2.015e-16 at 175 (got -0.017221794528154057 ref -0.017221794528154054)
+  wo.1   maxerr 7.862e-16 at 118 (got -5.5112232525345844e-06 ref -5.511223252534598e-06)
+  g2.1   maxerr 0.000e+00 at 0 (got 0.99993129383083756 ref 0.99993129383083756)
+  w1.1   maxerr 1.076e-15 at 218 (got 1.317730892593664e-05 ref 1.3177308925936603e-05)
+  w2.1   maxerr 2.268e-16 at 22 (got -0.00023901440576427256 ref -0.00023901440576427262)
+  gf     maxerr 0.000e+00 at 0 (got 1.0000876590788947 ref 1.0000876590788947)
+PASS step1-chain: params (rtol 1e-09)
+m
+  wte    maxerr 2.121e-14 at 1681 (got -0.00057240078665728774 ref -0.00057240078665729988)
+  wpe    maxerr 1.679e-13 at 53 (got 4.1318738478470472e-05 ref 4.1318738478463533e-05)
+  g1.0   maxerr 1.738e-15 at 13 (got 7.7957769830954496e-06 ref 7.7957769830954632e-06)
+  wq.0   maxerr 6.597e-14 at 61 (got -2.8025397980356355e-09 ref -2.8025397980359532e-09)
+  wk.0   maxerr 4.105e-14 at 179 (got 2.4505054595790697e-08 ref 2.4505054595789691e-08)
+  wv.0   maxerr 8.045e-14 at 216 (got 2.3585040013136724e-06 ref 2.3585040013138621e-06)
+  wo.0   maxerr 1.671e-13 at 86 (got -1.4012291644972157e-06 ref -1.4012291644964567e-06)
+  g2.0   maxerr 8.472e-15 at 7 (got -7.9986305802952964e-06 ref -7.9986305802952286e-06)
+  w1.0   maxerr 2.406e-13 at 490 (got -8.958796314577854e-07 ref -8.958796314583275e-07)
+  w2.0   maxerr 1.022e-13 at 190 (got -2.1215273068028034e-05 ref -2.1215273068025866e-05)
+  g1.1   maxerr 3.639e-15 at 1 (got -1.1173975818040407e-05 ref -1.1173975818040448e-05)
+  wq.1   maxerr 8.768e-14 at 73 (got 5.3535621668966543e-09 ref 5.3535621668959661e-09)
+  wk.1   maxerr 1.379e-13 at 84 (got -9.0248529771104955e-09 ref -9.0248529771092515e-09)
+  wv.1   maxerr 6.915e-14 at 169 (got 2.7437057796295475e-06 ref 2.7437057796297372e-06)
+  wo.1   maxerr 8.813e-14 at 155 (got 5.5362735328749486e-06 ref 5.5362735328744607e-06)
+  g2.1   maxerr 3.096e-14 at 12 (got -5.4713422997681088e-07 ref -5.4713422997679394e-07)
+  w1.1   maxerr 1.447e-13 at 383 (got 2.0602382308915201e-06 ref 2.0602382308918183e-06)
+  w2.1   maxerr 1.499e-13 at 412 (got -4.3382941230314838e-06 ref -4.3382941230321343e-06)
+  gf     maxerr 8.742e-15 at 1 (got 2.4803537577736421e-05 ref 2.4803537577736638e-05)
+PASS step1-chain: m (rtol 1e-09)
+v
+  wte    maxerr 7.944e-15 at 1802 (got 9.5962046328194857e-07 ref 9.596204632819562e-07)
+  wpe    maxerr 1.329e-14 at 108 (got 8.9593671662681758e-08 ref 8.9593671662683968e-08)
+  g1.0   maxerr 3.343e-15 at 6 (got 1.3608903653087273e-09 ref 1.3608903653087318e-09)
+  wq.0   maxerr 1.213e-14 at 111 (got 3.5898404131410848e-14 ref 3.5898404131411284e-14)
+  wk.0   maxerr 5.804e-15 at 19 (got 9.7852614863175266e-14 ref 9.7852614863175834e-14)
+  wv.0   maxerr 5.339e-15 at 229 (got 1.1105977110221099e-09 ref 1.1105977110221221e-09)
+  wo.0   maxerr 5.226e-15 at 12 (got 1.3169728429106772e-07 ref 1.3169728429106841e-07)
+  g2.0   maxerr 2.644e-15 at 12 (got 4.3016419371537141e-10 ref 4.3016419371537255e-10)
+  w1.0   maxerr 5.866e-15 at 193 (got 3.2431928165823618e-09 ref 3.2431928165823809e-09)
+  w2.0   maxerr 7.806e-15 at 252 (got 6.7818844168918748e-08 ref 6.7818844168919277e-08)
+  g1.1   maxerr 3.698e-15 at 2 (got 3.4668952578740206e-09 ref 3.4668952578740334e-09)
+  wq.1   maxerr 5.965e-15 at 235 (got 1.8196910220003812e-13 ref 1.819691022000392e-13)
+  wk.1   maxerr 1.278e-14 at 231 (got 7.0099114494472475e-14 ref 7.0099114494473371e-14)
+  wv.1   maxerr 5.281e-15 at 184 (got 3.2895039960986245e-09 ref 3.2895039960986418e-09)
+  wo.1   maxerr 4.675e-15 at 216 (got 3.1708738419132386e-07 ref 3.1708738419132534e-07)
+  g2.1   maxerr 3.526e-15 at 11 (got 1.6422454771442445e-09 ref 1.6422454771442503e-09)
+  w1.1   maxerr 4.450e-15 at 284 (got 2.5280565713621761e-08 ref 2.5280565713621873e-08)
+  w2.1   maxerr 7.608e-15 at 11 (got 9.7851927602360067e-09 ref 9.7851927602360812e-09)
+  gf     maxerr 3.232e-15 at 11 (got 4.0953509267481266e-07 ref 4.0953509267481398e-07)
+PASS step1-chain: v (rtol 1e-09)
+PASS step2-unclipped: covers clip=False
+$ /home/drakestapleton/work/helix-v021/build/verify/ollm train /tmp/tmp8l1q2dcj/ck.step2-unclipped /tmp/omega-helix-oracle.rLGU2c/ollm-train.bin 3 1
+  rc=0 0.01s stdout='T 3 5544429\n'
+PASS step2-unclipped: rc 0
+PASS step2-unclipped: stdout
+PASS step2-unclipped: step
+PASS step2-unclipped: header unchanged
+params
+  wte    maxerr 3.927e-16 at 2751 (got -6.902934869867732e-05 ref -6.9029348698677347e-05)
+  wpe    maxerr 0.000e+00 at 0 (got -0.010829515717292707 ref -0.010829515717292707)
+  g1.0   maxerr 0.000e+00 at 0 (got 1.000057189199151 ref 1.000057189199151)
+  wq.0   maxerr 1.806e-16 at 155 (got -0.0096063754382377624 ref -0.0096063754382377641)
+  wk.0   maxerr 2.029e-16 at 50 (got -0.017099554933154022 ref -0.017099554933154019)
+  wv.0   maxerr 1.754e-16 at 58 (got -0.00015454241727915039 ref -0.00015454241727915041)
+  wo.0   maxerr 1.504e-16 at 39 (got 0.00018020815852364062 ref 0.00018020815852364065)
+  g2.0   maxerr 0.000e+00 at 0 (got 1.0000571081975458 ref 1.0000571081975458)
+  w1.0   maxerr 1.973e-16 at 214 (got 0.00054944897947609833 ref 0.00054944897947609844)
+  w2.0   maxerr 3.352e-16 at 218 (got 2.0215422922736595e-05 ref 2.0215422922736601e-05)
+  g1.1   maxerr 0.000e+00 at 0 (got 0.99994278592454111 ref 0.99994278592454111)
+  wq.1   maxerr 1.528e-16 at 143 (got -0.0056764445822972695 ref -0.0056764445822972704)
+  wk.1   maxerr 1.932e-16 at 56 (got 0.0044896260538128049 ref 0.0044896260538128041)
+  wv.1   maxerr 2.096e-16 at 106 (got -0.0082769411722567483 ref -0.00827694117225675)
+  wo.1   maxerr 2.047e-16 at 109 (got -0.0010591166821456192 ref -0.0010591166821456194)
+  g2.1   maxerr 0.000e+00 at 0 (got 1.0000572215132768 ref 1.0000572215132768)
+  w1.1   maxerr 2.509e-16 at 377 (got 5.4024410496024342e-05 ref 5.4024410496024328e-05)
+  w2.1   maxerr 1.911e-16 at 425 (got 0.00028362169734930348 ref 0.00028362169734930343)
+  gf     maxerr 0.000e+00 at 0 (got 0.099942765502229178 ref 0.099942765502229178)
+PASS step2-unclipped: params (rtol 1e-09)
+m
+  wte    maxerr 2.285e-14 at 724 (got -3.79986254331466e-06 ref -3.7998625433147469e-06)
+  wpe    maxerr 1.980e-14 at 38 (got 1.0950910112604104e-05 ref 1.0950910112604321e-05)
+  g1.0   maxerr 1.259e-14 at 15 (got -1.6815579547742658e-07 ref -1.681557954774287e-07)
+  wq.0   maxerr 3.061e-14 at 162 (got -5.8025846882578799e-10 ref -5.8025846882576411e-10)
+  wk.0   maxerr 1.592e-13 at 50 (got -7.3965399602099196e-10 ref -7.3965399602110973e-10)
+  wv.0   maxerr 2.746e-14 at 195 (got 1.5616036319310767e-07 ref 1.5616036319310338e-07)
+  wo.0   maxerr 5.498e-14 at 176 (got -3.5724475309524602e-07 ref -3.5724475309526566e-07)
+  g2.0   maxerr 2.850e-15 at 1 (got -2.9721198246171415e-07 ref -2.9721198246171331e-07)
+  w1.0   maxerr 3.383e-14 at 182 (got 1.0830156948058405e-06 ref 1.0830156948058771e-06)
+  w2.0   maxerr 9.135e-14 at 146 (got -4.7465317726681333e-07 ref -4.7465317726676997e-07)
+  g1.1   maxerr 2.969e-14 at 1 (got 3.9229561952783413e-08 ref 3.9229561952782248e-08)
+  wq.1   maxerr 7.924e-14 at 143 (got -2.0042781150382956e-09 ref -2.0042781150381368e-09)
+  wk.1   maxerr 1.961e-14 at 234 (got 4.5983279459857516e-09 ref 4.5983279459858417e-09)
+  wv.1   maxerr 4.557e-14 at 221 (got -6.3240633088562531e-08 ref -6.324063308855643e-08)
+  wo.1   maxerr 5.887e-14 at 13 (got 1.4495707146968192e-06 ref 1.4495707146969045e-06)
+  g2.1   maxerr 1.538e-15 at 9 (got -1.1186403317084694e-07 ref -1.1186403317084677e-07)
+  w1.1   maxerr 2.548e-14 at 203 (got -7.4377995676649272e-07 ref -7.4377995676647377e-07)
+  w2.1   maxerr 5.822e-14 at 461 (got -6.5104278334317029e-07 ref -6.5104278334320819e-07)
+  gf     maxerr 3.373e-14 at 1 (got 4.4948975145833813e-06 ref 4.4948975145835329e-06)
+PASS step2-unclipped: m (rtol 1e-09)
+v
+  wte    maxerr 7.322e-15 at 1772 (got 4.6467727982461891e-09 ref 4.6467727982462246e-09)
+  wpe    maxerr 8.206e-15 at 107 (got 2.943241178626558e-08 ref 2.9432411786265821e-08)
+  g1.0   maxerr 1.544e-14 at 15 (got 2.827637155264616e-14 ref 2.827637155264687e-14)
+  wq.0   maxerr 9.943e-15 at 14 (got 6.6446839638124478e-16 ref 6.6446839638125139e-16)
+  wk.0   maxerr 2.205e-14 at 223 (got 2.6604843365016905e-16 ref 2.6604843365017492e-16)
+  wv.0   maxerr 9.159e-15 at 166 (got 1.7638558514105799e-11 ref 1.7638558514105638e-11)
+  wo.0   maxerr 1.335e-14 at 121 (got 1.6379247314545158e-11 ref 1.6379247314544589e-11)
+  g2.0   maxerr 5.715e-15 at 1 (got 8.8334962518822386e-14 ref 8.8334962518821881e-14)
+  w1.0   maxerr 7.652e-15 at 483 (got 3.3376395262479962e-11 ref 3.3376395262480227e-11)
+  w2.0   maxerr 8.546e-15 at 46 (got 1.2703617172649094e-10 ref 1.2703617172648986e-10)
+  g1.1   maxerr 4.085e-15 at 9 (got 3.1539504796030343e-14 ref 3.1539504796030116e-14)
+  wq.1   maxerr 9.266e-15 at 218 (got 6.7042283883064686e-16 ref 6.7042283883065308e-16)
+  wk.1   maxerr 1.130e-14 at 74 (got 1.5539302935024199e-15 ref 1.5539302935024023e-15)
+  wv.1   maxerr 1.295e-14 at 108 (got 3.4434054632511286e-11 ref 3.443405463251084e-11)
+  wo.1   maxerr 6.850e-15 at 17 (got 2.6416840609132777e-10 ref 2.6416840609132958e-10)
+  g2.1   maxerr 2.425e-15 at 14 (got 7.9103606379359878e-13 ref 7.910360637936007e-13)
+  w1.1   maxerr 1.341e-14 at 80 (got 2.7001803565063521e-11 ref 2.7001803565063068e-11)
+  w2.1   maxerr 2.285e-14 at 120 (got 1.5384378139583998e-10 ref 1.5384378139583646e-10)
+  gf     maxerr 3.883e-15 at 15 (got 7.2435885696681677e-09 ref 7.2435885696681395e-09)
+PASS step2-unclipped: v (rtol 1e-09)
+PASS step150-synthetic-clip: covers clip=True
+$ /home/drakestapleton/work/helix-v021/build/verify/ollm train /tmp/tmp8l1q2dcj/ck.step150-synthetic-clip /tmp/omega-helix-oracle.rLGU2c/ollm-train.bin 151 1
+  rc=0 0.01s stdout='T 151 9496135\n'
+PASS step150-synthetic-clip: rc 0
+PASS step150-synthetic-clip: stdout
+PASS step150-synthetic-clip: step
+PASS step150-synthetic-clip: header unchanged
+params
+  wte    maxerr 8.591e-16 at 3196 (got 0.02423179392702773 ref 0.02423179392702771)
+  wpe    maxerr 3.669e-15 at 121 (got -0.00068848081808755299 ref -0.00068848081808755798)
+  g1.0   maxerr 0.000e+00 at 0 (got 1.4738750505175915 ref 1.4738750505175915)
+  wq.0   maxerr 4.837e-16 at 48 (got -0.014346474379179196 ref -0.014346474379179203)
+  wk.0   maxerr 1.040e-15 at 180 (got -2.7574141846261019e-05 ref -2.7574141846259176e-05)
+  wv.0   maxerr 2.016e-16 at 4 (got 0.0043031431325356532 ref 0.0043031431325356523)
+  wo.0   maxerr 2.248e-15 at 49 (got 0.23463920650345538 ref 0.23463920650345485)
+  g2.0   maxerr 0.000e+00 at 0 (got 0.28170712469690412 ref 0.28170712469690412)
+  w1.0   maxerr 2.168e-16 at 132 (got 0.12801958954952616 ref 0.12801958954952619)
+  w2.0   maxerr 9.504e-16 at 352 (got -0.0012937219017802799 ref -0.0012937219017802781)
+  g1.1   maxerr 1.455e-16 at 13 (got 0.76285061190668235 ref 0.76285061190668224)
+  wq.1   maxerr 6.253e-16 at 152 (got -0.0020806350950198999 ref -0.0020806350950198986)
+  wk.1   maxerr 2.354e-16 at 207 (got -0.0073703327879944668 ref -0.0073703327879944686)
+  wv.1   maxerr 2.873e-16 at 150 (got -0.00031664179566881571 ref -0.00031664179566881533)
+  wo.1   maxerr 7.206e-16 at 194 (got 4.7456014346109127e-05 ref 4.7456014346110211e-05)
+  g2.1   maxerr 0.000e+00 at 0 (got 0.95485047736800754 ref 0.95485047736800754)
+  w1.1   maxerr 2.666e-16 at 342 (got -0.001358398475593223 ref -0.0013583984755932226)
+  w2.1   maxerr 7.409e-16 at 208 (got 0.023414474995827515 ref 0.023414474995827533)
+  gf     maxerr 0.000e+00 at 0 (got 1.9051370239165017 ref 1.9051370239165017)
+PASS step150-synthetic-clip: params (rtol 1e-09)
+m
+  wte    maxerr 1.857e-13 at 1746 (got 2.1899703272457497e-05 ref 2.1899703272453431e-05)
+  wpe    maxerr 2.105e-13 at 32 (got 2.0599896218336899e-05 ref 2.0599896218332562e-05)
+  g1.0   maxerr 3.394e-14 at 6 (got 0.00035781498627579403 ref 0.00035781498627578188)
+  wq.0   maxerr 1.081e-13 at 201 (got -4.3132780679404483e-05 ref -4.3132780679409145e-05)
+  wk.0   maxerr 8.315e-14 at 133 (got 2.2167209062138769e-05 ref 2.2167209062136926e-05)
+  wv.0   maxerr 2.368e-14 at 101 (got 3.663561370637362e-05 ref 3.6635613706372753e-05)
+  wo.0   maxerr 2.041e-13 at 37 (got -9.5618489062205452e-06 ref -9.5618489062224967e-06)
+  g2.0   maxerr 3.770e-14 at 9 (got -4.1701618174124031e-05 ref -4.1701618174122459e-05)
+  w1.0   maxerr 1.365e-13 at 100 (got 4.0233245229368692e-06 ref 4.0233245229381702e-06)
+  w2.0   maxerr 1.379e-13 at 39 (got -5.0772796667339704e-06 ref -5.0772796667328116e-06)
+  g1.1   maxerr 3.594e-15 at 6 (got -0.0017495860335703084 ref -0.0017495860335703147)
+  wq.1   maxerr 1.513e-13 at 203 (got -2.7229225107964963e-05 ref -2.7229225107969083e-05)
+  wk.1   maxerr 7.590e-13 at 188 (got 1.0118347317457279e-06 ref 1.0118347317435595e-06)
+  wv.1   maxerr 6.692e-14 at 214 (got 5.1315739999436205e-06 ref 5.1315739999441626e-06)
+  wo.1   maxerr 3.008e-14 at 132 (got 2.8839538161864586e-05 ref 2.8839538161863718e-05)
+  g2.1   maxerr 3.832e-15 at 6 (got 0.00041030008409012072 ref 0.00041030008409012229)
+  w1.1   maxerr 1.477e-13 at 417 (got 3.3179309876412225e-06 ref 3.3179309876420898e-06)
+  w2.1   maxerr 5.254e-14 at 338 (got 8.2548430802610595e-06 ref 8.2548430802606258e-06)
+  gf     maxerr 1.530e-14 at 8 (got 9.5662558334183568e-05 ref 9.5662558334185031e-05)
+PASS step150-synthetic-clip: m (rtol 1e-09)
+v
+  wte    maxerr 1.857e-14 at 518 (got 1.021605157330676e-05 ref 1.021605157330695e-05)
+  wpe    maxerr 1.208e-14 at 102 (got 1.7950002947050355e-05 ref 1.7950002947050572e-05)
+  g1.0   maxerr 4.772e-15 at 2 (got 4.6857567098554919e-05 ref 4.6857567098555143e-05)
+  wq.0   maxerr 1.645e-14 at 172 (got 6.9495475923947952e-07 ref 6.9495475923946809e-07)
+  wk.0   maxerr 7.064e-15 at 241 (got 2.7340986733105908e-05 ref 2.7340986733106101e-05)
+  wv.0   maxerr 3.582e-15 at 246 (got 3.3105385728694137e-06 ref 3.3105385728694256e-06)
+  wo.0   maxerr 7.703e-15 at 49 (got 8.448311363435461e-09 ref 8.4483113634358134e-09)
+  g2.0   maxerr 2.822e-15 at 15 (got 3.1212756516026729e-05 ref 3.1212756516026817e-05)
+  w1.0   maxerr 3.058e-15 at 147 (got 3.1027780266914488e-05 ref 3.1027780266914583e-05)
+  w2.0   maxerr 8.260e-15 at 235 (got 1.0895719385005963e-07 ref 1.0895719385005873e-07)
+  g1.1   maxerr 3.708e-15 at 1 (got 2.7414514896026199e-06 ref 2.7414514896026301e-06)
+  wq.1   maxerr 2.247e-15 at 200 (got 7.0669804024272293e-07 ref 7.0669804024272135e-07)
+  wk.1   maxerr 5.812e-15 at 231 (got 2.914686446240843e-07 ref 2.9146864462408599e-07)
+  wv.1   maxerr 3.303e-15 at 111 (got 3.4617397241249873e-06 ref 3.4617397241249987e-06)
+  wo.1   maxerr 2.505e-15 at 153 (got 5.7481413871092083e-06 ref 5.7481413871092227e-06)
+  g2.1   maxerr 1.445e-15 at 11 (got 3.5179495883526856e-06 ref 3.5179495883526907e-06)
+  w1.1   maxerr 2.771e-15 at 171 (got 1.8339984487755684e-06 ref 1.8339984487755735e-06)
+  w2.1   maxerr 3.812e-15 at 208 (got 1.8747917427572696e-07 ref 1.8747917427572768e-07)
+  gf     maxerr 2.031e-15 at 1 (got 4.6716371796272919e-05 ref 4.6716371796273013e-05)
+PASS step150-synthetic-clip: v (rtol 1e-09)
+XSTEP PASS
+$ /home/drakestapleton/work/helix-v021/build/verify/ollm eval /tmp/tmp8c5kum4u/ck /tmp/omega-helix-oracle.rLGU2c/ollm-held.bin 4
+  rc=0 0.00s stdout='E 5 4 6006212 8665132\n'
+PASS rc 0
+PASS stdout
+XEVAL PASS
+--- 3b. Universal zero-cap engine oracle (llama/qwen2/qwen3/mistral/gemma/gpt/gelu/loop/u32/caps) ---
+PASS preset=llama    init=0.00e+00 gloss=0.00e+00 grad=2.75e-13 wt=5.83e-15 m=7.25e-13 v=1.98e-14 kv=0.00e+00
+PASS preset=qwen2    init=0.00e+00 gloss=0.00e+00 grad=2.54e-13 wt=1.59e-14 m=3.01e-13 v=1.56e-14 kv=0.00e+00
+PASS preset=qwen3    init=0.00e+00 gloss=1.19e-16 grad=2.45e-13 wt=3.78e-15 m=2.43e-13 v=1.69e-14 kv=0.00e+00
+PASS preset=mistral  init=0.00e+00 gloss=0.00e+00 grad=2.35e-13 wt=4.99e-14 m=5.94e-13 v=1.28e-14 kv=0.00e+00
+PASS preset=gemma    init=0.00e+00 gloss=0.00e+00 grad=3.03e-13 wt=1.64e-14 m=3.24e-13 v=1.25e-14 kv=0.00e+00
+PASS preset=gpt      init=0.00e+00 gloss=0.00e+00 grad=2.00e-13 wt=5.50e-15 m=7.47e-13 v=1.25e-14 kv=0.00e+00
+PASS preset=gelu     init=0.00e+00 gloss=0.00e+00 grad=2.38e-13 wt=1.57e-15 m=1.48e-13 v=1.43e-14 kv=0.00e+00
+PASS looped_core(LP=1,LC=1,NP=3) init=0.00e+00 train_wt=5.51e-15 twin_loss=0.00e+00 twin_grad=9.00e-15
+PASS u32_vocab(V=70000) init=0.00e+00 gloss=1.59e-16 grad=2.36e-13 wt=8.78e-13
+PASS past_old_caps(V=8192,T=320,D=288,L=20) P=9986400 init=0.00e+00 eval_loss=9.073623
+PASS negative_controls checks=14 (corrupt_fnv1a, truncated, bad_flags, bad_magic, bad_loop, bad_tok)
+ALL PASS (rtol <= 1e-09, elapsed 103.98s)
+--- 3c. Safetensors / GGUF v3 / CK01-03 upgrade interchange suite ---
+test_gemma (__main__.T00OracleSelfCheck.test_gemma) ... ok
+test_llama_tied (__main__.T00OracleSelfCheck.test_llama_tied) ... ok
+test_qwen3_untied_u16 (__main__.T00OracleSelfCheck.test_qwen3_untied_u16) ... ok
+test_default_T (__main__.T10Import.test_default_T) ... ok
+test_dtypes (__main__.T10Import.test_dtypes) ... ok
+test_explicit_args (__main__.T10Import.test_explicit_args) ... ok
+test_gemma_parity (__main__.T10Import.test_gemma_parity) ... ok
+test_ignored_and_zero_bias_tensors (__main__.T10Import.test_ignored_and_zero_bias_tensors) ... ok
+test_llama_parity (__main__.T10Import.test_llama_parity) ... ok
+test_llama_untied_bf16_parity (__main__.T10Import.test_llama_untied_bf16_parity) ... ok
+test_mistral_parity (__main__.T10Import.test_mistral_parity) ... ok
+test_mixed_dtypes (__main__.T10Import.test_mixed_dtypes) ... ok
+test_optional_fields_defaults (__main__.T10Import.test_optional_fields_defaults) ... ok
+test_qwen2_parity (__main__.T10Import.test_qwen2_parity) ... ok
+test_qwen3_parity (__main__.T10Import.test_qwen3_parity) ... ok
+test_qwen3_tied_parity (__main__.T10Import.test_qwen3_tied_parity) ... ok
+test_reordered_tensors_and_no_metadata (__main__.T10Import.test_reordered_tensors_and_no_metadata) ... ok
+test_default_dtype_is_f32 (__main__.T20ExportHF.test_default_dtype_is_f32) ... ok
+test_gemma_roundtrip (__main__.T20ExportHF.test_gemma_roundtrip) ... ok
+test_helix_gelu_rope_qkn_untied (__main__.T20ExportHF.test_helix_gelu_rope_qkn_untied) ... ok
+test_helix_gpt_loop (__main__.T20ExportHF.test_helix_gpt_loop) ... ok
+test_helix_rope_relu (__main__.T20ExportHF.test_helix_rope_relu) ... ok
+test_helix_swiglu_wpe_untied (__main__.T20ExportHF.test_helix_swiglu_wpe_untied) ... ok
+test_llama_preset_with_loop_is_helix (__main__.T20ExportHF.test_llama_preset_with_loop_is_helix) ... ok
+test_llama_roundtrip (__main__.T20ExportHF.test_llama_roundtrip) ... ok
+test_qwen3_roundtrip (__main__.T20ExportHF.test_qwen3_roundtrip) ... ok
+test_tied_gemma_preset_is_helix (__main__.T20ExportHF.test_tied_gemma_preset_is_helix) ... ok
+test_univ_llama_preset_is_llama (__main__.T20ExportHF.test_univ_llama_preset_is_llama) ... ok
+test_univ_qwen3_preset_is_qwen3 (__main__.T20ExportHF.test_univ_qwen3_preset_is_qwen3) ... ok
+test_gemma (__main__.T30GGUF.test_gemma) ... ok
+test_helix_loop_wpe (__main__.T30GGUF.test_helix_loop_wpe) ... ok
+test_helix_untied_swiglu (__main__.T30GGUF.test_helix_untied_swiglu) ... ok
+test_llama_tied (__main__.T30GGUF.test_llama_tied) ... ok
+test_llama_untied_permute (__main__.T30GGUF.test_llama_untied_permute) ... ok
+test_qwen3 (__main__.T30GGUF.test_qwen3) ... ok
+test_ck01 (__main__.T40Upgrade.test_ck01) ... ok
+test_ck02 (__main__.T40Upgrade.test_ck02) ... ok
+test_ck03_loop (__main__.T40Upgrade.test_ck03_loop) ... ok
+test_continued_training_ck01 (__main__.T40Upgrade.test_continued_training_ck01) ... ok
+test_continued_training_ck03_loop (__main__.T40Upgrade.test_continued_training_ck03_loop) ... ok
+test_upgrade_refusals (__main__.T40Upgrade.test_upgrade_refusals) ... ok
+test_upgraded_trains_in_univ (__main__.T40Upgrade.test_upgraded_trains_in_univ) ... ok
+test_ck_refusals (__main__.T50Refusals.test_ck_refusals) ... ok
+test_config_81 (__main__.T50Refusals.test_config_81) ... ok
+test_geometry_88 (__main__.T50Refusals.test_geometry_88) ... ok
+test_header_83 (__main__.T50Refusals.test_header_83) ... ok
+test_helix_tie_mismatch_81 (__main__.T50Refusals.test_helix_tie_mismatch_81) ... ok
+test_io_70 (__main__.T50Refusals.test_io_70) ... ok
+test_json_80 (__main__.T50Refusals.test_json_80) ... ok
+test_nonfinite_86 (__main__.T50Refusals.test_nonfinite_86) ... ok
+test_positive_control (__main__.T50Refusals.test_positive_control) ... ok
+test_shape_85 (__main__.T50Refusals.test_shape_85) ... ok
+test_tensor_84 (__main__.T50Refusals.test_tensor_84) ... ok
+test_truncated_87 (__main__.T50Refusals.test_truncated_87) ... ok
+test_unsupported_82 (__main__.T50Refusals.test_unsupported_82) ... ok
+test_usage_2 (__main__.T50Refusals.test_usage_2) ... ok
+
+----------------------------------------------------------------------
+Ran 56 tests in 2.837s
+
+OK
+ollm-interchange: /home/drakestapleton/work/helix-v021/build/verify/ollm-interchange (found)
+ollm-univ:        /home/drakestapleton/work/helix-v021/build/verify/ollm-univ (found)
+ollm-macos:       /home/drakestapleton/work/helix-v021/build/verify/ollm (found)
+--- 3c2. OLLMBF01 BF16 4B-8B streaming import, ollm-dna & Studio integration suite ---
+test_01_static_elf_cross_compile_and_zero_libc_cuda_linkage (__main__.TestOllmBf01Dna.test_01_static_elf_cross_compile_and_zero_libc_cuda_linkage) ... ok
+test_02_multishard_bf16_f32_parity_and_end_to_end_dna (__main__.TestOllmBf01Dna.test_02_multishard_bf16_f32_parity_and_end_to_end_dna) ... ok
+test_03_bounded_rss_on_64mib_plus_sharded_import (__main__.TestOllmBf01Dna.test_03_bounded_rss_on_64mib_plus_sharded_import) ... ok
+test_04_negative_controls_truncated_safetensors (__main__.TestOllmBf01Dna.test_04_negative_controls_truncated_safetensors) ... ok
+test_05_negative_controls_header_dtype_shape_mismatch (__main__.TestOllmBf01Dna.test_05_negative_controls_header_dtype_shape_mismatch) ... ok
+test_06_negative_controls_corrupted_ollmbf01_across_all_readers (__main__.TestOllmBf01Dna.test_06_negative_controls_corrupted_ollmbf01_across_all_readers) ... ok
+test_07_studio_cli_json_and_http_import_hf_bf16 (__main__.TestOllmBf01Dna.test_07_studio_cli_json_and_http_import_hf_bf16) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.879s
+
+OK
+--- 3c3. OLLMCK05 fast binary checkpoint & mmap cold-start suite ---
+test_ck05_and_legacy_negative_controls (__main__.TestFastCkpt.test_ck05_and_legacy_negative_controls) ... ok
+test_ck05_constants_and_sources (__main__.TestFastCkpt.test_ck05_constants_and_sources) ... ok
+test_ck05_roundtrip_all_modes_and_ck_types (__main__.TestFastCkpt.test_ck05_roundtrip_all_modes_and_ck_types) ... ok
+test_cross_compile_targets (__main__.TestFastCkpt.test_cross_compile_targets) ... ok
+test_live_gb10_ck05_parity_and_cold_start (__main__.TestFastCkpt.test_live_gb10_ck05_parity_and_cold_start) ... skipped 'set OLLM_GB10_LIVE=1 inside an exclusive spark-window to run live GB10 checks'
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.886s
+
+OK (skipped=1)
+--- 3d. Adaptive looped core (per-token exit & inter-pass messages) suite ---
+PASS build TARGET=aarch64
+PASS build TARGET=aarch64 (serve.om with adaptive-loop fields compiles)
+PASS line count native/model.om = 2189
+PASS line count native/cli.om = 1821
+PASS line count native/serve.om = 5948
+baseline: efec5cd608fa25dfbf3935de8a4950721612cbd1^ of native/model.om, native/cli.om, native/serve.om
+PASS preserve eval toks.bin 8 lp.ck
+PASS preserve sample 1 24 lp.ck
+PASS preserve sample 5 24 lp.ck
+PASS preserve nsample 3 12 lp.ck
+PASS preserve kvcmp lp.ck (0 diff)
+PASS preserve train lp.ck (same lines, same checkpoint bytes)
+PASS preserve eval toks.bin 8 flat.ck
+PASS preserve sample 1 24 flat.ck
+PASS preserve sample 5 24 flat.ck
+PASS preserve nsample 3 12 flat.ck
+PASS preserve kvcmp flat.ck (0 diff)
+PASS preserve train flat.ck (same lines, same checkpoint bytes)
+PASS adapteval 0 0 == eval bits (lp.ck)
+PASS adapteval 0 0 == eval bits (flat.ck)
+PASS adapteval 0 0: every row runs all NP passes
+PASS pass-0 deltas measured (682470 .. 1409741 micro)
+PASS thresh 1046105: heterogeneous per-token exit depths AH [191, 65, 0]
+PASS thresh > 0 changes the loss (5519499 vs 5509458)
+PASS thresh above every delta: all rows exit after pass 1
+PASS messages deterministic (two runs byte-identical)
+PASS messages flow (norm 208 milli) and change the loss
+PASS messages leave pass 0 untouched and no row exits at thresh 0
+PASS exit+messages deterministic
+PASS adaptcmp thresh 0 gain 0: 0 logit diff, 0 telemetry diff
+PASS adaptcmp thresh 1012010 gain 0: 0 logit diff, 0 telemetry diff
+PASS adaptcmp thresh 0 gain 300000: 0 logit diff, 0 telemetry diff
+PASS adaptcmp thresh 1012010 gain 300000: 0 logit diff, 0 telemetry diff
+PASS adaptcmp crosses the context limit with mixed exit passes ['1', '2']
+PASS windowed bank layout: adapteval bits equal
+PASS windowed bank layout: adaptcmp 0 diff
+PASS mutant x caught by adaptcmp (exit 43, ['40', '12000', '40'])
+PASS mutant x at thresh 0 gain 0: logits unchanged, missing telemetry caught (['40', '0', '40'])
+PASS adaptsamp deterministic
+PASS adaptsamp 0 0 greedy tokens == kvcmp's
+PASS adapteval usage exit 2
+PASS adaptcmp usage exit 2
+PASS adaptcmp V = 256 exit 2
+PASS adaptive-loop 42 passed 0 failed
+--- 3e. 8-Pillar Post-Tensor Runtime (SM121 SASS/Megakernel, Reversible, Rings/Arboris, Evo-JIT, Closed-Form SP, OMG) ---
+PASS compile_gb10_om2_elf
+PASS compile_full_gb10_chain_with_gt
+PASS compile_host_linux_om2
+PASS gt_selftest_and_oracle_exec
+PASS gtcode_slots_len
+PASS pack_tern_2bit_parity
+PASS pack_tern_5trit_base3_parity
+PASS lut_gemm_4bit_parity
+PASS tern_gemm_unscaled_parity
+PASS tern_gemm_ue4m3_scaled_parity
+PASS warp_compaction_prefix_sum_parity
+PASS slot0_aligned_32_mult8
+PASS slot0_exit_bra_tail
+PASS slot1_aligned_32_mult8
+PASS slot1_exit_bra_tail
+PASS slot2_aligned_32_mult8
+PASS slot2_exit_bra_tail
+PASS nvdisasm_sm121_slot0
+PASS nvdisasm_gpr_headroom_slot0
+PASS nvdisasm_slot0_lut_gemm_zero_mul
+PASS nvdisasm_sm121_slot1
+PASS nvdisasm_gpr_headroom_slot1
+PASS nvdisasm_slot1_tern_gemm_zero_mul
+PASS nvdisasm_sm121_slot2
+PASS nvdisasm_gpr_headroom_slot2
+PASS nvdisasm_slot2_has_LOP3.LUT
+PASS nvdisasm_slot2_has_PRMT
+PASS nvdisasm_slot2_has_SHFL.BFLY
+PASS nvdisasm_slot2_has_SHFL.UP
+PASS nvdisasm_slot2_has_SHFL.IDX
+PASS nvdisasm_slot2_has_VOTE.ANY
+PASS nvdisasm_slot2_has_POPC
+PASS nvdisasm_slot2_has_F2FP.SATFINITE.E4M3
+PASS nvdisasm_slot2_has_F2FP.SATFINITE.E2M1
+PASS nvdisasm_slot2_has_OMMA.SF.16864
+PASS nvdisasm_slot2_has_MEMBAR.SC.SYS
+SUMMARY: passed=36 failed=0
+Using omc: /home/drakestapleton/canon/omega-mv/seed/out/omc
+PASS compile_gb10_full (rc=0 bytes=1921736 )
+PASS compile_gb10_noserve (rc=0 bytes=1615916 )
+Non-macOS host: skipping target a64macos compile/execution.
+PASS compile          gb10_om2=239520B
+PASS selftest+mode0   ['gb10_om2'] passed built-in self-tests (incl. Q32 & DETBWD)
+PASS q32_lock4        fp32_dropped=True q30_inv_bits=0 model_q32_inv=0.00e+00 loss=3.4696 ck4_flags=403
+PASS gpt_relu_rev       inv=1.11e-16 py_inv=6.94e-17 grad_eq=1.94e-16 fd=5.36e-10 loss=3.3971->3.0706 act_bytes=0 ck4_flags=128
+PASS llama_rope_gqa     inv=8.33e-17 py_inv=2.78e-17 grad_eq=1.11e-16 fd=5.16e-10 loss=3.3813->3.1239 act_bytes=0 ck4_flags=147
+PASS qwen3_looped_np3   inv=1.67e-16 py_inv=2.22e-16 grad_eq=5.55e-16 fd=7.42e-10 loss=3.5878->3.1286 act_bytes=0 ck4_flags=159
+PASS gelu_rev           inv=5.55e-17 py_inv=5.55e-17 grad_eq=8.33e-17 fd=5.14e-10 loss=3.1946->2.9019 act_bytes=0 ck4_flags=160
+PASS geglu_rope_rev     inv=5.55e-17 py_inv=2.78e-17 grad_eq=1.11e-16 fd=5.12e-10 loss=3.1069->2.8750 act_bytes=0 ck4_flags=209
+ALL PILLAR 2 REVERSIBLE CHECKS PASSED
+PASS compile ring.om gb10 om2 (ELF)
+PASS compile arboris.om gb10 om2 (ELF)
+PASS compile context.om + ring.om nvalloc(..., false) gb10 om2 (ELF)
+PASS full stack + arboris.om + ring.om collision-free gb10 om2
+PASS ring header & layout valid
+PASS ring GB10 nvalloc cached=false enforced
+PASS ring total bytes page-aligned (270336)
+PASS ring head/tail 128B cacheline padded
+PASS ring GPU descriptor VA offset exact
+PASS ring GPU payload VA offset exact
+PASS ring fill 64 slots lock-free
+PASS ring full backpressure returns -1
+PASS ring 200-ticket wrap-around bit-exact
+PASS ring FNV-1a-64 negative control fails closed on 1-bit flip
+PASS Grace worker: BPE/batch packing bit-exact
+PASS Grace worker: OLLMDK01 mask & push
+PASS Grace worker: OLLMDK01 f64 & FD oracle parity (max_err=2.78e-17, fd_err=1.63e-10)
+PASS Grace worker: OLLMDK01 qsum > 1.0001 rejected fail-closed
+PASS Grace worker: f64 spot-check passes valid f32 output
+PASS Grace worker: f64 spot-check fails closed on perturbed output
+PASS Grace worker: async AdamW f64 master-weight update parity (max_err=3.47e-18)
+PASS Lock 2: grg_epoch_selftest returns 0
+PASS Lock 2: grg_epoch_init sets epoch=0, gpu_bank=0, cpu_bank=1, active=0, fault=0
+PASS Lock 2: mid-step Grace staging leaves GPU active bank bit-identical
+PASS Lock 2 negative control: mid-step active-bank mutation rejected with -8 / RING_ERR_EPOCH_VIOLATION (6)
+PASS Lock 2 negative control: mid-step commit rejected with -8 / RING_ERR_EPOCH_VIOLATION (6), epoch unchanged
+PASS Lock 2 negative control: out-of-bounds stage/guarded bank write rejected with -3
+PASS Lock 2: step-boundary commit flips epoch 0->1 and GPU reads exact staged + untouched weights
+PASS Lock 2: epoch 1->2 preserves prior epoch weights alongside newly staged deltas
+PASS Arboris associative put/probe deterministic recall
+PASS Arboris ambiguous n-gram auto-demoted (never falsely bypassed)
+PASS Arboris 1 us CPU probe speed (21.9 ns/probe <= 1000 ns)
+PASS Arboris sequence bypass exactness & contested routing
+PASS spclip JSD disagreement oracle match (om=327, ref=327)
+PASS arboris_compact_mask multi-warp ballot & dense active index list exact
+PASS arboris_compact_mask Layer 0/1/2 early-exit vs spclip-contested routing
+PASS OMG subgraph spreading-activation recall (tok=77, act=7300)
+PASS 3-layer guided decoding: OMG mask wall blocks illegal tok 99 + Arboris bias picks 77 without LTP0
+PASS 3-layer guided decoding: low activation or spclip disagreement triggers LTP0=1
+PASS Hippocampus->Cortex sleep trace export filters by utility and preserves OMG stream
+SUMMARY: 40 passed, 0 failed
+PASS compile_gb10_om2
+PASS runtime_exit_0
+PASS sha256_abc_exact
+PASS init_buf_A
+PASS tick_g6_pass
+PASS tick_g6_atomic_flip_A_to_B
+PASS g6_zero_swaps
+PASS g6_yields_tuned
+PASS g6_yield1_on_ffma_i2f_mufu
+PASS g6_preserves_i2f_stall
+PASS g6_compacts_wait_nop_stall
+PASS tick_g1_flip_B_to_A
+PASS g1_predator_safe_swaps
+PASS g1_compacts_total_stalls
+PASS tick_g2_mitosis_flip_A_to_B
+PASS g2_mitosis_yields_tuned
+PASS tick_g5_trickster_flip_B_to_A
+PASS parity_gate_catches_corrupted_buf
+PASS antibody_1_digest_spoof
+PASS antibody_2_non_bijection
+PASS antibody_3_opcode_smuggle
+PASS antibody_4_anchor_escape
+PASS antibody_5_dep_inversion
+PASS antibody_6_scoreboard_hazard
+PASS antibody_7_length_mismatch
+PASS antibody_8_p0_sig_smuggle
+PASS antibody_9_trailing_bytes
+PASS antibody_10_misaligned_qmd
+PASS antibody_11_zero_gen_cap
+PASS antibody_12_illegal_opcode
+PASS antibody_13_bb_leader_pc0
+PASS antibody_13_bb_leader_bra_target
+PASS antibody_13_bb_leader_bra_fallthrough
+PASS antibody_14_6_cycle_alu_floor_unconditional
+PASS antibody_15_i2f_fixed_latency_shave
+PASS flat_bssy_accepted
+PASS nested_bssy_rejected
+PASS gpr_ceiling_64reg_r62_rejected
+PASS gpr_ceiling_128reg_r126_rejected
+PASS gpr_ceiling_128reg_r125_accepted
+PASS egp2_structural_proof_k0
+PASS egp2_structural_proof_k1
+PASS egp2_neg_unsound_rule_99_rejected
+PASS egp2_neg_structural_spoof_rejected
+PASS lock3_pure_om_selftest
+PASS lock3_receipt_count_0_to_4
+PASS lock3_receipt_step_and_genome_log
+PASS lock3_final_words_len
+PASS lock3_receipt_sha256_matches_python
+PASS lock3_reset_for_replay_preserves_receipts
+PASS lock3_replay_steps_0_to_3_ok
+PASS lock3_replay_bit_exact_buffer_and_parity
+PASS lock3_replay_non_promotion_step_4_no_swap
+PASS lock3_1bit_sha_tamper_rejected_err_20
+PASS lock3_out_of_order_replay_rejected_err_21
+
+SUMMARY: passed=55 failed=0
+PASS compile_target_gb10_om2 (1921736 B)
+PASS cold_store_zero_model_and_dynamic_grow (rc=0)
+PASS cold_store_oob_read_traps_103 (rc=103)
+PASS cold_store_oob_write_traps_103 (rc=103)
+PASS ridge_primal_d_le_n (regime=0, max_err=2.776e-16)
+PASS ridge_woodbury_n_lt_d (regime=1, max_err=7.772e-16)
+PASS ridge_primal_woodbury_parity (max_err=9.659e-15)
+PASS gauss_newton_primal (regime=0, max_err=1.554e-15, ce=1.668522->0.789093)
+PASS gauss_newton_woodbury (regime=1, max_err=2.998e-15, ce=1.256943->0.041773)
+PASS spforge_fcachem_primal (N=72, regime=0, loss=5541841->5260762 unats, 52.08ms)
+PASS ollm_spapp_eval_speval_parity (base=5541557 -> spec=5310000 (speval=5310000))
+PASS spforge_vs_backprop_speed_and_loss (spforge=52.08ms (loss=5310000) vs trainfc_B12_30steps=78.83ms (loss=5225460))
+PASS spforge_fcachem_woodbury (N=18, regime=1, loss=5542131->5238096 unats)
+PASS spforge_spchainapp_multilink (L1->L2=5310000 -> L2->L3=5260214)
+PASS spforge_consolidate_traces_bit_identical (SPCONSOL 1 5542131 5238096)
+PASS neg_control_tampered_sp_rc61 (rc=61)
+PASS neg_control_truncated_sp_rc60 (rc=60)
+PASS neg_control_mismatch_base_rc62 (spapp=62, spforge=62)
+
+SUMMARY: 18 passed, 0 failed
+test_01_cross_target_gb10_elf_and_macos (__main__.TestOmgGraph.test_01_cross_target_gb10_elf_and_macos) ... ok
+test_02_builtin_selftest_and_metrics (__main__.TestOmgGraph.test_02_builtin_selftest_and_metrics) ... ok
+test_03_alpha_equivalence_and_semantic_id_separation (__main__.TestOmgGraph.test_03_alpha_equivalence_and_semantic_id_separation) ... ok
+test_04_roundtrip_om_omg_om_compile_and_execute_parity (__main__.TestOmgGraph.test_04_roundtrip_om_omg_om_compile_and_execute_parity) ... ok
+test_05_1000_masked_samples_and_mutant_rejection (__main__.TestOmgGraph.test_05_1000_masked_samples_and_mutant_rejection) ... ok
+test_06_macro_mask_gating_and_expansion (__main__.TestOmgGraph.test_06_macro_mask_gating_and_expansion) ... ok
+test_07_omgc_binary_corpus_and_compression_ab (__main__.TestOmgGraph.test_07_omgc_binary_corpus_and_compression_ab) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.207s
+
+OK
+
+[OMG A/B] V=256 vs V=4096 (16x logit reduction): omg_toks=62, .om_bytes=323 (5.21x), json_bytes=740 (11.94x)
+test_find_ng_ignores_fake_path_ng (__main__.TestGpuMetalMacOS.test_find_ng_ignores_fake_path_ng) ... ok
+test_live_metal_device_and_kernels (__main__.TestGpuMetalMacOS.test_live_metal_device_and_kernels) ... skipped 'requires Apple Silicon macOS (Darwin arm64)'
+test_live_metal_freeze_layers_and_spext (__main__.TestGpuMetalMacOS.test_live_metal_freeze_layers_and_spext) ... skipped 'requires Apple Silicon macOS (Darwin arm64)'
+test_live_metal_nan_fails_closed (__main__.TestGpuMetalMacOS.test_live_metal_nan_fails_closed) ... skipped 'requires Apple Silicon macOS (Darwin arm64)'
+test_live_metal_training_convergence_and_benchmark (__main__.TestGpuMetalMacOS.test_live_metal_training_convergence_and_benchmark) ... skipped 'requires Apple Silicon macOS (Darwin arm64)'
+test_live_metal_transformer_parity_and_negative_controls (__main__.TestGpuMetalMacOS.test_live_metal_transformer_parity_and_negative_controls) ... skipped 'requires Apple Silicon macOS (Darwin arm64)'
+test_macho_binary_and_linkage (__main__.TestGpuMetalMacOS.test_macho_binary_and_linkage) ... skipped 'requires Darwin arm64'
+test_metal_exit_codes_and_io_casts (__main__.TestGpuMetalMacOS.test_metal_exit_codes_and_io_casts) ... ok
+test_metal_io_pool_limit_and_dir_read (__main__.TestGpuMetalMacOS.test_metal_io_pool_limit_and_dir_read) ... skipped 'requires Darwin arm64'
+test_mgemm_rejects_overflow_and_oversized_dims (__main__.TestGpuMetalMacOS.test_mgemm_rejects_overflow_and_oversized_dims) ... skipped 'requires Darwin arm64'
+test_pure_omega_source_audit (__main__.TestGpuMetalMacOS.test_pure_omega_source_audit) ... ok
+
+----------------------------------------------------------------------
+Ran 11 tests in 0.013s
+
+OK (skipped=8)
+--- 3f. Spiral-2048 Razor MoE, Full-APU Co-Execution Fabric & GB10 Scaling Suites ---
+test_crystallize_w4_f64_weval_samp_and_tamper (__main__.TestSpiralWeave.test_crystallize_w4_f64_weval_samp_and_tamper) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.137s
+
+OK
+test_apuweave_dir_discovery_and_multiproc_linux (__main__.TestApuWeave.test_apuweave_dir_discovery_and_multiproc_linux) ... ok
+test_apuweave_f64_and_three_col_list (__main__.TestApuWeave.test_apuweave_f64_and_three_col_list) ... ok
+test_apuweave_gb10_live_silicon (__main__.TestApuWeave.test_apuweave_gb10_live_silicon) ... skipped 'set OLLM_GB10_LIVE=1 on DGX Spark to run live GB10 GPU+Grace test'
+test_apuweave_list_w4_interchange_and_tamper (__main__.TestApuWeave.test_apuweave_list_w4_interchange_and_tamper) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.137s
+
+OK (skipped=1)
+test_cpu_dynamic_pool_d2048_and_loop8x4 (__main__.TestGpuSpiralGB10.test_cpu_dynamic_pool_d2048_and_loop8x4) ... ok
+test_live_gb10_silicon_parity_and_gfcache (__main__.TestGpuSpiralGB10.test_live_gb10_silicon_parity_and_gfcache) ... skipped 'set OLLM_GB10_LIVE=1 inside an exclusive spark-window to run live GB10 checks'
+test_nvfp4_cli_bounds (__main__.TestGpuSpiralGB10.test_nvfp4_cli_bounds) ... ok
+test_sm121_disasm_d2048_and_swizzle (__main__.TestGpuSpiralGB10.test_sm121_disasm_d2048_and_swizzle) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 85.232s
+
+OK (skipped=1)
+--- 3g. Serve continuous batching, shared-trunk KV prefix cache, 8K-32K context ---
+SERVE_SCALING_METRICS {"cold_ttft_ms": 36.71, "collisions_rejected": 2, "concurrent_6_503s": 0, "ctx_32k_cold_ms": 15459.7, "ctx_32k_ok_tokens": 32751, "ctx_32k_warm_ms": 9.2, "ctx_8k_ok_tokens": 8181, "default_out_tokens": 4096, "kv_hits": 5, "lru_evictions": 54, "max_in_flight_seen": 6, "saturation_503_ok": true, "shared_prefix_tokens": 523, "tokens_saved": 2648, "ttft_speedup": 3.66, "warm_ttft_ms": 10.04}
+SERVE_SCALING_PASS
+--- 4. OpenWALDO dataset verifier, pure-Omega ingestor, multi-arch backend & BOM ---
+test_bpe_tokenizer_end_to_end (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_bpe_tokenizer_end_to_end) ... ok
+test_cli_flags_and_spec_json (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_cli_flags_and_spec_json) ... ok
+test_deterministic_retrain_same_checkpoint (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_deterministic_retrain_same_checkpoint) ... ok
+test_end_to_end_all_architectures (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_end_to_end_all_architectures) ... ok
+test_hf_import_and_export_plumbing_with_stub_interchange (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_hf_import_and_export_plumbing_with_stub_interchange) ... ok
+test_interchange_exports_and_hf_import (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_interchange_exports_and_hf_import) ... ok
+test_looped_core_and_custom_flags (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_looped_core_and_custom_flags) ... ok
+test_refuses_bad_record_hash_and_missing_export (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_refuses_bad_record_hash_and_missing_export) ... ok
+test_refuses_corpus_smaller_than_context (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_refuses_corpus_smaller_than_context) ... ok
+test_refuses_engine_geometry_refusal (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_refuses_engine_geometry_refusal) ... ok
+test_refuses_failed_prior_state_is_cleared (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_refuses_failed_prior_state_is_cleared) ... ok
+test_refuses_missing_or_bad_binaries (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_refuses_missing_or_bad_binaries) ... ok
+test_refuses_native_format_export (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_refuses_native_format_export) ... ok
+test_refuses_tampered_dataset (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_refuses_tampered_dataset) ... ok
+test_u16_widened_byte_tokens_and_u32_vocab (test_openwaldo_bridge.OpenWaldoBackendEndToEndTests.test_u16_widened_byte_tokens_and_u32_vocab) ... ok
+test_cli_invalid_spec_rc1 (test_openwaldo_bridge.OpenWaldoBackendSpecTests.test_cli_invalid_spec_rc1) ... ERROR[spec]: D=30 must be divisible by H=4
+ERROR[spec]: cannot read spec JSON /tmp/tmpopl5eq_k/spec.json: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+ok
+test_every_preset_validates (test_openwaldo_bridge.OpenWaldoBackendSpecTests.test_every_preset_validates) ... ok
+test_refusals (test_openwaldo_bridge.OpenWaldoBackendSpecTests.test_refusals) ... ok
+test_valid_defaults (test_openwaldo_bridge.OpenWaldoBackendSpecTests.test_valid_defaults) ... ok
+test_end_to_end_pure_omega_ingestor_and_controls (test_openwaldo_bridge.OpenWaldoBridgeTests.test_end_to_end_pure_omega_ingestor_and_controls) ... M 280 19 99 567
+K 567 315
+K 86 76
+I 8912
+T 2 5641513
+ok
+test_refuse_path_traversal (test_openwaldo_bridge.OpenWaldoBridgeTests.test_refuse_path_traversal) ... ok
+test_refuse_tampered_record_text_hash (test_openwaldo_bridge.OpenWaldoBridgeTests.test_refuse_tampered_record_text_hash) ... ok
+test_refuse_tampered_shard_file (test_openwaldo_bridge.OpenWaldoBridgeTests.test_refuse_tampered_shard_file) ... ok
+test_refuse_unsupported_kind (test_openwaldo_bridge.OpenWaldoBridgeTests.test_refuse_unsupported_kind) ... ok
+test_verify_valid_export (test_openwaldo_bridge.OpenWaldoBridgeTests.test_verify_valid_export) ... ok
+
+----------------------------------------------------------------------
+Ran 25 tests in 8.668s
+
+OK
+OPENWALDO_BACKEND_OK arch=gemma tokenizer=byte vocab=256 steps=8 held_loss_before=5.548959 held_loss_after=5.543486 ck_sha256=ac989dcc0726031f25cb563971c03adde60e6f75b4db2e2690b01f81a7c16ebf bom=/tmp/tmpypqgp5km/cli-spec/openwaldo-helix-bom.json
+  [PASS] llama    held/primary loss 5.536659 -> 5.301639
+  [PASS] mistral  held/primary loss 5.536659 -> 5.301639
+  [PASS] qwen2    held/primary loss 5.536670 -> 5.300176
+  [PASS] qwen3    held/primary loss 5.533534 -> 5.323766
+  [PASS] gemma    held/primary loss 5.510890 -> 5.220385
+  [PASS] gpt      held/primary loss 5.534179 -> 5.196970
+  [PASS] gelu     held/primary loss 5.530392 -> 5.209793
+OPENWALDO_PREPARE_OK bom=/tmp/tmp5u49ksav/prepared/openwaldo-helix-bom.json W 10 9 1 567 86
+OPENWALDO_BIND_OK bom=/tmp/tmp5u49ksav/prepared/openwaldo-helix-bom.json magic=OLLMCK02 step=2 sha256=52011b73a12d379470d52b9bc2a4ac6750881a5f8352c1ca411b07c32b07453f
+--- 4b. Omega Studio, OpenWALDO catalog, installer CLI & SSE forge suite ---
+test_ai_driver_cli_and_ui_sanity (test_studio.StudioTestCase.test_ai_driver_cli_and_ui_sanity) ... ok
+test_bpe_hybrid_dna_strands_eval_and_exports (test_studio.StudioTestCase.test_bpe_hybrid_dna_strands_eval_and_exports) ... ok
+test_catalog_load_search_and_spdx_normalization (test_studio.StudioTestCase.test_catalog_load_search_and_spdx_normalization) ... ok
+test_cli_doctor_and_catalog_json (test_studio.StudioTestCase.test_cli_doctor_and_catalog_json) ... ok
+test_eight_pillar_runtime_api_and_cli (test_studio.StudioTestCase.test_eight_pillar_runtime_api_and_cli) ... ok
+test_estimate_chain_120m_multi_strand_dna_bf16 (test_studio.StudioTestCase.test_estimate_chain_120m_multi_strand_dna_bf16) ... ok
+test_estimate_chain_exact_params_and_validation (test_studio.StudioTestCase.test_estimate_chain_exact_params_and_validation) ... ok
+test_full_dna_merkle_chain_forge_and_spclip_sample (test_studio.StudioTestCase.test_full_dna_merkle_chain_forge_and_spclip_sample) ... ok
+test_full_universal_qwen3_chain_forge_and_sample (test_studio.StudioTestCase.test_full_universal_qwen3_chain_forge_and_sample) ... ok
+test_http_server_api_sse_and_sample (test_studio.StudioTestCase.test_http_server_api_sse_and_sample) ... ok
+test_materialize_waldo_without_cli_returns_guidance (test_studio.StudioTestCase.test_materialize_waldo_without_cli_returns_guidance) ... ok
+test_orca_ssh_remote_pairing_and_ui_routes (test_studio.StudioTestCase.test_orca_ssh_remote_pairing_and_ui_routes) ... ok
+test_prepare_local_dataset_preset_and_folder_verified_by_ollm_waldo (test_studio.StudioTestCase.test_prepare_local_dataset_preset_and_folder_verified_by_ollm_waldo) ... ok
+test_spforge_strand_and_omg_tokenizer (test_studio.StudioTestCase.test_spforge_strand_and_omg_tokenizer) ... ok
+test_spiral_weave_plan_presets_pillars_and_api (test_studio.StudioTestCase.test_spiral_weave_plan_presets_pillars_and_api) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 16.898s
+
+OK
+--- 4c. Sovereign Distillation Pipeline Network (OLLMDK01, verifiers, teachers, Studio API, CLI) ---
+test_harvest_formats_dedup_and_openwaldo_export (test_distill.TestDistillationSuite.test_harvest_formats_dedup_and_openwaldo_export) ... ok
+test_ollmdk01_emit_dcheck_dtrain_and_partial_mask (test_distill.TestDistillationSuite.test_ollmdk01_emit_dcheck_dtrain_and_partial_mask) ... ok
+test_ollmdk01_negative_controls (test_distill.TestDistillationSuite.test_ollmdk01_negative_controls) ... ok
+test_pipeline_all_three_modes (test_distill.TestDistillationSuite.test_pipeline_all_three_modes) ... ok
+test_studio_distill_http_sse_and_cli (test_distill.TestDistillationSuite.test_studio_distill_http_sse_and_cli) ... ok
+test_teachers_mock_openai_router_and_probe (test_distill.TestDistillationSuite.test_teachers_mock_openai_router_and_probe) ... ok
+test_verifiers_and_real_omc_compile (test_distill.TestDistillationSuite.test_verifiers_and_real_omc_compile) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 1.235s
+
+OK
+--- 4d. Sovereign Runtime Firewalls, Grammar Decoding, Sleep Cycle, Compile-Until-Green & HF Demo ---
+test_anti_dna_spclip_and_spguard_ltp0_receipts (test_runtime.TestSovereignRuntimePhase7.test_anti_dna_spclip_and_spguard_ltp0_receipts) ... ok
+test_compile_until_green_retry_and_crystallize (test_runtime.TestSovereignRuntimePhase7.test_compile_until_green_retry_and_crystallize) ... ok
+test_grammar_constrained_gsamp_all_modes (test_runtime.TestSovereignRuntimePhase7.test_grammar_constrained_gsamp_all_modes) ... ok
+test_open_trunk_hf_to_dna_demo_http_and_cli (test_runtime.TestSovereignRuntimePhase7.test_open_trunk_hf_to_dna_demo_http_and_cli) ... ok
+test_sleep_cycle_pass_and_rollback (test_runtime.TestSovereignRuntimePhase7.test_sleep_cycle_pass_and_rollback) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.537s
+
+OK
+--- 4e. Sovereign Commons, Trust Audit, Memory Migration, Porting Kit, Leases & USB Bundle ---
+test_01_pkg_publish_search_install_diff_and_revoke (test_commons.SovereignCommonsTests.test_01_pkg_publish_search_install_diff_and_revoke) ... ok
+test_02_cryptographic_trust_audit (test_commons.SovereignCommonsTests.test_02_cryptographic_trust_audit) ... ok
+test_03_personal_memory_encryption_and_trunk_migration (test_commons.SovereignCommonsTests.test_03_personal_memory_encryption_and_trunk_migration) ... ok
+test_04_hardware_porting_kit_parity (test_commons.SovereignCommonsTests.test_04_hardware_porting_kit_parity) ... ok
+test_05_trustless_swarm_quorum (test_commons.SovereignCommonsTests.test_05_trustless_swarm_quorum) ... ok
+test_06_capability_lease_and_snapshot_rollback (test_commons.SovereignCommonsTests.test_06_capability_lease_and_snapshot_rollback) ... ok
+test_07_usb_bundle_cli_and_studio_endpoints (test_commons.SovereignCommonsTests.test_07_usb_bundle_cli_and_studio_endpoints) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 2.612s
+
+OK
+omc 28fca13d44054e26f78c33d1753fd5c005d08e9144d95985c90bd75b60885072
+built /tmp/omega-helix-oracle.rLGU2c/gsl/bin-prod/ollm-gb10 (1921736 bytes, target=gb10, omc=/home/drakestapleton/canon/omega-mv/seed/out/omc)
+built /tmp/omega-helix-oracle.rLGU2c/gsl/bin-mutfz/ollm-gb10 (1921736 bytes, target=gb10, omc=/home/drakestapleton/canon/omega-mv/seed/out/omc)
+built /tmp/omega-helix-oracle.rLGU2c/gsl/bin-mutlg/ollm-gb10 (1921736 bytes, target=gb10, omc=/home/drakestapleton/canon/omega-mv/seed/out/omc)
+bin /tmp/omega-helix-oracle.rLGU2c/gsl/bin-mutfz/ollm-gb10 3bc2edec575f2f0476f557e66350a00fcfc5bd048e5f3c23a421b71de438fc5d
+bin /tmp/omega-helix-oracle.rLGU2c/gsl/bin-mutlg/ollm-gb10 094727a40aec8ae696495f6986185f63d1149212c011ef309e85baec5d08f23d
+bin /tmp/omega-helix-oracle.rLGU2c/gsl/bin-prod/ollm-gb10 ed52e399ed1f6b6a4845dba42fc69895c99c37118b6eee83333b422c0a5a6482
+TEST_GPU_SPEC_LOOP PASS (build)
+init_base rc=0 expect=0 PASS
+train_base rc=0 expect=0 PASS
+    T 20 4857583
+grow rc=0 expect=0 PASS
+growpro rc=0 expect=0 PASS
+    GP 2 4 152128
+init_loop rc=0 expect=0 PASS
+init_r2k rc=0 expect=0 PASS
+refuse_loop rc=17 expect=17 PASS
+refuse_big rc=2 expect=2 PASS
+refuse_gcmp rc=2 expect=2 PASS
+TEST_GPU_SPEC_LOOP PASS (host)
+--- 5. Combined experiment Python controls ---
+test_disagreement (test_selection.Controls.test_disagreement) ... ok
+test_regeneration_and_abstention (test_selection.Controls.test_regeneration_and_abstention) ... ok
+test_tie_order_and_shortest (test_selection.Controls.test_tie_order_and_shortest) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.001s
+
+OK
+--- 6. 165-task Omega coding benchmark integrity check ---
+CHECK PASS tasks 165 inputs 122 minsep 2
+--- 7. Contrast tool build & replay ---
+make: Entering directory '/home/drakestapleton/work/helix-v021/tools/contrast'
+bash replay.sh "/home/drakestapleton/work/helix-v021/build/verify/omega-contrast" "/home/drakestapleton/canon/omega-mv/seed/out/omc"
+contrast.om: OK
+All reference functions, archived generations and fresh chain selections reproduced.
+make: Leaving directory '/home/drakestapleton/work/helix-v021/tools/contrast'
+--- 8. Controller tool build & replay ---
+controller.ck: OK
+second.ck: OK
+second-augmented.ck: OK
+PASS: controller interfaces, 160 references on three checks each, and all 560 archived returns and abstentions.
+--- 9. SM121 Blackwell SASS disassembly & GPR ceiling check (all 78 kernel slots) ---
+DUMP 6cde8f1bc895e5e52d3df1f25c4f4f4a556c8bc1955c810ff355ab8a18120a83 source_sha256 7a520817512d846cf79b358eef340dca61ff59bd85258e6afe9742298136d612 code_sha256 09728d1fa290ca94ed4f263cbe41247ee55704ec84433a80620915e40dbd4cbd
+GPU_DISASM_OK slots=86 bad=0
+--- 10. Lean 4 proof check (tools/combined/experiment/Budget.lean) ---
+'starting_with_four' depends on axioms: [propext, Quot.sound]
+OMEGA_HELIX_VERIFY_ALL_PASS
+=== test_ollmbf01_dna.py ===
+test_01_static_elf_cross_compile_and_zero_libc_cuda_linkage (tests.test_ollmbf01_dna.TestOllmBf01Dna.test_01_static_elf_cross_compile_and_zero_libc_cuda_linkage) ... ok
+test_02_multishard_bf16_f32_parity_and_end_to_end_dna (tests.test_ollmbf01_dna.TestOllmBf01Dna.test_02_multishard_bf16_f32_parity_and_end_to_end_dna) ... ok
+test_03_bounded_rss_on_64mib_plus_sharded_import (tests.test_ollmbf01_dna.TestOllmBf01Dna.test_03_bounded_rss_on_64mib_plus_sharded_import) ... ok
+test_04_negative_controls_truncated_safetensors (tests.test_ollmbf01_dna.TestOllmBf01Dna.test_04_negative_controls_truncated_safetensors) ... ok
+test_05_negative_controls_header_dtype_shape_mismatch (tests.test_ollmbf01_dna.TestOllmBf01Dna.test_05_negative_controls_header_dtype_shape_mismatch) ... ok
+test_06_negative_controls_corrupted_ollmbf01_across_all_readers (tests.test_ollmbf01_dna.TestOllmBf01Dna.test_06_negative_controls_corrupted_ollmbf01_across_all_readers) ... ok
+test_07_studio_cli_json_and_http_import_hf_bf16 (tests.test_ollmbf01_dna.TestOllmBf01Dna.test_07_studio_cli_json_and_http_import_hf_bf16) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.940s
+
+OK

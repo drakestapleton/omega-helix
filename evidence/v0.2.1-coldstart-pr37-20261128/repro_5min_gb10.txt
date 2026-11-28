@@ -1,0 +1,28 @@
+=== Building TARGET=gb10 ===
+=== Building TARGET=interchange ===
+=== Building TARGET=dna ===
+=== Running SM121 SASS disassembly (tests/gpu-disasm.sh --all) ===
+=== Running independent Python f64 oracle parity (tests/oracle.py) ===
+=== Running negative controls ===
+=== Running live DGX Spark GB10 GPU checks ===
+=== Omega Helix 5-Minute External Reproducer Receipt ===
+Date (UTC): 2026-11-28T15:04:45Z
+Machine / OS: Ubuntu 24.04.5 LTS (aarch64 / 7.0.0-1019-nvidia)
+Git Commit: fab38345dc4b
+Compiler (omc): ~/canon/omega-mv/seed/out/omc (sha256=28fca13d44054e26f78c33d1753fd5c005d08e9144d95985c90bd75b60885072)
+Binary SHA-256s:
+  ollm-gb10: sha256=ed52e399ed1f6b6a4845dba42fc69895c99c37118b6eee83333b422c0a5a6482 bytes=1921736
+  ollm-interchange: sha256=2e0f0136dd9fa5b6cf74b5a75b0b37a3ac3a79e1e7f2cad28d4ea1d0b9b924d7 bytes=184088
+  ollm-dna: sha256=fa9f44f1c594da30ad32d3ae4470e5e2a4effeee5ee80bdde04cfc259169290b bytes=121372
+Linkage Proof:
+  ollm-gb10: static ELF (aarch64), ldd=' not a dynamic executable', zero libc/CUDA
+  ollm-interchange: static ELF (aarch64), ldd=' not a dynamic executable', zero libc/CUDA
+  ollm-dna: static ELF (aarch64), ldd=' not a dynamic executable', zero libc/CUDA
+Accelerator Checks: GB10_STATUS=PASS (GNV4GEMM 256 512 256 1000000 0 999998 2045 999998 2045 1000000 0 999126 87308 0 118 PASS | GNV4CMP 1131776 976988 1245 0 5506157 5499303 936184 PASS | OLLMCK05_geval_parity=PASS(E 0 2 5542421 7996023))
+SM121 Disassembly: PASS (GPU_DISASM_OK slots=86 bad=0)
+Oracle Parity: PASS (xprep, xinit, xgrad, xstep, xeval PASS (f64 rtol<=1e-9); interchange upgrade PASS)
+Negative Controls: PASS (OLLMSP01_tamper=rc:61(PASS); OLLM_ORACLE_MUTANT=tiemaxa:rc:1(PASS); OLLMBF01_tamper=rc:61(PASS); OLLMCK05_tamper=rc:14(PASS))
+Elapsed Seconds: 23
+VERDICT=REPRO_5MIN_PASS
+Receipt File: /tmp/repro-5min-gb10/repro-5min-receipt.txt
+Receipt SHA-256: 45721fd29d67b7c83d3df182d31ff0534f61992f8353d52dfb48d8b644adfd17
