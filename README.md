@@ -30,6 +30,12 @@ git clone https://github.com/drakestapleton/omega-helix.git && cd omega-helix
 sh scripts/verify-30s.sh
 ```
 
+For the full **5-minute external reproducer** (adds `ollm-interchange`, optional `ollm-dna` when present, Apple Silicon Metal `mdev`/`mgemm`/`gcmp`/`gtrain` when `ng` is present or honest `METAL_STATUS=SKIPPED_NO_NG`, DGX Spark GB10 `gpu-disasm` + `gnv4gemm`/`gnv4cmp`, and a pasteable Issue #5 receipt with `Receipt SHA-256`):
+
+```sh
+sh scripts/repro-5min.sh              # auto-detects Metal / GB10 GPU; flags: --cpu-only, --live-gpu, --json, --out <dir>
+```
+
 ---
 
 ## 45-Second Uncut Live Proof (Zero CUDA / Static ELF / `/proc/$PID/maps` Empty / Negative Controls)
@@ -75,7 +81,7 @@ Matched model (`V=4096, T=256, D=384, H=12, F=1536, L=8, B=64`, `15,833,472` par
 
 ## Independent Reproducers Log
 
-> **Want to add your hardware?** Run `sh scripts/verify.sh 2>&1 | tee verify.log` (or `sh scripts/verify-30s.sh`) and post your log SHA-256 in the pinned issue: [**#5 — Run `scripts/verify.sh` on your machine and post your receipt**](https://github.com/drakestapleton/omega-helix/issues/5).
+> **Want to add your hardware?** Run `sh scripts/repro-5min.sh` (writes `./build/repro-5min/repro-5min-receipt.txt` + `Receipt SHA-256`) or `sh scripts/verify.sh 2>&1 | tee verify.log` / `sh scripts/verify-30s.sh` and post your receipt in the pinned issue: [**#5 — Run `scripts/verify.sh` on your machine and post your receipt**](https://github.com/drakestapleton/omega-helix/issues/5).
 
 | Date (UTC) | GitHub Handle / CI | Machine / OS | Command | Receipt / Binary SHA-256 |
 |---|---|---|---|---|
