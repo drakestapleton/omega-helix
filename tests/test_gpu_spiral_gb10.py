@@ -167,7 +167,7 @@ class TestGpuSpiralGB10(unittest.TestCase):
                 text=True,
                 check=True,
             )
-            self.assertIn("GPU_DISASM_OK slots=78 bad=0", r.stdout)
+            self.assertIn("GPU_DISASM_OK slots=86 bad=0", r.stdout)
 
         # Verify D=2048 RMSF/RMSB/RMSF_BF16/RMSB_BF16/CE_BF16 stay inside 72 GPRs,
         # slot 31 uses LDG/STG.E.64, slot 84 emits OMMA.SF.16864 + IMAD.WIDE.U32 R14, R123, 0x20, R10,

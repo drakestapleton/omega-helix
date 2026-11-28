@@ -150,6 +150,10 @@ echo "--- 3c2. OLLMBF01 BF16 4B-8B streaming import, ollm-dna & Studio integrati
 OLLM_INTERCHANGE_BIN="$OUT/ollm-interchange" OLLM_DNA_BIN="$OUT/ollm-dna" \
   python3 -W error::ResourceWarning "$here/tests/test_ollmbf01_dna.py" -v
 
+echo "--- 3c3. OLLMCK05 fast binary checkpoint & mmap cold-start suite ---"
+OLLM_BIN="$BIN" OLLM_GB10_LIVE=0 OUT="$OUT" \
+  python3 -W error::ResourceWarning "$here/tests/test_fast_ckpt.py" -v
+
 echo "--- 3d. Adaptive looped core (per-token exit & inter-pass messages) suite ---"
 OLLM_BIN="$BIN" python3 -W error::ResourceWarning "$here/tests/test_adaptive_loop.py"
 
