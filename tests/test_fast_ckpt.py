@@ -429,7 +429,7 @@ class TestFastCkpt(unittest.TestCase):
         # 2. Bit-exact T 1..5 + cached-W_nv4 Step 6 parity on deterministic D=256 R=128 gtrain4
         det_base = self.tmp / "det256_base.ck"
         subprocess.run(
-            [str(gb10), "init", str(det_base), "256", "64", "256", "4", "512", "2", "2", "1", "60000", "3000", "16"],
+            [str(gb10), "init", str(det_base), "256", "64", "256", "4", "512", "2", "2", "1", "60000", "3000", "1"],
             check=True,
             capture_output=True,
         )
