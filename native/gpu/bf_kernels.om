@@ -28,7 +28,6 @@ gks2r 3 38 true
 gkq 4278482860 27392 134220288 or gkcw 4 2 7 get gkpend 0 8192
 put gkpend 0 4
 gkimadi 11 2 256 0
-gkiadd 11 11 0
 gkmovi 31 4294967295
 gkmovi 26 1
 end
