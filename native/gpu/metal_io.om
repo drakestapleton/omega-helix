@@ -34,6 +34,7 @@ global mio_inited ulong 1
 global mio_cfd int 1
 global mio_cfp ulong 1
 global mio_wfd int 2
+global ommap_sz_g ulong 1
 
 note Cold store for macos-metal: 3 x 8,388,608 f64s = 192 MiB total (up to P = 8,388,608).
 const OCSC ulong 8388608
@@ -637,4 +638,46 @@ exit 2
 end
 fn cmdarboris_cli to void
 exit 2
+end
+
+fn ocwput_opw pos ulong n ulong to void
+fd = get mio_cfd 0
+p = ulong 0
+while lt p n bound 999999
+mio_p64 0 ulong fd
+mio_p64 8 ulong libptr opw p sub n p
+mio_p64 16 sub n p
+mio_p64 24 add pos p
+r = libcall get mio_sym 9 mio_rg 0 128
+w = mio_g64 0
+if or eq w 0 ge w 9223372036854775808
+exit 70
+end
+p = add p w
+end
+end
+
+fn ommap_open ai ulong to long
+put ommap_sz_g 0 ofsz ai
+ret neg long 1
+end
+
+fn ommap_sz to ulong
+ret get ommap_sz_g 0
+end
+
+fn ommap_read h long off ulong n ulong to void
+exit 70
+end
+
+fn ommap_drop h long to void
+ret
+end
+
+fn ocswrite off ulong n ulong to bool
+ret false
+end
+
+fn ocsread off ulong n ulong to bool
+ret false
 end
