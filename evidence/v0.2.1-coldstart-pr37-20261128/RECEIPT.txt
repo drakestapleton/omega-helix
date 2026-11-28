@@ -4,9 +4,9 @@ Date (UTC): 2026-11-28T15:10:00Z
 Baseline Tag Check: git diff v0.2.0 -- evidence/v0.2.0-gb10-h2h/ -> EMPTY (unmodified)
 
 1. Provenance & Window Receipts (DGX Spark GB10, Linux 7.0.0-1019-nvidia aarch64)
-- Benchmark Gate Commit: ecc6212 (window_id=20261128T144130Z-6b3be3, spark_window_receipt_benchmarks.json, quiet machine, nvrm_errors_delta=0)
-  Note: ollm-gb10 binary & SM121 code_sha256 unchanged from ecc6212 through fab3834; bd1c012 + fab3834 fixed TARGET=dna-gb10 (native/gpu/{bf_dna,bf_kernels}.om) only.
-- Final Code Commit: fab3834 (window_id=20261128T150429Z-1f10e1, spark_window_receipt.json, quiet machine, exit=0, nvrm_errors_delta=0, seconds=35.134)
+- Benchmark Gate Commit: ecc6212 (window_id=20261128T144130Z-6b3be3, spark_window_receipt_benchmarks.json, quiet machine, nvrm_errors_delta=0, XID_DELTA=0, seconds=355.167).
+  Note: spark_window_receipt_benchmarks.json records "exit": 1 solely because stage-5 test harness hit a pre-bd1c012/fab3834 bug in ollm-dna-gb10 AFTER Stages 1-4 (live_unittests, coldstart_med5, throughput_nonregression, pytorch_h2h) all completed and passed cleanly inside that quiet window. The ollm-gb10 binary & SM121 code_sha256 did not change from ecc6212 through fab3834; bd1c012 and fab3834 fixed TARGET=dna-gb10 (native/gpu/{bf_dna,bf_kernels}.om) only.
+- Final Code Commit: fab3834 (window_id=20261128T150429Z-1f10e1, spark_window_receipt.json, quiet machine, exit=0, nvrm_errors_delta=0, XID_DELTA=0, seconds=35.134).
 - SM121 SASS Disassembly (gpu_disasm.txt): DUMP 6cde8f1bc895e5e52d3df1f25c4f4f4a556c8bc1955c810ff355ab8a18120a83
   source_sha256=7a520817512d846cf79b358eef340dca61ff59bd85258e6afe9742298136d612
   code_sha256=09728d1fa290ca94ed4f263cbe41247ee55704ec84433a80620915e40dbd4cbd
@@ -15,7 +15,7 @@ Baseline Tag Check: git diff v0.2.0 -- evidence/v0.2.0-gb10-h2h/ -> EMPTY (unmod
 
 2. Lane 1 — Cold-Start Optimization (< 2.0 s Target Achieved) & Parity
 - Baseline v0.2.0 (380 MB f64 OLLMCK02 I/O): 7,938.7 ms (evidence/v0.2.0-gb10-h2h/omega_h2h_v020.json)
-- v0.2.1 OLLMCK05 mmap + native BF16/F32/NVFP4 on 15.83M (P=15,833,472) GB10 med5 (coldstart_med5_gb10.json):
+- v0.2.1 OLLMCK05 mmap + native BF16/F32/NVFP4 on 15.83M (P=15,833,472, L=8, B=64, T=256, tokens_per_step=16384) GB10 med5 (coldstart_med5_gb10.json, FULL_WORKLOAD_GPU_PASS, XID_DELTA=0):
   * ck05_nvfp4_gtrain4_step1_cached_wnv4 (237,594,112 B): 1,309.86 ms (6.06x faster than v0.2.0)
   * ck05_f32_gtrainb_step1 (63,334,144 B):               1,464.65 ms (5.42x faster than v0.2.0)
   * ck05_bf16_gtrainb_step1 (95,001,088 B):              1,538.22 ms (5.16x faster than v0.2.0)
@@ -26,26 +26,27 @@ Baseline Tag Check: git diff v0.2.0 -- evidence/v0.2.0-gb10-h2h/ -> EMPTY (unmod
 - Matched PyTorch 2.14.0+cu130 Baselines on GB10 (pytorch_h2h_v021.json, footprint=5,325,112,578 B):
   * eager:         cold_start_to_step1_ms = 3,318.7 ms, steady = 122.16 ms/step (134,116.7 tok/s), peak_cuda_alloc = 2,236,676,096 B
   * torch.compile: cold_start_to_step1_ms = 4,889.4 ms, steady = 62.34 ms/step  (262,829.1 tok/s), peak_cuda_alloc = 1,771,864,064 B
-- Parity & Live Tests (coldstart_med5_gb10.json + live_unittests.txt):
+- Parity & Live Tests (coldstart_med5_gb10.json + live_unittests.txt, FULL_WORKLOAD_GPU_PASS, XID_DELTA=0):
   * 15.83M gtrainb (OLLMCK05 bf16 & f32 vs OLLMCK02): 100% bit-exact T 1..5 (8389200..8148016) + ckf64 Step 6 (8083385).
   * D=256 R=128 gtrain4 (OLLMCK05 nvfp4 vs OLLMCK02): 100% bit-exact T 1..5 (5501484..5218244) + cached-W_nv4 & ckf64 Step 6 (4966007).
   * 15.83M gtrain4 (R=16384): Step 1 diff = 16 (1.6e-5 nats: 8389677 vs 8389693); 5-step max diff = 2879 (2.88e-3 nats), matching OLLMCK02's pre-existing R=16384 self-spread of 2720 (2.72e-3 nats between identical OLLMCK02 runs).
-  * OLLM_GB10_LIVE=1 test_fast_ckpt.py + test_gpu_nvfp4_train.py: Ran 9 tests in 79.515s — OK.
-- Throughput Non-Regression (throughput_nonregression_gb10.txt):
-  * loop2x4_b64_ck05 (gtrain4): 289,579.9 tok/s (56.58 ms/step) [vs loop2x4_b64_ck02: 289,188.6 tok/s, 56.66 ms/step; no regression vs 262.9k baseline]
-  * v2_b64_ck05_gtrain4:       264,854.9 tok/s (61.86 ms/step)
-  * v2_b64_ck05_gtrainb:       264,572.5 tok/s (61.93 ms/step)
-  * nvfp4 4096 4096 8192 20:   12,029,304 ns, 457.01 TFLOPS (91.40% of 500 TF, 8192==8192 INREG_OMMA_MICROBENCH PASS)
-  * gnv4gemm 4096 4096 8192:   PASS
+  * OLLM_GB10_LIVE=1 test_fast_ckpt.py + test_gpu_nvfp4_train.py: Ran 9 tests in 79.515s — OK (FULL_WORKLOAD_GPU_PASS, XID_DELTA=0).
+- Throughput Non-Regression (throughput_nonregression_gb10.txt, FULL_WORKLOAD_GPU_PASS, XID_DELTA=0, workload_kind=transformer-training payload_bytes=95001088):
+  * loop2x4_b64_ck05 (gtrain4, L=2 x NP=4, B=64, T=256, tokens_per_step=16384): 289,579.9 tok/s (56.58 ms/step) [vs loop2x4_b64_ck02: 289,188.6 tok/s, 56.66 ms/step; no regression vs 262.9k baseline]
+  * v2_b64_ck05_gtrain4 (L=8, B=64, T=256):                                      264,854.9 tok/s (61.86 ms/step)
+  * v2_b64_ck05_gtrainb (L=8, B=64, T=256):                                      264,572.5 tok/s (61.93 ms/step)
+  * nvfp4 GEMM (gemm_shape=4096x4096x8192, iters=20):                            12,029,304 ns, 457.01 TFLOPS (91.40% of 500 TF, 8192==8192 INREG_OMMA_MICROBENCH FULL_WORKLOAD_GPU_PASS)
+  * gnv4gemm (gemm_shape=4096x4096x8192):                                        FULL_WORKLOAD_GPU_PASS (XID_DELTA=0)
 
 3. Lane 2 — PR #37 (OLLMBF01 4B-8B HF BF16 Import + ollm-dna / ollm-dna-gb10)
 - Unit & Security Suite (tests/test_ollmbf01_dna.py, verify_spark.txt): 7/7 OK (static zero-libc/CUDA ELFs, multi-shard BF16+F32 parity, >=64 MiB sharded import peak RSS < 64 MiB, negative controls for truncated safetensors, header/dtype/shape mismatch, and 1-bit corrupted OLLMBF01 across all readers rc=60/61, Studio CLI/HTTP).
-- Live GB10 ollm-dna-gb10 vs CPU ollm-dna End-to-End Parity (pr37_ollmbf01_gb10.txt, V=256 D=512 H=4 H_kv=4 HD=128 F=1024 L=2 P=5,508,096 trunk_hash=0x0e3e445027b001a9 wfnv=0xe824958cd656cf46):
+- Live GB10 ollm-dna-gb10 vs CPU ollm-dna End-to-End Parity (pr37_ollmbf01_gb10.txt, V=256 D=512 H=4 H_kv=4 HD=128 F=1024 L=2 P=5,508,096 trunk_hash=0x0e3e445027b001a9 wfnv=0xe824958cd656cf46, FULL_WORKLOAD_GPU_PASS, XID_DELTA=0):
   * base-eval:    CPU loss=7.094118 (1347.87 ms) vs GB10 loss=7.097929 (1.25 ms, abs_diff=0.003811)
   * cryst (--w4): CPU BEST=6.769455 (1780.83 ms) vs GB10 BEST=6.773735 (32.92 ms)
   * spguard-eval: CPU dom_sp_loss=6.816678 (dom_delta=-0.277440, gen_act=0, 2727.46 ms) vs GB10 dom_sp_loss=6.820420 (dom_delta=-0.277508, gen_act=0, 3.82 ms; dom_sp_abs_diff=0.003742, gen_sp_abs_diff=0.005538).
 
 4. Lane 3 — 5-Minute External Reproducer & Full Spark Suite
-- Apple Silicon Metal (repro-5min-macos-receipt.txt): macOS 26.6.2 (arm64 / Apple M2), commit fab38345dc4b, 3 s, METAL_STATUS=PASS, Oracle Parity=PASS, Negative Controls=PASS, VERDICT=REPRO_5MIN_PASS, sha256=bd1b79038a8aa34a0b9c272abb19b34473aa92fcdc3e111fef1f76ed1659d436.
-- DGX Spark GB10 (repro-5min-gb10-receipt.txt): Ubuntu 24.04.5 LTS (7.0.0-1019-nvidia aarch64), commit fab38345dc4b, 23 s, GB10_STATUS=PASS, GPU_DISASM_OK slots=86 bad=0, Oracle Parity=PASS, Negative Controls=PASS, VERDICT=REPRO_5MIN_PASS, sha256=45721fd29d67b7c83d3df182d31ff0534f61992f8353d52dfb48d8b644adfd17.
-- Full Spark Verification (verify_spark.txt): verify-om.sh -> OMEGA_HELIX_PURE_OM_PASS; verify.sh -> OMEGA_HELIX_VERIFY_ALL_PASS (incl. Budget.lean: axioms [propext, Quot.sound]).
+- Apple Silicon Metal (repro-5min-macos-receipt.txt): macOS 26.6.2 (arm64 / Apple M2), commit fab38345dc4b, 3 s, METAL_STATUS=FULL_WORKLOAD_GPU_PASS (MGEMM 256x256x256 + GC + MT 4-layer step), Oracle Parity=PASS, Negative Controls=PASS, VERDICT=REPRO_5MIN_PASS, sha256=bd1b79038a8aa34a0b9c272abb19b34473aa92fcdc3e111fef1f76ed1659d436.
+- DGX Spark GB10 (repro-5min-gb10-receipt.txt): Ubuntu 24.04.5 LTS (7.0.0-1019-nvidia aarch64), commit fab38345dc4b, 23 s, GB10_STATUS=FULL_WORKLOAD_GPU_PASS (XID_DELTA=0, GNV4GEMM 256x512x256 + GNV4CMP + OLLMCK05_geval_parity), GPU_DISASM_OK slots=86 bad=0, Oracle Parity=PASS, Negative Controls=PASS, VERDICT=REPRO_5MIN_PASS, sha256=45721fd29d67b7c83d3df182d31ff0534f61992f8353d52dfb48d8b644adfd17.
+- Full Spark Verification (verify_spark.txt): verify-om.sh -> OMEGA_HELIX_PURE_OM_PASS; verify.sh -> OMEGA_HELIX_VERIFY_ALL_PASS.
+  Lean 4 Proof Check (tools/combined/experiment/Budget.lean, lean4): theorem starting_with_four verified on Spark with sorry_count: 0, native_decide_count: 0, axioms: [propext, Quot.sound], negative controls passed in tests/test_selection.py (3/3 PASS disagreement/regeneration/abstention controls; no separate broken .lean negative-control file yet).
