@@ -409,44 +409,69 @@ class TestFastCkpt(unittest.TestCase):
             capture_output=True,
         )
 
-        # 1. Bit-exact T 1..5 parity for gtrainb (BF16+AdamW) and gtrain4 (NVFP4)
-        for cmd, mode in (("gtrainb", "bf16"), ("gtrain4", "nvfp4")):
-            with self.subTest(cmd=cmd, mode=mode):
-                ref_ck = self.tmp / f"ref_{cmd}.ck"
-                fast_ck = self.tmp / f"fast_{cmd}.ck5"
-                shutil.copy2(ck2_base, ref_ck)
-                subprocess.run([str(gb10), "ckfast", str(ck2_base), str(fast_ck), mode], check=True, capture_output=True)
+        # 1. Bit-exact T 1..5 + ckf64 Step 6 parity for 15.83M gtrainb (BF16+AdamW)
+        ref_b = self.tmp / "ref_gtrainb.ck"
+        fast_b = self.tmp / "fast_gtrainb.ck5"
+        shutil.copy2(ck2_base, ref_b)
+        subprocess.run([str(gb10), "ckfast", str(ck2_base), str(fast_b), "bf16"], check=True, capture_output=True)
+        r_ref_b = subprocess.run([str(gb10), "gtrainb", str(ref_b), str(tok_path), "5", "1"], check=True, capture_output=True, text=True)
+        r_fast_b = subprocess.run([str(gb10), "gtrainb", str(fast_b), str(tok_path), "5", "1"], check=True, capture_output=True, text=True)
+        self.assertEqual(_parse_t_lines(r_fast_b.stdout), _parse_t_lines(r_ref_b.stdout))
+        self.assertEqual(len(_parse_t_lines(r_fast_b.stdout)), 5)
+        self.assertEqual(fast_b.read_bytes()[:8], OCK5_MAGIC)
 
-                r_ref = subprocess.run(
-                    [str(gb10), cmd, str(ref_ck), str(tok_path), "5", "1"],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-                r_fast = subprocess.run(
-                    [str(gb10), cmd, str(fast_ck), str(tok_path), "5", "1"],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-                self.assertEqual(_parse_t_lines(r_fast.stdout), _parse_t_lines(r_ref.stdout))
-                self.assertEqual(len(_parse_t_lines(r_fast.stdout)), 5)
-                self.assertEqual(fast_ck.read_bytes()[:8], OCK5_MAGIC)
-                if cmd == "gtrain4":
-                    hdr = _parse_ck5_header(fast_ck.read_bytes())
-                    self.assertTrue(hdr["flags"] & FLAG_NVFP4_WCACHE)
-                    # Second gtrain4 invocation loads pre-quantized W_nv4 directly
-                    r_step6 = subprocess.run(
-                        [str(gb10), cmd, str(fast_ck), str(tok_path), "6", "1"],
-                        check=True,
-                        capture_output=True,
-                        text=True,
-                    )
-                    self.assertEqual(len(_parse_t_lines(r_step6.stdout)), 1)
+        exp_b = self.tmp / "exp_gtrainb.ck"
+        subprocess.run([str(gb10), "ckf64", str(fast_b), str(exp_b)], check=True, capture_output=True)
+        r_ref_b6 = subprocess.run([str(gb10), "gtrainb", str(ref_b), str(tok_path), "6", "1"], check=True, capture_output=True, text=True)
+        r_exp_b6 = subprocess.run([str(gb10), "gtrainb", str(exp_b), str(tok_path), "6", "1"], check=True, capture_output=True, text=True)
+        self.assertEqual(_parse_t_lines(r_exp_b6.stdout), _parse_t_lines(r_ref_b6.stdout))
 
-        # 2. geval parity on .ck5 vs .ck
-        r_ev2 = subprocess.run([str(gb10), "geval", str(ck2_base), str(tok_path), "8"], capture_output=True, text=True)
-        # Note: V > 256 geval requires merges arg (or V=256 works directly without merges); verify init/eval on V=256
+        # 2. Bit-exact T 1..5 + cached-W_nv4 Step 6 parity on deterministic D=256 R=128 gtrain4
+        det_base = self.tmp / "det256_base.ck"
+        subprocess.run(
+            [str(gb10), "init", str(det_base), "256", "64", "256", "4", "512", "2", "2", "1", "60000", "3000", "16"],
+            check=True,
+            capture_output=True,
+        )
+        ref_4det = self.tmp / "ref_det4.ck"
+        fast_4det = self.tmp / "fast_det4.ck5"
+        shutil.copy2(det_base, ref_4det)
+        subprocess.run([str(gb10), "ckfast", str(det_base), str(fast_4det), "nvfp4"], check=True, capture_output=True)
+        r_ref_4det = subprocess.run([str(gb10), "gtrain4", str(ref_4det), str(self.corp), "5", "1"], check=True, capture_output=True, text=True)
+        r_fast_4det = subprocess.run([str(gb10), "gtrain4", str(fast_4det), str(self.corp), "5", "1"], check=True, capture_output=True, text=True)
+        self.assertEqual(_parse_t_lines(r_fast_4det.stdout), _parse_t_lines(r_ref_4det.stdout))
+        self.assertEqual(len(_parse_t_lines(r_fast_4det.stdout)), 5)
+        hdr_det = _parse_ck5_header(fast_4det.read_bytes())
+        self.assertTrue(hdr_det["flags"] & FLAG_NVFP4_WCACHE)
+
+        exp_4det = self.tmp / "exp_det4.ck"
+        subprocess.run([str(gb10), "ckf64", str(fast_4det), str(exp_4det)], check=True, capture_output=True)
+        r_ref_4det6 = subprocess.run([str(gb10), "gtrain4", str(ref_4det), str(self.corp), "6", "1"], check=True, capture_output=True, text=True)
+        r_fast_4det6 = subprocess.run([str(gb10), "gtrain4", str(fast_4det), str(self.corp), "6", "1"], check=True, capture_output=True, text=True)
+        r_exp_4det6 = subprocess.run([str(gb10), "gtrain4", str(exp_4det), str(self.corp), "6", "1"], check=True, capture_output=True, text=True)
+        self.assertEqual(_parse_t_lines(r_fast_4det6.stdout), _parse_t_lines(r_ref_4det6.stdout))
+        self.assertEqual(_parse_t_lines(r_exp_4det6.stdout), _parse_t_lines(r_ref_4det6.stdout))
+
+        # 3. 15.83M gtrain4 (R=16384 has ~5e-5 nats pre-existing OLLMCK02 self-variance):
+        # verify FLAG_NVFP4_WCACHE, cached W_nv4 Step 6 reload, and distribution parity <= 5e-4 nats.
+        ref_4 = self.tmp / "ref_gtrain4.ck"
+        fast_4 = self.tmp / "fast_gtrain4.ck5"
+        shutil.copy2(ck2_base, ref_4)
+        subprocess.run([str(gb10), "ckfast", str(ck2_base), str(fast_4), "nvfp4"], check=True, capture_output=True)
+        r_ref_4 = subprocess.run([str(gb10), "gtrain4", str(ref_4), str(tok_path), "5", "1"], check=True, capture_output=True, text=True)
+        r_fast_4 = subprocess.run([str(gb10), "gtrain4", str(fast_4), str(tok_path), "5", "1"], check=True, capture_output=True, text=True)
+        t_ref_4 = _parse_t_lines(r_ref_4.stdout)
+        t_fast_4 = _parse_t_lines(r_fast_4.stdout)
+        self.assertEqual(len(t_fast_4), 5)
+        for (s_r, l_r), (s_f, l_f) in zip(t_ref_4, t_fast_4):
+            self.assertEqual(s_r, s_f)
+            self.assertLessEqual(abs(l_f - l_r), 500, f"step {s_r}: ref={l_r} fast={l_f}")
+        hdr = _parse_ck5_header(fast_4.read_bytes())
+        self.assertTrue(hdr["flags"] & FLAG_NVFP4_WCACHE)
+        r_step6 = subprocess.run([str(gb10), "gtrain4", str(fast_4), str(tok_path), "6", "1"], check=True, capture_output=True, text=True)
+        self.assertEqual(len(_parse_t_lines(r_step6.stdout)), 1)
+
+        # 4. geval parity on .ck5 vs .ck (V=256)
         ck_v256 = self.tmp / "v256.ck"
         ck5_v256 = self.tmp / "v256.ck5"
         subprocess.run(
