@@ -78,6 +78,18 @@ if eq w 1953066601
 cmdinit
 ret 0
 end
+if eq w 8391157623388991081
+cmdinitfast
+ret 0
+end
+if eq w 128038904163171
+cmdckfast
+ret 0
+end
+if eq w 224250981219
+cmdckf64
+ret 0
+end
 if eq w 1684107879
 cmdgrad
 ret 0
@@ -284,7 +296,7 @@ note the file is OLLMCK01 (G = 1); with G it is OLLMCK02 (CONTRACT-V1 section 6)
 note LC layers from layer LP a core that runs NP times with the same weights (model.om, docs/LOOP.md):
 note the file is then OLLMCK03. NP 1 is no loop and gives the OLLMCK02 file; NP 0 is exit 2; a core
 note that is empty or does not fit in the L layers is exit 12.
-fn cmdinit to void
+fn oinit_setup to void
 na = oargc
 if and and ne na 13 ne na 14 ne na 17
 exit 2
@@ -320,10 +332,136 @@ put og 42 tt
 put og 43 bitcast ulong div f64 oargu 12 1000000.0
 put og 41 0
 oinit
+end
+
+fn cmdinit to void
+oinit_setup
 ocksave 2
 oputc 73
 oputc 32
 oputu get og 8
+oputc 10
+oflush
+end
+
+fn cmdinitfast to void
+oinit_setup
+fl = or or OCK5F_F32 OCK5F_BF16 OCK5F_ZMV
+orig = get og 46
+if gt get og 59 1
+fl = or fl OCK5F_LOOP
+orig = 3
+end
+ock5_save_cpu 2 fl orig
+oputc 73
+oputc 32
+oputu get og 8
+oputc 10
+oflush
+end
+
+fn ock5_mv_is_zero to bool
+n = mul 2 get og 8
+i0 = ulong 0
+while lt i0 n bound 999999
+cnt = sub n i0
+if gt cnt OCK5C
+cnt = OCK5C
+end
+for j ulong cnt
+if ne bitcast uint f32 omvg add i0 j 0
+ret false
+end
+end
+i0 = add i0 cnt
+end
+ret true
+end
+
+fn cmdckfast_mode ai ulong to ulong
+r = oargr ai
+if or le r 0 gt r 8
+exit 2
+end
+v = ulong 0
+for k ulong ulong r
+v = or v shl ulong get oarg k mul k 8
+end
+if eq v 3289958
+ret 0
+end
+if eq v 909207138
+ret 1
+end
+if eq v 225224062574
+ret 2
+end
+exit 2
+end
+
+fn cmdckfast to void
+na = oargc
+if and ne na 4 ne na 5
+exit 2
+end
+md = ulong 1
+if eq na 5
+md = cmdckfast_mode 4
+end
+ockloop 2
+fl = OCK5F_F32
+if ge md 1
+fl = or fl OCK5F_BF16
+end
+if ock5_mv_is_zero
+fl = or fl OCK5F_ZMV
+end
+if gt get og 59 1
+fl = or fl OCK5F_LOOP
+end
+orig = get og 46
+if eq orig 5
+orig = get ock5_st 1
+end
+if or eq orig 0 gt orig 3
+orig = 2
+if gt get og 59 1
+orig = 3
+end
+end
+ock5_save_cpu 3 fl orig
+oputc 67
+oputc 70
+oputc 32
+oputu get og 8
+oputc 32
+oputu fl
+oputc 10
+oflush
+end
+
+fn cmdckf64 to void
+if ne oargc 4
+exit 2
+end
+ockloop 2
+if eq get og 46 5
+orig = get ock5_st 1
+if or eq orig 0 gt orig 3
+orig = 2
+end
+if gt get og 59 1
+orig = 3
+end
+put og 46 orig
+end
+ocksave 3
+oputc 67
+oputc 54
+oputc 32
+oputu get og 8
+oputc 32
+oputu get og 46
 oputc 10
 oflush
 end

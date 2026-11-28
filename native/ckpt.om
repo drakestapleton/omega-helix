@@ -24,7 +24,116 @@ note CK03 file given to a command that does not run loops (it loads with ockload
 note 70 I/O.
 const OCKCAP ulong 12884901888
 const OCKC ulong 65536
+const OCK5MAG ulong 3832646035324030031
+const OCK5HDR ulong 256
+const OCK5F_F32 ulong 1
+const OCK5F_BF16 ulong 2
+const OCK5F_NV4 ulong 4
+const OCK5F_ZMV ulong 8
+const OCK5F_LOOP ulong 16
+const OCK5C ulong 131072
 global ock uchar 524288
+global ock5_st ulong 12
+global ock5_mh long 1
+global ock5_has ulong 1
+global ock5_ai ulong 1
+
+fn opwput8 o ulong v ulong to void
+for k ulong 8
+put opw add o k uchar and shr v mul k 8 255
+end
+end
+
+fn opwput4 o ulong v uint to void
+u = ulong v
+for k ulong 4
+put opw add o k uchar and shr u mul k 8 255
+end
+end
+
+fn opwput2 o ulong v uint to void
+u = ulong v
+put opw o uchar and u 255
+put opw add o 1 uchar and shr u 8 255
+end
+
+fn ock5_opw4 o ulong to uint
+v = ulong 0
+for k ulong 4
+v = or v shl ulong get opw add o k mul k 8
+end
+ret uint v
+end
+
+fn ock5_opw2 o ulong to uint
+lo = ulong get opw o
+hi = ulong get opw add o 1
+ret uint or lo shl hi 8
+end
+
+fn ocfnvw64 h ulong nw ulong to ulong
+x = h
+for i ulong nw
+w = opw8 mul i 8
+x = mul xor x w 1099511628211
+end
+ret x
+end
+
+fn ock5_align64 n ulong to ulong
+ret mul div add n 63 64 64
+end
+
+fn ock5_bf16 u uint to uint
+if and eq and shr u 23 255 255 ne and u 8388607 0
+ret shr u 16
+end
+v = add add u 32767 and shr u 16 1
+ret shr v 16
+end
+
+fn ock5_drop_mh to void
+if ne get ock5_has 0 0
+ommap_drop get ock5_mh 0
+put ock5_has 0 0
+end
+end
+
+fn ock5_fail mh long code ulong to void
+ommap_drop mh
+if eq code 10
+exit 10
+end
+if eq code 11
+exit 11
+end
+if eq code 12
+exit 12
+end
+if eq code 13
+exit 13
+end
+if eq code 14
+exit 14
+end
+if eq code 15
+exit 15
+end
+if eq code 17
+exit 17
+end
+exit 70
+end
+
+fn ock5_rd_chunk ai ulong mh long pos ulong nb ulong to void
+if ge mh 0
+ommap_read mh pos nb
+ret
+end
+if ne oprd ai pos 0 nb nb
+exit 70
+end
+end
 
 fn ocput8 o ulong v ulong to void
 for k ulong 8
@@ -106,6 +215,10 @@ end
 ret
 end
 o = add get og add 10 k i
+nb = mul m 8
+if ocsread mul add get og 8 o 8 nb
+ret
+end
 for j ulong m
 ocput8 mul j 8 bitcast ulong omvg add o j
 end
@@ -151,6 +264,21 @@ end
 note write checkpoint (params, m, v) to argv[ai]: OLLMCK03 when the model has a loop (og 59 > 1),
 note else with the loaded or initialised magic (og 46)
 fn ocksave ai ulong to void
+if eq get og 46 5
+fl = or OCK5F_F32 OCK5F_BF16
+if gt get og 59 1
+fl = or fl OCK5F_LOOP
+end
+orig = get ock5_st 1
+if or eq orig 0 gt orig 3
+orig = 2
+if gt get og 59 1
+orig = 3
+end
+end
+ock5_save_cpu ai fl orig
+ret
+end
 ocwopen ai
 hl = ulong 112
 if eq get og 46 2
@@ -216,17 +344,493 @@ ret 144
 end
 
 note load the checkpoint named by argv[ai] into og, ow (params) and omv (m, v)
+fn ock5_pad0 off ulong pad ulong to void
+for k ulong pad
+put opw add off k 0
+end
+end
+
+fn ock5_wr_w i0 ulong cnt ulong pad ulong h ulong pos ulong to ulong
+for j ulong cnt
+opwput4 mul j 4 bitcast uint f32 owg add i0 j
+end
+nb = mul cnt 4
+ock5_pad0 nb pad
+tb = add nb pad
+nh = ocfnvw64 h div tb 8
+ocwput_opw pos tb
+ret nh
+end
+
+fn ock5_wr_mv base ulong i0 ulong cnt ulong pad ulong h ulong pos ulong to ulong
+for j ulong cnt
+opwput4 mul j 4 bitcast uint f32 omvg add base add i0 j
+end
+nb = mul cnt 4
+ock5_pad0 nb pad
+tb = add nb pad
+nh = ocfnvw64 h div tb 8
+ocwput_opw pos tb
+ret nh
+end
+
+fn ock5_wr_wbf i0 ulong cnt ulong pad ulong h ulong pos ulong to ulong
+for j ulong cnt
+u = bitcast uint f32 owg add i0 j
+opwput2 mul j 2 ock5_bf16 u
+end
+nb = mul cnt 2
+ock5_pad0 nb pad
+tb = add nb pad
+nh = ocfnvw64 h div tb 8
+ocwput_opw pos tb
+ret nh
+end
+
+fn ock5_wr_hdr to void
+opwput8 0 OCK5MAG
+opwput8 8 1
+opwput8 16 get ock5_st 0
+for i ulong 7
+opwput8 add 24 mul i 8 get og i
+end
+opwput8 80 get og 40
+opwput8 88 get og 41
+opwput8 96 get og 42
+opwput8 104 get og 43
+opwput8 112 get og 8
+opwput8 120 get og 44
+opwput8 128 get og 57
+opwput8 136 get og 58
+opwput8 144 get og 59
+opwput8 152 get ock5_st 2
+opwput8 160 get ock5_st 3
+opwput8 168 get ock5_st 4
+opwput8 176 get ock5_st 5
+opwput8 184 get ock5_st 6
+opwput8 192 get ock5_st 7
+opwput8 200 get ock5_st 8
+opwput8 208 get ock5_st 9
+opwput8 216 get ock5_st 1
+opwput8 224 get ock5_st 10
+opwput8 232 0
+opwput8 240 get ock5_st 11
+hf = ocfnvw64 14695981039346656037 31
+opwput8 248 hf
+ocwput_opw 0 OCK5HDR
+end
+
+fn ock5_plan_cpu fl ulong orig ulong to void
+p = get og 8
+w_off = OCK5HDR
+w_len = mul p 4
+cur = ock5_align64 add w_off w_len
+mv_off = ulong 0
+mv_len = ulong 0
+if eq and fl OCK5F_ZMV 0
+mv_off = cur
+mv_len = mul p 8
+cur = ock5_align64 add mv_off mv_len
+end
+wbf_off = ulong 0
+wbf_len = ulong 0
+if ne and fl OCK5F_BF16 0
+wbf_off = cur
+wbf_len = mul p 2
+cur = ock5_align64 add wbf_off wbf_len
+end
+put ock5_st 0 fl
+put ock5_st 1 orig
+put ock5_st 2 w_off
+put ock5_st 3 w_len
+put ock5_st 4 mv_off
+put ock5_st 5 mv_len
+put ock5_st 6 wbf_off
+put ock5_st 7 wbf_len
+put ock5_st 8 0
+put ock5_st 9 0
+put ock5_st 10 cur
+end
+
+fn ock5_save_w_part h ulong to ulong
+p = get og 8
+w_off = get ock5_st 2
+w_len = get ock5_st 3
+pos = w_off
+curh = h
+i0 = ulong 0
+while lt i0 p bound 999999
+cnt = sub p i0
+if gt cnt OCK5C
+cnt = OCK5C
+end
+pad = ulong 0
+if eq add i0 cnt p
+pad = sub ock5_align64 add w_off w_len add w_off w_len
+end
+curh = ock5_wr_w i0 cnt pad curh pos
+pos = add pos add mul cnt 4 pad
+i0 = add i0 cnt
+end
+ret curh
+end
+
+fn ock5_save_wbf_part h ulong to ulong
+p = get og 8
+wbf_off = get ock5_st 6
+wbf_len = get ock5_st 7
+pos = wbf_off
+curh = h
+i2 = ulong 0
+while lt i2 p bound 999999
+cnt = sub p i2
+if gt cnt OCK5C
+cnt = OCK5C
+end
+pad = ulong 0
+if eq add i2 cnt p
+pad = sub ock5_align64 add wbf_off wbf_len add wbf_off wbf_len
+end
+curh = ock5_wr_wbf i2 cnt pad curh pos
+pos = add pos add mul cnt 2 pad
+i2 = add i2 cnt
+end
+ret curh
+end
+
+fn ock5_save_cpu ai ulong fl ulong orig ulong to void
+ock5_plan_cpu fl orig
+ocwopen ai
+h = ulong 14695981039346656037
+h = ock5_save_w_part h
+if eq and fl OCK5F_ZMV 0
+p = get og 8
+mv_off = get ock5_st 4
+h = ock5_save_mv_part 0 p h mv_off false
+h = ock5_save_mv_part p p h add mv_off mul p 4 true
+end
+if ne and fl OCK5F_BF16 0
+h = ock5_save_wbf_part h
+end
+put ock5_st 11 h
+ock5_wr_hdr
+ocwend ai
+end
+
+fn ock5_save_mv_part base ulong p ulong h ulong pos ulong dopad bool to ulong
+i0 = ulong 0
+curp = pos
+curh = h
+while lt i0 p bound 999999
+cnt = sub p i0
+if gt cnt OCK5C
+cnt = OCK5C
+end
+pad = ulong 0
+if and dopad eq add i0 cnt p
+pad = sub ock5_align64 add pos mul p 4 add pos mul p 4
+end
+curh = ock5_wr_mv base i0 cnt pad curh curp
+curp = add curp add mul cnt 4 pad
+i0 = add i0 cnt
+end
+ret curh
+end
+
+fn ock5_chk_spans n ulong mh long to void
+fl = get ock5_st 0
+tot = get ock5_st 10
+p = get og 8
+w_off = get ock5_st 2
+w_len = get ock5_st 3
+if or lt w_off OCK5HDR ne rem w_off 8 0
+ock5_fail mh 12
+end
+if gt add w_off w_len tot
+ock5_fail mh 10
+end
+if ne and fl OCK5F_F32 0
+if ne w_len mul p 4
+ock5_fail mh 12
+end
+else
+if or eq and fl OCK5F_BF16 0 ne w_len mul p 2
+ock5_fail mh 12
+end
+end
+if eq and fl OCK5F_ZMV 0
+mv_off = get ock5_st 4
+mv_len = get ock5_st 5
+if or lt mv_off OCK5HDR ne rem mv_off 8 0
+ock5_fail mh 12
+end
+if or ne mv_len mul p 8 gt add mv_off mv_len tot
+ock5_fail mh 12
+end
+end
+if ne and fl OCK5F_BF16 0
+wbf_off = get ock5_st 6
+wbf_len = get ock5_st 7
+if ne wbf_len 0
+if or lt wbf_off OCK5HDR ne rem wbf_off 8 0
+ock5_fail mh 12
+end
+if or ne wbf_len mul p 2 gt add wbf_off wbf_len tot
+ock5_fail mh 12
+end
+end
+end
+if ne and fl OCK5F_NV4 0
+wnv_off = get ock5_st 8
+wnv_len = get ock5_st 9
+if or lt wnv_off OCK5HDR ne rem wnv_off 8 0
+ock5_fail mh 12
+end
+if gt add wnv_off wnv_len tot
+ock5_fail mh 12
+end
+end
+end
+
+fn ock5_verify_payload ai ulong mh long to void
+tot = get ock5_st 10
+pos = OCK5HDR
+h = ulong 14695981039346656037
+while lt pos tot bound 999999
+nb = sub tot pos
+if gt nb OPWCAP
+nb = OPWCAP
+end
+ock5_rd_chunk ai mh pos nb
+h = ocfnvw64 h div nb 8
+pos = add pos nb
+end
+if ne h get ock5_st 11
+ock5_fail mh 14
+end
+end
+
+fn ock5_load_w_cpu ai ulong mh long to void
+fl = get ock5_st 0
+p = get og 8
+w_off = get ock5_st 2
+f32m = ne and fl OCK5F_F32 0
+i0 = ulong 0
+while lt i0 p bound 999999
+cnt = sub p i0
+if gt cnt OCK5C
+cnt = OCK5C
+end
+if f32m
+ock5_rd_chunk ai mh add w_off mul i0 4 mul cnt 4
+for j ulong cnt
+owp add i0 j f64 bitcast f32 ock5_opw4 mul j 4
+end
+else
+ock5_rd_chunk ai mh add w_off mul i0 2 mul cnt 2
+for j ulong cnt
+owp add i0 j f64 bitcast f32 shl ock5_opw2 mul j 2 16
+end
+end
+i0 = add i0 cnt
+end
+end
+
+fn ock5_load_mv_cpu ai ulong mh long to void
+fl = get ock5_st 0
+p = get og 8
+if ne and fl OCK5F_ZMV 0
+ozerom mul 2 p
+ret
+end
+mv_off = get ock5_st 4
+ock5_load_mv_part ai mh mv_off 0 p
+ock5_load_mv_part ai mh add mv_off mul p 4 p p
+end
+
+fn ock5_load_mv_part ai ulong mh long base_off ulong base_idx ulong p ulong to void
+i0 = ulong 0
+while lt i0 p bound 999999
+cnt = sub p i0
+if gt cnt OCK5C
+cnt = OCK5C
+end
+ock5_rd_chunk ai mh add base_off mul i0 4 mul cnt 4
+for j ulong cnt
+omvp add base_idx add i0 j f64 bitcast f32 ock5_opw4 mul j 4
+end
+i0 = add i0 cnt
+end
+end
+
+fn ock5_load ai ulong mh long n ulong gmode bool to void
+if lt n OCK5HDR
+ock5_fail mh 10
+end
+ock5_rd_chunk ai mh 0 OCK5HDR
+if ne opw8 0 OCK5MAG
+ock5_fail mh 11
+end
+if ne ocfnvw64 14695981039346656037 31 opw8 248
+ock5_fail mh 14
+end
+if ne opw8 8 1
+ock5_fail mh 12
+end
+tot = opw8 224
+if lt n tot
+ock5_fail mh 10
+end
+if gt n tot
+ock5_fail mh 15
+end
+if or lt tot OCK5HDR ne rem tot 8 0
+ock5_fail mh 12
+end
+fl = opw8 16
+for i ulong 7
+put og i opw8 add 24 mul i 8
+end
+put og 40 opw8 80
+put og 41 opw8 88
+put og 42 opw8 96
+put og 43 opw8 104
+put og 57 opw8 128
+put og 58 opw8 136
+put og 59 opw8 144
+if or ne and fl OCK5F_LOOP 0 gt get og 59 1
+if eq get og 60 0
+ock5_fail mh 17
+end
+if lt get og 59 2
+ock5_fail mh 12
+end
+end
+geom_ok = false
+if gmode
+geom_ok = ogeom_gpu
+else
+geom_ok = ogeom
+end
+if not geom_ok
+ock5_fail mh 12
+end
+if gt get og 42 999999
+ock5_fail mh 12
+end
+g = opw8 120
+if not ogok2 g
+ock5_fail mh 12
+end
+if ne opw8 112 get og 8
+ock5_fail mh 13
+end
+put og 44 g
+put og 45 1
+put og 46 5
+put ock5_st 0 fl
+put ock5_st 1 opw8 216
+put ock5_st 2 opw8 152
+put ock5_st 3 opw8 160
+put ock5_st 4 opw8 168
+put ock5_st 5 opw8 176
+put ock5_st 6 opw8 184
+put ock5_st 7 opw8 192
+put ock5_st 8 opw8 200
+put ock5_st 9 opw8 208
+put ock5_st 10 tot
+put ock5_st 11 opw8 240
+ock5_chk_spans n mh
+ock5_verify_payload ai mh
+if gmode
+put ock5_ai 0 ai
+if ge mh 0
+put ock5_mh 0 mh
+put ock5_has 0 1
+else
+put ock5_has 0 0
+end
+ret
+end
+ock5_load_w_cpu ai mh
+ock5_load_mv_cpu ai mh
+ommap_drop mh
+end
+
+fn ocklp_dec_fast k ulong i ulong m ulong nb ulong to void
+if eq k 0
+ocdec 0 i m
+ret
+end
+o = add get og add 10 k i
+off = mul add get og 8 o 8
+if not ocswrite off nb
+ocdec k i m
+end
+end
+
+fn ocklp_mmap mh long hl ulong p ulong hs ulong to ulong
+h = ulong 14695981039346656037
+nc = div add p sub OCKC 1 OCKC
+pos = hl
+for k ulong 3
+for c ulong nc
+i = mul c OCKC
+m = sub p i
+if gt m OCKC
+m = OCKC
+end
+nb = mul m 8
+ommap_read mh pos nb
+h = ocfnvw h nb
+ocklp_dec_fast k i m nb
+pos = add pos nb
+end
+end
+if eq h hs
+ret 1
+end
+ret 0
+end
+
 fn ockload ai ulong to void
-n = ofsz ai
+ock5_drop_mh
+gmode = eq get og 61 1
+put og 61 0
+mh = ommap_open ai
+n = ommap_sz
 if gt n OCKCAP
+ommap_drop mh
 exit 15
 end
+if lt mh 0
 hn = oprd ai 0 0 144
 if lt n 112
 exit 10
 end
-hl = ockmag opw8 0
+else
+if lt n 112
+ommap_drop mh
+exit 10
+end
+hsz = ulong 144
+if lt n 144
+hsz = n
+end
+ommap_read mh 0 hsz
+end
+if eq opw8 0 OCK5MAG
+ock5_load ai mh n gmode
+ret
+end
+mg = opw8 0
+if and and ne mg 3544415659172318287 ne mg 3616473253210246223 ne mg 3688530847248174159
+ommap_drop mh
+exit 11
+end
+hl = ockmag mg
 if lt n hl
+ommap_drop mh
 exit 10
 end
 for i ulong 7
@@ -237,16 +841,19 @@ put og 58 0
 put og 59 0
 if eq hl 144
 if eq get og 60 0
+ommap_drop mh
 exit 17
 end
 put og 57 opw8 112
 put og 58 opw8 120
 put og 59 opw8 128
 if lt get og 59 2
+ommap_drop mh
 exit 12
 end
 end
 if not ogeom
+ommap_drop mh
 exit 12
 end
 put og 40 opw8 64
@@ -254,6 +861,7 @@ put og 41 opw8 72
 put og 42 opw8 80
 put og 43 opw8 88
 if gt get og 42 999999
+ommap_drop mh
 exit 12
 end
 g = ulong 1
@@ -261,23 +869,34 @@ if ge hl 120
 g = opw8 104
 end
 if not ogok2 g
+ommap_drop mh
 exit 12
 end
 put og 44 g
 put og 45 1
 p = get og 8
 if ne opw8 96 p
+ommap_drop mh
 exit 13
 end
 hs = opw8 sub hl 8
 pb = mul 24 p
 if lt n add hl pb
+ommap_drop mh
 exit 10
 end
 if gt n add hl pb
+ommap_drop mh
 exit 15
 end
-if ne ocklp ai hl p hs 1
+ok = ulong 0
+if ge mh 0
+ok = ocklp_mmap mh hl p hs
+ommap_drop mh
+else
+ok = ocklp ai hl p hs
+end
+if ne ok 1
 exit 14
 end
 end

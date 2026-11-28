@@ -2296,6 +2296,244 @@ omvp add s j f64 bitcast f32 x
 end
 end
 
+note direct OLLMCK05 mmap -> GPU arena load and GPU arena -> OLLMCK05 atomic save
+fn ggck5_rd off ulong nb ulong to void
+if ne get ock5_has 0 0
+ommap_read get ock5_mh 0 off nb
+ret
+end
+if ne oprd get ock5_ai 0 off 0 nb nb
+exit 70
+end
+end
+
+fn ggck5_copy_to_gpu src_off ulong dst_off ulong nb ulong to void
+h = get gbmem 5
+done = ulong 0
+while lt done nb bound 999999
+chunk = sub nb done
+if gt chunk OPWCAP
+chunk = OPWCAP
+end
+ggck5_rd add src_off done chunk
+w = mapwrite h add dst_off done opw 0 chunk
+if ne w long chunk
+ggdie 85
+end
+done = add done chunk
+end
+end
+
+fn ggck5_bf16_expand cnt ulong to void
+j = cnt
+while gt j 0 bound 200000
+j = sub j 1
+w16 = ock5_opw2 mul j 2
+opwput4 mul j 4 shl w16 16
+end
+end
+
+fn ggck5_bf16_to_gpu src_off ulong dst_off ulong p ulong to void
+h = get gbmem 5
+i0 = ulong 0
+while lt i0 p bound 999999
+cnt = sub p i0
+if gt cnt OCK5C
+cnt = OCK5C
+end
+ggck5_rd add src_off mul i0 2 mul cnt 2
+ggck5_bf16_expand cnt
+nb4 = mul cnt 4
+w = mapwrite h add dst_off mul i0 4 opw 0 nb4
+if ne w long nb4
+ggdie 85
+end
+i0 = add i0 cnt
+end
+end
+
+fn ggload_ck5_bf fl ulong p ulong to void
+h = get gbmem 5
+ggew 20 ggp5 gga1 1 gga1 1
+has_bf = ne and fl OCK5F_BF16 0
+if and has_bf ne get ock5_st 7 0
+ggck5_copy_to_gpu get ock5_st 6 get gga 38 mul p 2
+z = mul p 2
+ze = mul ggp5 2
+if lt z ze
+if eq rem z 4 2
+w0 = uint mapget h add get gga 38 sub z 2 4
+m0 = mapset h add get gga 38 sub z 2 4 ulong and w0 65535
+z = add z 2
+end
+while lt z ze bound 512
+m1 = mapset h add get gga 38 z 4 0
+z = add z 4
+end
+end
+else
+ggf2b ggp5 gga1 0 gga1 38
+end
+if ggnv4_ok
+exp_wnv = sub get gga 47 get gga 48
+has_nv = ne and fl OCK5F_NV4 0
+ok_nv = and has_nv eq get ock5_st 9 exp_wnv
+if ok_nv
+d = get og 2
+if and ggnv4_shape d d d ggnv4_shape get og 4 d d
+ggck5_copy_to_gpu get ock5_st 8 get gga 48 exp_wnv
+put ggw4_ok 0 1
+ret
+end
+end
+ggquant_w
+end
+end
+
+fn ggload_ck5 load_mv bool to void
+p = get og 8
+fl = get ock5_st 0
+if ne and fl OCK5F_F32 0
+ggck5_copy_to_gpu get ock5_st 2 get gga 0 mul p 4
+else
+ggck5_bf16_to_gpu get ock5_st 2 get gga 0 p
+end
+if load_mv
+if ne and fl OCK5F_ZMV 0
+ggew 20 p gga1 21 gga1 21
+ggew 20 p gga1 22 gga1 22
+else
+mv_off = get ock5_st 4
+ggck5_copy_to_gpu mv_off get gga 21 mul p 4
+ggck5_copy_to_gpu add mv_off mul p 4 get gga 22 mul p 4
+end
+end
+if ggbf_ok
+ggload_ck5_bf fl p
+end
+put gkinv 0 1
+ock5_drop_mh
+end
+
+fn ggsave_ck5_sec src_off ulong slen ulong pad ulong h ulong pos ulong to ulong
+gb = get gbmem 5
+done = ulong 0
+curh = h
+curp = pos
+while lt done slen bound 999999
+chunk = sub slen done
+if gt chunk 1048576
+chunk = 1048576
+end
+r = mapread gb add src_off done opw 0 chunk
+if ne r long chunk
+exit 70
+end
+p2 = ulong 0
+if eq add done chunk slen
+p2 = pad
+ock5_pad0 chunk p2
+end
+tb = add chunk p2
+curh = ocfnvw64 curh div tb 8
+ocwput_opw curp tb
+curp = add curp tb
+done = add done chunk
+end
+ret curh
+end
+
+fn ggck5_plan to void
+p = get og 8
+fl = OCK5F_F32
+if ggbf_ok
+fl = or fl OCK5F_BF16
+end
+if ne get ggw4_ok 0 0
+fl = or fl OCK5F_NV4
+end
+if gt get og 59 1
+fl = or fl OCK5F_LOOP
+end
+orig = get ock5_st 1
+if or eq orig 0 gt orig 3
+orig = 2
+if gt get og 59 1
+orig = 3
+end
+end
+w_off = OCK5HDR
+w_len = mul p 4
+mv_off = ock5_align64 add w_off w_len
+mv_len = mul p 8
+cur = ock5_align64 add mv_off mv_len
+wbf_off = ulong 0
+wbf_len = ulong 0
+if ne and fl OCK5F_BF16 0
+wbf_off = cur
+wbf_len = mul p 2
+cur = ock5_align64 add wbf_off wbf_len
+end
+wnv_off = ulong 0
+wnv_len = ulong 0
+if ne and fl OCK5F_NV4 0
+wnv_off = cur
+wnv_len = sub get gga 47 get gga 48
+cur = ock5_align64 add wnv_off wnv_len
+end
+put ock5_st 0 fl
+put ock5_st 1 orig
+put ock5_st 2 w_off
+put ock5_st 3 w_len
+put ock5_st 4 mv_off
+put ock5_st 5 mv_len
+put ock5_st 6 wbf_off
+put ock5_st 7 wbf_len
+put ock5_st 8 wnv_off
+put ock5_st 9 wnv_len
+put ock5_st 10 cur
+end
+
+fn ggsave_ck5_st gga_i ulong off_i ulong len_i ulong nxt ulong h ulong to ulong
+so = get ock5_st off_i
+sl = get ock5_st len_i
+pad = sub nxt add so sl
+ret ggsave_ck5_sec get gga gga_i sl pad h so
+end
+
+fn ggsave_ck5 ai ulong to void
+ggck5_plan
+ocwopen ai
+h = ulong 14695981039346656037
+h = ggsave_ck5_st 0 2 3 get ock5_st 4 h
+m_len = mul get og 8 4
+mv_off = get ock5_st 4
+h = ggsave_ck5_sec get gga 21 m_len 0 h mv_off
+nxt = get ock5_st 10
+if ne get ock5_st 6 0
+nxt = get ock5_st 6
+else
+if ne get ock5_st 8 0
+nxt = get ock5_st 8
+end
+end
+pad_v = sub nxt add mv_off get ock5_st 5
+h = ggsave_ck5_sec get gga 22 m_len pad_v h add mv_off m_len
+if ne get ock5_st 6 0
+nxt2 = get ock5_st 10
+if ne get ock5_st 8 0
+nxt2 = get ock5_st 8
+end
+h = ggsave_ck5_st 38 6 7 nxt2 h
+end
+if ne get ock5_st 8 0
+h = ggsave_ck5_st 48 8 9 get ock5_st 10 h
+end
+put ock5_st 11 h
+ock5_wr_hdr
+ocwend ai
+end
+
 note optimizer state (parameters, Adam pool) to the chip as f32 (m in gga 21, v in gga 22), and back
 fn ggupst to void
 ggupw
@@ -3451,6 +3689,7 @@ na = oargc
 if and ne na 6 ne na 7
 exit 2
 end
+put og 61 1
 ockloop 2
 odopen 3
 un = oargu 4
@@ -3467,12 +3706,16 @@ if lt un en
 en = un
 end
 ggopen
-ggupst
 put ggnofp 0 1
+if eq get og 46 5
+ggload_ck5 true
+else
+ggupst
 if ggbf_ok
 ggew 20 ggp5 gga1 1 gga1 1
 ggf2b ggp5 gga1 0 gga1 38
 ggquant_w
+end
 end
 while lt get og 41 en bound 999999
 s = get og 41
@@ -3495,8 +3738,12 @@ ggadam
 put ggtm 5 sub monons t
 put og 41 s1
 if need_l
+if eq get og 46 5
+ggsave_ck5 2
+else
 ggdnst
 ocksave 2
+end
 oputc 84
 oputc 32
 oputu s1
@@ -3518,6 +3765,7 @@ fn ggprof to void
 if ne oargc 5
 exit 2
 end
+put og 61 1
 ockloop 2
 odopen 3
 nn = oargu 4
@@ -3525,12 +3773,16 @@ if eq nn 0
 exit 2
 end
 ggopen
-ggupst
 put ggnofp 0 1
+if eq get og 46 5
+ggload_ck5 true
+else
+ggupst
 if ggbf_ok
 ggew 20 ggp5 gga1 1 gga1 1
 ggf2b ggp5 gga1 0 gga1 38
 ggquant_w
+end
 end
 ls = 0.0f64
 for i ulong nn
@@ -3582,7 +3834,11 @@ fn ggeval to void
 ww = ggevw
 t = monons
 ggopen
+if eq get og 46 5
+ggload_ck5 false
+else
 ggupw
+end
 put ggev 0 0.0f64
 put ggen 0 0
 bb = get og 6
@@ -3607,6 +3863,7 @@ na = oargc
 if and ne na 5 ne na 6
 exit 2
 end
+put og 61 1
 ockloop 2
 ww = oargu 4
 v = get og 0
@@ -3788,7 +4045,11 @@ const OMUTZ ulong 1
 fn ogchip to void
 put og 6 1
 ggopen
+if eq get og 46 5
+ggload_ck5 false
+else
 ggupw
+end
 end
 
 fn oglast to void
@@ -4861,6 +5122,7 @@ fn ogcmd w ulong to bool
 if eq w 27696107117441895
 put bfdec 0 1
 put ogpu 0 1
+put og 61 1
 cmdserve
 r = nvstop
 ret true
@@ -4868,18 +5130,21 @@ end
 if eq w 108235010962279
 put bfdec 0 1
 put ogpu 0 1
+put og 61 1
 cmdsamp
 r = nvstop
 ret true
 end
 if eq w 111559399797607
 put ogpu 0 1
+put og 61 1
 cmdserve
 r = nvstop
 ret true
 end
 if eq w 28548202775016295
 put ogpu 0 1
+put og 61 1
 cmdsamp
 r = nvstop
 ret true

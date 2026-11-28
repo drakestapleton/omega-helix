@@ -919,7 +919,10 @@ end
 if eq get og 46 3
 hl = 144
 end
-hn = oprd 3 0 0 144
+if eq get og 46 5
+hl = 256
+end
+hn = oprd 3 0 0 hl
 if lt hn hl
 exit 10
 end

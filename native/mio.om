@@ -12,6 +12,7 @@ global opp uchar 8
 global ost uchar 8
 global owrf int 64
 global owpd int 64
+global ommap_sz_g ulong 1
 
 note the argument count (argv[0] included)
 fn oargc to ulong
@@ -396,4 +397,41 @@ if ne fclose fd 0
 exit 70
 end
 ocrename pl
+end
+
+fn ocwput_opw pos ulong n ulong to void
+fd = get ocfd 0
+p = ulong 0
+while lt p n bound 999999
+w = pwrite fd opw p sub n p long add pos p
+if le w 0
+exit 70
+end
+p = add p ulong w
+end
+end
+
+fn ommap_open ai ulong to long
+put ommap_sz_g 0 ofsz ai
+ret neg long 1
+end
+
+fn ommap_sz to ulong
+ret get ommap_sz_g 0
+end
+
+fn ommap_read h long off ulong n ulong to void
+exit 70
+end
+
+fn ommap_drop h long to void
+ret
+end
+
+fn ocswrite off ulong n ulong to bool
+ret false
+end
+
+fn ocsread off ulong n ulong to bool
+ret false
 end

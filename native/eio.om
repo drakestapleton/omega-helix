@@ -46,6 +46,7 @@ global oidc uchar 16
 global oidb uchar 48
 global oidv uchar 512
 global oids uchar 65536
+global ommap_sz_g ulong 1
 
 fn oeerr r ulong to bool
 ret ge r OERR
@@ -1002,4 +1003,36 @@ if ne w n
 exit 70
 end
 oeclose
+end
+
+fn ocwput_opw pos ulong n ulong to void
+w = efi 12 oefa 3 pos opw 0 n
+if ne w n
+exit 70
+end
+end
+
+fn ommap_open ai ulong to long
+put ommap_sz_g 0 ofsz ai
+ret neg long 1
+end
+
+fn ommap_sz to ulong
+ret get ommap_sz_g 0
+end
+
+fn ommap_read h long off ulong n ulong to void
+exit 70
+end
+
+fn ommap_drop h long to void
+ret
+end
+
+fn ocswrite off ulong n ulong to bool
+ret false
+end
+
+fn ocsread off ulong n ulong to bool
+ret false
 end
