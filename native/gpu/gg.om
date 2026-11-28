@@ -2371,6 +2371,7 @@ m1 = mapset h add get gga 38 z 4 0
 z = add z 4
 end
 end
+put gkinv 0 1
 else
 ggf2b ggp5 gga1 0 gga1 38
 end
@@ -2382,6 +2383,7 @@ if ok_nv
 d = get og 2
 if and ggnv4_shape d d d ggnv4_shape get og 4 d d
 ggck5_copy_to_gpu get ock5_st 8 get gga 48 exp_wnv
+put gkinv 0 1
 put ggw4_ok 0 1
 ret
 end
@@ -2398,6 +2400,7 @@ ggck5_copy_to_gpu get ock5_st 2 get gga 0 mul p 4
 else
 ggck5_bf16_to_gpu get ock5_st 2 get gga 0 p
 end
+put gkinv 0 1
 if load_mv
 if ne and fl OCK5F_ZMV 0
 ggew 20 p gga1 21 gga1 21
@@ -2406,6 +2409,7 @@ else
 mv_off = get ock5_st 4
 ggck5_copy_to_gpu mv_off get gga 21 mul p 4
 ggck5_copy_to_gpu add mv_off mul p 4 get gga 22 mul p 4
+put gkinv 0 1
 end
 end
 if ggbf_ok
@@ -2413,6 +2417,16 @@ ggload_ck5_bf fl p
 end
 put gkinv 0 1
 ock5_drop_mh
+end
+
+fn ggsave_ck5_hash gb long off ulong chunk ulong p2 ulong h ulong to ulong
+nw_m = div chunk 8
+curh = ommap_fnv64 gb off nw_m h
+tail_b = sub add chunk p2 mul nw_m 8
+if gt tail_b 0
+ret ocfnvw64_off curh mul nw_m 8 div tail_b 8
+end
+ret curh
 end
 
 fn ggsave_ck5_sec src_off ulong slen ulong pad ulong h ulong pos ulong to ulong
@@ -2434,8 +2448,8 @@ if eq add done chunk slen
 p2 = pad
 ock5_pad0 chunk p2
 end
+curh = ggsave_ck5_hash gb add src_off done chunk p2 curh
 tb = add chunk p2
-curh = ocfnvw64 curh div tb 8
 ocwput_opw curp tb
 curp = add curp tb
 done = add done chunk

@@ -2694,7 +2694,7 @@ put gkt 2 add get gkt 2 w
 ret ok
 end
 note Open the chip: slots 0 cmd, 1 cbank, 2 qmd, 3 marks, 4 code, 5 arena of asz bytes.
-fn gkopen asz ulong to bool
+fn gkopen_ex asz ulong zero_arena bool to bool
 put gkqi 0 0
 if not nvfull
 ret false
@@ -2717,7 +2717,7 @@ note slots 0-4 (pushbuffer, cbank, QMD, marks, code) are CPU-written or host-pol
 note as in omega_blackwell_engine.c alloc_checked; cached, a release sat in L2 about 1.06 s (cortex
 note d03a999a). The arena (slot 5) stays cached: gkinv invalidates it after host writes and every
 note launch ends with L2_FLUSH_DIRTY before its second mark.
-m = nvalloc size eq i 5
+m = nvalloc_ex size eq i 5 or ne i 5 zero_arena
 if le m 0
 ret false
 end
@@ -2735,6 +2735,9 @@ gkqq
 gkqcb
 put gkqi 0 1
 ret true
+end
+fn gkopen asz ulong to bool
+ret gkopen_ex asz true
 end
 fn gkbase to ulong
 ret mapaddr get gbmem 5
