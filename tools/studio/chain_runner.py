@@ -112,6 +112,8 @@ def resolve_binaries(bin_dir: str | Path | None = None, root: Path | None = None
         "ollm_waldo": ("OLLM_WALDO_BIN", ["ollm-waldo"]),
         "ollm_tok": ("OLLM_TOK_BIN", ["ollm-tok"]),
         "ollm_gb10": ("OLLM_GB10_BIN", ["ollm-gb10"]),
+        "ollm_dna": ("OLLM_DNA_BIN", ["ollm-dna"]),
+        "ollm_dna_gb10": ("OLLM_DNA_GB10_BIN", ["ollm-dna-gb10"]),
     }
 
     resolved: dict[str, Path | None] = {}
@@ -158,6 +160,8 @@ def ensure_binaries(
         "ollm_waldo": "openwaldo",
         "ollm_tok": "tok",
         "ollm_gb10": "gb10",
+        "ollm_dna": "dna",
+        "ollm_dna_gb10": "dna-gb10",
     }
 
     missing = [k for k in needed if not bins.get(k)]

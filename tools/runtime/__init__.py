@@ -12,7 +12,13 @@ from __future__ import annotations
 from .anti_dna import forge_anti_strand, read_sp_pack_hash, run_firewall_decode, verify_firewall_receipt
 from .sleep_cycle import run_sleep_cycle
 from .compile_green import run_compile_until_green
-from .hf_dna import run_open_trunk_dna_demo
+from .hf_dna import (
+    import_hf_bf16_trunk,
+    read_ollmbf01_header,
+    run_bf16_dna_demo,
+    run_open_trunk_dna_demo,
+    verify_ollmbf01,
+)
 
 __all__ = [
     "forge_anti_strand",
@@ -21,5 +27,9 @@ __all__ = [
     "verify_firewall_receipt",
     "run_sleep_cycle",
     "run_compile_until_green",
+    "read_ollmbf01_header",
+    "import_hf_bf16_trunk",
+    "verify_ollmbf01",
+    "run_bf16_dna_demo",
     "run_open_trunk_dna_demo",
 ]

@@ -848,6 +848,28 @@ if ne and get dn_st 7 4 0
 end
 end
 
+fn dn_valid_geom to bool
+if lt get dn_st 0 2
+  ret false
+end
+if or eq get dn_st 1 0 eq get dn_st 2 0
+  ret false
+end
+if or eq get dn_st 3 0 eq get dn_st 4 0
+  ret false
+end
+if or eq get dn_st 5 0 eq get dn_st 6 0
+  ret false
+end
+if or eq get dn_st 8 0 ne rem get dn_st 4 2 0
+  ret false
+end
+if or gt get dn_st 3 get dn_st 2 ne rem get dn_st 2 get dn_st 3 0
+  ret false
+end
+ret true
+end
+
 fn dn_open_trunk ai ulong verify_pay bool need_be bool to void
 pl = dn_path_arg ai
 fd = int fopen dn_path 0 pl 0 0
@@ -869,9 +891,13 @@ if or ne dn_fnv_hdr 128 get dn_st 16 ne dn_fnv_hdr 248 get dn_st 17
   pl = ulong fclose fd
   exit 61
 end
-if lt ulong sz add 256 get dn_st 12
+if ne sub ulong sz 256 get dn_st 12
   pl = ulong fclose fd
-  exit 61
+  exit 60
+end
+if not dn_valid_geom
+  pl = ulong fclose fd
+  exit 60
 end
 dn_plan_woff
 if verify_pay
@@ -2396,7 +2422,7 @@ na = ulong argcnt
 if and ne na 4 ne na 5
   exit 2
 end
-dn_open_trunk 2 false true
+dn_open_trunk 2 true true
 t0 = monons
 n = dn_load_u32 3 6
 hits = dn_base_run_all n
@@ -2521,7 +2547,7 @@ if lt ulong argcnt 5
   exit 2
 end
 dn_cryst_parse_args ulong argcnt
-dn_open_trunk 2 false true
+dn_open_trunk 2 true true
 t0 = monons
 d = get dn_st 1
 ntr = dn_load_u32 3 6
@@ -2636,7 +2662,7 @@ margin = 0.005f64
 if eq na 7
   margin = dn_parf 6
 end
-dn_open_trunk 2 false true
+dn_open_trunk 2 true true
 dn_sp_load_fast 3
 nd = dn_load_u32 4 6
 ng = dn_load_u32 5 7
@@ -2944,7 +2970,7 @@ na = ulong argcnt
 if and ne na 6 and ne na 7 ne na 8
   exit 2
 end
-dn_open_trunk 2 false true
+dn_open_trunk 2 true true
 dn_sp_load_fast 3
 tau = bitcast f64 get dn_sp_st 5
 if eq na 8
