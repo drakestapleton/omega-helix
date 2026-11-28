@@ -350,34 +350,6 @@ end
 ret true
 end
 
-fn ogeom_gpu to bool
-if not ogok
-ret false
-end
-t = get og 1
-d = get og 2
-put og 7 div d get og 3
-u = mul 4 mul d d
-u = add u mul 2 mul d get og 4
-u = add u mul 2 d
-put og 32 u
-put og 30 mul get og 0 d
-u = mul t d
-put og 31 add get og 30 u
-u = mul get og 5 get og 32
-put og 33 add get og 31 u
-u = add get og 33 d
-put og 8 u
-put og 9 t
-put og 10 0
-put og 11 0
-put og 12 u
-put og 13 0
-put og 27 0
-put og 29 mul mul get og 3 t t
-ret oglv
-end
-
 note the layer applications og[56] from L and the loop og[57 .. 59]; false when the core is empty,
 note does not fit in the L layers, or runs more passes than the attention pool has rows for
 fn oglv to bool
