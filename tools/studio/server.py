@@ -459,6 +459,15 @@ class StudioHandler(BaseHTTPRequestHandler):
             return ollm_bin
         return runner.ensure_binaries(["ollm"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)["ollm"]
 
+    def _resolve_dna_bin(self, use_gpu: bool = True) -> Path:
+        all_bins = runner.resolve_binaries(bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
+        has_gpu = os.path.exists("/dev/nvidiactl") or os.path.exists("/dev/aien-gpu")
+        if use_gpu and has_gpu and all_bins.get("ollm_dna_gb10"):
+            dna_bin = all_bins["ollm_dna_gb10"]
+            assert dna_bin is not None
+            return dna_bin
+        return runner.ensure_binaries(["ollm_dna"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)["ollm_dna"]
+
     def _stream_sse(self, run: runner.ChainRun) -> None:
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -972,6 +981,29 @@ class StudioHandler(BaseHTTPRequestHandler):
                     merges=str(body.get("merges") or body.get("merges_bin") or "-"),
                 )
                 self._send_json(HTTPStatus.OK, {"ok": True, "receipt": res})
+            except Exception as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/api/runtime/import-hf-bf16":
+            try:
+                hf_raw = body.get("hf_dir")
+                if not hf_raw:
+                    raise ValueError("hf_dir is required")
+                bins = runner.ensure_binaries(["ollm_interchange"], bin_dir=self.server.manager.bin_dir, root=self.server.manager.root)
+                out_raw = body.get("out_path")
+                if out_raw:
+                    out_path = Path(str(out_raw)).expanduser().resolve()
+                else:
+                    hf_name = Path(str(hf_raw)).expanduser().resolve().name or "trunk"
+                    safe = "".join(c if (c.isalnum() or c in "-_") else "_" for c in hf_name)[:40] or "trunk"
+                    out_path = (self.server.manager.runs_dir / "bf16-trunks" / f"{safe}-{int(time.time() * 1000)}.bf16").resolve()
+                res = sovereign_runtime.import_hf_bf16_trunk(bins["ollm_interchange"], hf_raw, out_path)
+                if bool(body.get("verify", True)):
+                    dna_bin = self._resolve_dna_bin(use_gpu=bool(body.get("use_gpu", True)))
+                    ver = sovereign_runtime.verify_ollmbf01(bins["ollm_interchange"], out_path, dna_bin=dna_bin)
+                    res["verification"] = ver
+                self._send_json(HTTPStatus.OK, res)
             except Exception as exc:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
             return

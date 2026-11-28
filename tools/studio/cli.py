@@ -908,6 +908,24 @@ def cmd_runtime_green(args: argparse.Namespace) -> int:
     return 0 if res.get("passed") else 1
 
 
+def cmd_runtime_import_hf_bf16(args: argparse.Namespace) -> int:
+    rt = _load_runtime()
+    need = ["ollm_interchange"] if args.no_verify else ["ollm_interchange", "ollm_dna"]
+    bins = runner.ensure_binaries(need, bin_dir=args.bin_dir)
+    out_p = Path(args.out).expanduser().resolve()
+    res = rt.import_hf_bf16_trunk(bins["ollm_interchange"], args.hf_dir, out_p)
+    if not args.no_verify:
+        all_bins = runner.resolve_binaries(bin_dir=args.bin_dir)
+        has_gpu = os.path.exists("/dev/nvidiactl") or os.path.exists("/dev/aien-gpu")
+        dna_bin = all_bins["ollm_dna_gb10"] if (has_gpu and all_bins.get("ollm_dna_gb10")) else bins["ollm_dna"]
+        res["verification"] = rt.verify_ollmbf01(bins["ollm_interchange"], out_p, dna_bin=dna_bin)
+    if args.json:
+        print(json.dumps(res, indent=2))
+    else:
+        print(f"Imported OLLMBF01: {res['bf_path']} ({res['stdout']})")
+    return 0
+
+
 def _load_commons() -> Any:
     tools_dir = str(STUDIO_DIR.parent)
     if tools_dir not in sys.path:
@@ -1235,6 +1253,7 @@ def cmd_agent(args: argparse.Namespace) -> int:
             "GET /api/chains/<run_id>/events": "SSE stream of live training metrics",
             "POST /api/chains/<run_id>/sample": "Blend strands via spclip & generate tokens",
             "POST /api/runtime/spforge": "One-shot closed-form Ridge/GN strand solver",
+            "POST /api/runtime/import-hf-bf16": "Stream HuggingFace Safetensors -> OLLMBF01 + ollm-dna verify",
             "GET /api/trust/verify": "Offline Mach-O/ELF + CSP + Merkle + BOM audit",
         },
     }
@@ -1530,6 +1549,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_grn.add_argument("--merges", default="-", help="BPE merges.bin path when ck_path has V > 256")
     p_grn.add_argument("--json", action="store_true")
     p_grn.set_defaults(func=cmd_runtime_green)
+
+    p_ibf = sub.add_parser("import-hf-bf16", parents=[common], help="Stream HF Safetensors -> OLLMBF01 frozen BF16 trunk")
+    p_ibf.add_argument("hf_dir")
+    p_ibf.add_argument("--out", required=True, help="Output .bf16 path")
+    p_ibf.add_argument("--no-verify", dest="no_verify", action="store_true")
+    p_ibf.add_argument("--json", action="store_true")
+    p_ibf.set_defaults(func=cmd_runtime_import_hf_bf16)
 
     p_ver = sub.add_parser("verify", parents=[common], help="One-command offline Cryptographic Trust Audit")
     p_ver.add_argument("--base-ck", dest="base_ck", default=None)

@@ -73,6 +73,7 @@ if [ "$OS" = Darwin ]; then
   OUT="$OUT" TARGET=openwaldo sh "$here/scripts/build.sh"
   OUT="$OUT" TARGET=univ sh "$here/scripts/build.sh"
   OUT="$OUT" TARGET=interchange sh "$here/scripts/build.sh"
+  OUT="$OUT" TARGET=dna sh "$here/scripts/build.sh"
   BIN="$OUT/ollm-macos"
 elif [ "$ARCH" = x86_64 ] || [ "$ARCH" = amd64 ]; then
   OUT="$OUT" TARGET=x86linux sh "$here/scripts/build.sh"
@@ -80,6 +81,7 @@ elif [ "$ARCH" = x86_64 ] || [ "$ARCH" = amd64 ]; then
   OUT="$OUT" TARGET=openwaldo sh "$here/scripts/build.sh"
   OUT="$OUT" TARGET=univ sh "$here/scripts/build.sh"
   OUT="$OUT" TARGET=interchange sh "$here/scripts/build.sh"
+  OUT="$OUT" TARGET=dna sh "$here/scripts/build.sh"
   BIN="$OUT/ollm-x86linux"
   if command -v ldd >/dev/null 2>&1; then
     if ldd "$BIN" 2>&1 | grep -qiE 'libc|libcuda|cublas'; then
@@ -104,6 +106,8 @@ else
   OUT="$OUT" TARGET=openwaldo sh "$here/scripts/build.sh"
   OUT="$OUT" TARGET=univ sh "$here/scripts/build.sh"
   OUT="$OUT" TARGET=interchange sh "$here/scripts/build.sh"
+  OUT="$OUT" TARGET=dna sh "$here/scripts/build.sh"
+  OUT="$OUT" TARGET=dna-gb10 sh "$here/scripts/build.sh"
   BIN="$OUT/ollm"
   if command -v ldd >/dev/null 2>&1; then
     if ldd "$OUT/ollm-gb10" 2>&1 | grep -qiE 'libc|libcuda|cublas'; then
@@ -141,6 +145,10 @@ python3 "$here/tests/oracle_universal.py" --bin "$OUT/ollm-univ"
 echo "--- 3c. Safetensors / GGUF v3 / CK01-03 upgrade interchange suite ---"
 IX_BIN="$OUT/ollm-interchange" UNIV_BIN="$OUT/ollm-univ" LEGACY_BIN="$BIN" \
   python3 -W error::ResourceWarning "$here/tests/test_interchange.py" -v
+
+echo "--- 3c2. OLLMBF01 BF16 4B-8B streaming import, ollm-dna & Studio integration suite ---"
+OLLM_INTERCHANGE_BIN="$OUT/ollm-interchange" OLLM_DNA_BIN="$OUT/ollm-dna" \
+  python3 -W error::ResourceWarning "$here/tests/test_ollmbf01_dna.py" -v
 
 echo "--- 3d. Adaptive looped core (per-token exit & inter-pass messages) suite ---"
 OLLM_BIN="$BIN" python3 -W error::ResourceWarning "$here/tests/test_adaptive_loop.py"

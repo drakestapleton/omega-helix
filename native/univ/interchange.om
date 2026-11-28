@@ -1015,6 +1015,9 @@ if and ne i 3 eq get ixc add 1 i 0
 exit 81
 end
 end
+if lt get ixc 1 2
+exit 81
+end
 if gt get ixc 6 100000
 exit 81
 end
@@ -1273,6 +1276,9 @@ ix_st_field src tape m
 m = js_mnext tape m
 end
 if ne get ixent 7 7
+exit 83
+end
+if gt get ixent 6 div 4611686018427387904 ix_dsz get ixent 0
 exit 83
 end
 nb = mul get ixent 6 ix_dsz get ixent 0
@@ -2835,6 +2841,9 @@ if and ne i 3 eq get ixc add 1 i 0
 exit 81
 end
 end
+if lt get ixc 1 2
+exit 81
+end
 if gt get ixc 6 100000
 exit 81
 end
@@ -3722,7 +3731,7 @@ c4 = fclose fd
 exit 61
 end
 pb = bf_get8 112
-if ne sz add 256 pb
+if ne sub sz 256 pb
 c5 = fclose fd
 exit 60
 end

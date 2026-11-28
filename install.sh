@@ -147,7 +147,7 @@ case "$OS/$ARCH" in
   Darwin/arm64)
     TOPOLOGY="macos-arm64"
     PLAT="macOS Apple Silicon (arm64)"
-    TARGETS="univ interchange openwaldo tok macos"
+    TARGETS="univ interchange openwaldo tok dna macos"
     SIGN_MODE="sha256+adhoc-codesign"
     LAUNCH_MODE="local-or-remote"
     SKIP_SSH_TUNNEL=1
@@ -167,7 +167,7 @@ case "$OS/$ARCH" in
     if [ "$IS_WSL" = 1 ]; then
       TOPOLOGY="wsl2"
       PLAT="Windows WSL 2 (aarch64)"
-      TARGETS="univ interchange openwaldo tok aarch64"
+      TARGETS="univ interchange openwaldo tok dna aarch64"
       SIGN_MODE="sha256"
       LAUNCH_MODE="local-or-remote"
       SKIP_SSH_TUNNEL=1
@@ -178,7 +178,7 @@ case "$OS/$ARCH" in
         PLAT="DGX Spark Linux (aarch64, GB10)"
         OPTIONAL_TARGETS="gb10"
       fi
-      TARGETS="univ interchange openwaldo tok aarch64 wtrain"
+      TARGETS="univ interchange openwaldo tok dna aarch64 wtrain"
       SIGN_MODE="sha256"
       SKIP_SSH_TUNNEL=1
       if { [ -n "$DISP" ] || [ -n "$WAYL" ]; } && [ -z "$SSH_ENV" ]; then
@@ -202,14 +202,14 @@ case "$OS/$ARCH" in
     if [ "$IS_WSL" = 1 ]; then
       TOPOLOGY="wsl2"
       PLAT="Windows 10/11 WSL 2 (x86_64, static x86linux)"
-      TARGETS="univ interchange openwaldo tok x86linux"
+      TARGETS="univ interchange openwaldo tok dna x86linux"
       SIGN_MODE="sha256"
       LAUNCH_MODE="local-or-remote"
       SKIP_SSH_TUNNEL=1
       if [ -n "$SSH_ENV" ]; then BROWSER_CMD="print-url"; else BROWSER_CMD=$(detect_wsl_browser); fi
     else
       PLAT="Linux x86_64"
-      TARGETS="univ interchange openwaldo tok x86linux"
+      TARGETS="univ interchange openwaldo tok dna x86linux"
       SIGN_MODE="sha256"
       SKIP_SSH_TUNNEL=1
       if { [ -n "$DISP" ] || [ -n "$WAYL" ]; } && [ -z "$SSH_ENV" ]; then
@@ -384,6 +384,8 @@ else
       interchange) o=ollm-interchange ;;
       openwaldo) o=ollm-waldo ;;
       tok) o=ollm-tok ;;
+      dna) o=ollm-dna ;;
+      dna-gb10) o=ollm-dna-gb10 ;;
       macos) o=ollm-macos ;;
       aarch64) o=ollm ;;
       wtrain) o=ollm-wtrain ;;
@@ -392,6 +394,7 @@ else
     build_one "$t" "$o"
   done
   [ "$GB10" = 1 ] && build_one gb10 ollm-gb10 1
+  [ "$GB10" = 1 ] && build_one dna-gb10 ollm-dna-gb10 1
   rm -f "$LOG"
   [ -z "$FAILED" ] || die "build failed for:$FAILED (nothing was installed)"
 fi
@@ -434,7 +437,7 @@ link() { # target linkname
   ln -sfn "$1" "$PREFIX/bin/$2.tmp.$$" && mv -f "$PREFIX/bin/$2.tmp.$$" "$PREFIX/bin/$2"
 }
 link "$OPT/bin/omega-helix" omega-helix
-for l in ollm-univ ollm-interchange ollm-waldo; do
+for l in ollm-univ ollm-interchange ollm-waldo ollm-dna; do
   if [ -e "$OPT/bin/$l" ]; then link "$OPT/bin/$l" "$l"; fi
 done
 note "linked $PREFIX/bin/omega-helix"

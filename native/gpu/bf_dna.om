@@ -25,7 +25,7 @@ end
 
 fn bf_fail_stop code ulong to void
 c = nvstop
-exit code
+exit int code
 end
 
 fn bf_u32_to_io o ulong v ulong to void
@@ -280,7 +280,7 @@ end
 end
 
 fn bf_rec_rms x_va ulong gw_va ulong y_va ulong to void
-put gkarg 0 uint mul 128 32
+put gkarg 0 mul uint 128 32
 bf_pt 2 x_va
 bf_pt 4 gw_va
 bf_pt 6 y_va
@@ -350,15 +350,15 @@ fn bf_run_trunk_gpu to void
 l = get dn_st 6
 ls = ulong 0
 while lt ls l bound 1024
-  le = add ls 12
-  if gt le l
-    le = l
+  lend = add ls 12
+  if gt lend l
+    lend = l
   end
-  cnt = mul sub le ls 13
+  cnt = mul sub lend ls 13
   if eq ls 0
     cnt = add cnt 1
   end
-  if eq le l
+  if eq lend l
     cnt = add cnt 1
   end
   bf_bat_beg cnt
@@ -371,14 +371,14 @@ while lt ls l bound 1024
     put gkarg 8 uint mul get dn_st 1 2
     bf_launch 94 9 div add dv8 255 256 128
   end
-  for li ulong sub le ls
+  for li ulong sub lend ls
     bf_rec_layer add ls li
   end
-  if eq le l
+  if eq lend l
     bf_rec_rms bf_aptr 0 bf_wptr 2 bf_aptr 8
   end
   bf_bat_end
-  ls = le
+  ls = lend
 end
 end
 
@@ -401,46 +401,58 @@ end
 put gkinv 0 1
 end
 
+fn bf_dl_bf16_chunk src ulong pos ulong cnt ulong dst_id ulong negate bool to void
+nb = mul cnt 2
+r = mapread get gbmem 5 src dn_io 0 nb
+if ne r long nb
+  bf_fail_stop 70
+end
+for i ulong cnt
+  v = ubf16_to_f64 bf_io_u16 mul i 2
+  if negate
+    v = sub 0.0f64 v
+  end
+  if eq dst_id 0
+    put dn_zbuf add pos i v
+  else
+    put dn_rbuf add pos i v
+  end
+end
+end
+
 fn bf_dl_bf16_to_f64 ao_idx ulong n_elem ulong dst_id ulong negate bool to void
+base = get bf_ao ao_idx
 pos = ulong 0
 while lt pos n_elem bound 9223372036854775807
   cnt = sub n_elem pos
   if gt cnt 524288
     cnt = 524288
   end
-  r = mapread get gbmem 5 add get bf_ao ao_idx mul pos 2 dn_io 0 mul cnt 2
-  if ne r long mul cnt 2
-    bf_fail_stop 70
-  end
-  for i ulong cnt
-    v = ubf16_to_f64 bf_io_u16 mul i 2
-    if negate
-      v = sub 0.0f64 v
-    end
-    if eq dst_id 0
-      put dn_zbuf add pos i v
-    else
-      put dn_rbuf add pos i v
-    end
-  end
+  bf_dl_bf16_chunk add base mul pos 2 pos cnt dst_id negate
   pos = add pos cnt
 end
 end
 
+fn bf_ul_f64_chunk dst ulong pos ulong cnt ulong to void
+for i ulong cnt
+  bf_u16_to_io mul i 2 uf64_to_bf16 get dn_zbuf add pos i
+end
+nb = mul cnt 2
+r = mapwrite get gbmem 5 dst dn_io 0 nb
+if ne r long nb
+  bf_fail_stop 70
+end
+end
+
 fn bf_ul_f64_to_bf16 ao_idx ulong n_elem ulong to void
+base = get bf_ao ao_idx
 pos = ulong 0
 while lt pos n_elem bound 9223372036854775807
   cnt = sub n_elem pos
   if gt cnt 524288
     cnt = 524288
   end
-  for i ulong cnt
-    bf_u16_to_io mul i 2 uf64_to_bf16 get dn_zbuf add pos i
-  end
-  r = mapwrite get gbmem 5 add get bf_ao ao_idx mul pos 2 dn_io 0 mul cnt 2
-  if ne r long mul cnt 2
-    bf_fail_stop 70
-  end
+  bf_ul_f64_chunk add base mul pos 2 pos cnt
   pos = add pos cnt
 end
 put gkinv 0 1
@@ -503,7 +515,7 @@ if is_guard
 end
 bf_gemmh_f32 128 v d bf_aptr 8 lmw lg_ao
 if is_guard
-  put gkarg 0 uint mul 128 32
+  put gkarg 0 mul uint 128 32
   bf_pt 2 bf_aptr 19
   bf_pt 4 bf_aptr 18
   bf_pt 6 bf_aptr 13
@@ -512,7 +524,7 @@ if is_guard
   bf_pt 12 bf_aptr 16
   bf_launch 93 14 16 1
 else
-  put gkarg 0 uint mul 128 32
+  put gkarg 0 mul uint 128 32
   bf_pt 2 bf_aptr 18
   bf_pt 4 bf_aptr 13
   bf_pt 6 bf_aptr 14
@@ -761,21 +773,24 @@ row_b = add mul k 2 mul np 4
 ret mul div div rem_b row_b 128 128
 end
 
+fn bf_gemm_run nrp ulong np ulong k ulong a_off ulong b_off ulong c_off ulong to void
+put gkinv 0 1
+bf_bat_beg 1
+bf_gemmh_f32 nrp np k add gkbase a_off add gkbase b_off add gkbase c_off
+bf_bat_end
+end
+
 fn bf_gemm_step r0 ulong mc ulong m ulong n ulong k ulong np ulong to ulong
 nr = sub m r0
 if gt nr mc
   nr = mc
 end
 nrp = mul div add nr 127 128 128
-scr = get bf_ao 20
-b_off = scr
+b_off = get bf_ao 20
 a_off = add b_off mul mul np k 2
 c_off = add a_off mul mul nrp k 2
 bf_ul_mm_chunk r0 nrp m k a_off
-put gkinv 0 1
-bf_bat_beg 1
-bf_gemmh_f32 nrp np k add gkbase a_off add gkbase b_off add gkbase c_off
-bf_bat_end
+bf_gemm_run nrp np k a_off b_off c_off
 bf_dl_mm_chunk r0 nrp m n np c_off
 ret nrp
 end
