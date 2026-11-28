@@ -9,7 +9,7 @@
 # deterministic GitHub Issue #5 receipt (<OUT>/repro-5min-receipt.txt) + Receipt SHA-256.
 #
 # Usage:
-#   sh scripts/repro-5min.sh [--out <dir>] [--cpu-only] [--live-gpu] [--json]
+#   sh scripts/repro-5min.sh [--out <dir>] [--cpu-only] [--live-gpu] [--no-download] [--json]
 set -eu
 
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -18,6 +18,7 @@ caller_pwd=$(pwd)
 OUT_ARG=""
 CPU_ONLY=0
 LIVE_GPU=0
+NO_DOWNLOAD=${REPRO_NO_DOWNLOAD:-0}
 JSON_MODE=0
 PARSE_ERR=""
 
@@ -44,6 +45,9 @@ while [ $# -gt 0 ]; do
     --live-gpu)
       LIVE_GPU=1
       ;;
+    --no-download)
+      NO_DOWNLOAD=1
+      ;;
     --json)
       JSON_MODE=1
       ;;
@@ -52,11 +56,12 @@ while [ $# -gt 0 ]; do
 Usage: sh scripts/repro-5min.sh [OPTIONS]
 
 Options:
-  --out <dir>   Output directory for builds, logs, and receipt (default: ./build/repro-5min)
-  --cpu-only    Skip live Metal / GB10 GPU hardware checks
-  --live-gpu    Require live Metal / GB10 GPU checks (fail closed if unavailable)
-  --json        Emit valid JSON summary to stdout on both success and failure
-  -h, --help    Show this help message
+  --out <dir>    Output directory for builds, logs, and receipt (default: ./build/repro-5min)
+  --cpu-only     Skip live Metal / GB10 GPU hardware checks
+  --live-gpu     Require live Metal / GB10 GPU checks (fail closed if unavailable)
+  --no-download  Do not auto-bootstrap a pinned omc tarball if omc is not installed
+  --json         Emit valid JSON summary to stdout on both success and failure
+  -h, --help     Show this help message
 EOF
       exit 0
       ;;
@@ -432,11 +437,80 @@ find_omc() {
   return 1
 }
 
+bootstrap_omc() {
+  case "$OS/$ARCH" in
+    Darwin/arm64)
+      omc_url="https://interplane.io/omega/downloads/omega-compiler-1ad353af8-macos-arm64.tar.gz"
+      omc_file="omega-compiler-1ad353af8-macos-arm64.tar.gz"
+      omc_want="08735d13ca78c38c97fbbd0298acbcb73c017eb683e2cc6a252e4231203e256b"
+      ;;
+    Linux/aarch64)
+      omc_url="https://interplane.io/omega/downloads/omega-compiler-3086ed3ca106-linux-aarch64.tar.gz"
+      omc_file="omega-compiler-3086ed3ca106-linux-aarch64.tar.gz"
+      omc_want="47990e5333737e157faae09d47f9faf3fc87bed58bef7fe8a8fec729a78f3c0a"
+      ;;
+    Linux/x86_64|Linux/amd64)
+      omc_url="https://interplane.io/omega/downloads/omega-compiler-bb1f6ccb-linux-x86_64.tar.gz"
+      omc_file="omega-compiler-bb1f6ccb-linux-x86_64.tar.gz"
+      omc_want="70e247e107e75f84cb354d7b2d496fab29a47c501340a8509fc9a27024ce9f91"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  omc_dir="$OUT/omc-dist"
+  mkdir -p "$omc_dir"
+  if [ -x "$omc_dir/omc" ] && [ -f "$omc_dir/.tarball.sha256" ] && [ "$(cat "$omc_dir/.tarball.sha256" 2>/dev/null || true)" = "$omc_want" ]; then
+    OMC_PATH="$omc_dir/omc"
+    return 0
+  fi
+
+  log_msg "=== Auto-bootstrapping pinned seeded omc ($omc_file) ==="
+  dl_tmp="$work/$omc_file"
+  if command -v curl >/dev/null 2>&1; then
+    run_logged "omc:download" curl -sSfL "$omc_url" -o "$dl_tmp"
+  else
+    run_logged "omc:download" python3 - "$omc_url" "$dl_tmp" <<'PY'
+import sys, urllib.request
+urllib.request.urlretrieve(sys.argv[1], sys.argv[2])
+PY
+  fi
+  if [ "$LAST_RC" -ne 0 ] || [ ! -s "$dl_tmp" ]; then
+    fail_exit "failed to download pinned omc from $omc_url (rc=$LAST_RC)" 1
+  fi
+
+  got_sha=$(sha256_file "$dl_tmp")
+  if [ "$got_sha" != "$omc_want" ]; then
+    fail_exit "pinned omc SHA-256 mismatch for $omc_file: expected=$omc_want got=$got_sha" 1
+  fi
+
+  rm -rf "$omc_dir/omc" "$omc_dir/.tarball.sha256"
+  run_logged "omc:extract" tar -xzf "$dl_tmp" -C "$omc_dir"
+  if [ "$LAST_RC" -ne 0 ] || [ ! -f "$omc_dir/omc" ]; then
+    fail_exit "failed to extract omc from $omc_file (rc=$LAST_RC)" 1
+  fi
+  chmod +x "$omc_dir/omc"
+  if [ "$OS" = Darwin ] && command -v codesign >/dev/null 2>&1; then
+    xattr -cr "$omc_dir/omc" 2>/dev/null || true
+    run_logged "omc:codesign" codesign -s - -f "$omc_dir/omc"
+    if [ "$LAST_RC" -ne 0 ]; then
+      fail_exit "ad-hoc codesign failed for bootstrapped omc (rc=$LAST_RC)" 1
+    fi
+  fi
+  printf '%s\n' "$omc_want" > "$omc_dir/.tarball.sha256"
+  OMC_PATH="$omc_dir/omc"
+  return 0
+}
+
 if ! OMC_PATH=$(find_omc); then
   if [ -n "${OMC:-}" ]; then
     fail_exit "OMC='$OMC' is not executable" 1
   fi
-  fail_exit "seeded 'omc' compiler not found (checked OMC, PATH, ~/.local/bin/omc, ~/canon/omega-mv/seed/out/omc)" 1
+  if [ "$NO_DOWNLOAD" -eq 1 ]; then
+    fail_exit "seeded 'omc' compiler not found and --no-download is set (checked OMC, PATH, ~/.local/bin/omc, ~/canon/omega-mv/seed/out/omc)" 1
+  fi
+  bootstrap_omc || fail_exit "seeded 'omc' compiler not found and auto-bootstrap failed for $OS/$ARCH" 1
 fi
 export OMC="$OMC_PATH"
 OMC_SHA256=$(sha256_file "$OMC_PATH")
@@ -839,8 +913,8 @@ PY
         fi
         gtrain_mt=$(grep '^MT ' "$LAST_OUT_FILE" | head -n 1 || true)
 
-        ACCEL_STATUS="METAL_STATUS=PASS"
-        ACCEL_DETAILS="$mdev_line | $mgemm_line | $gcmp_line | eval_diff=${loss_diff}u | $gtrain_mt"
+        ACCEL_STATUS="METAL_STATUS=FULL_WORKLOAD_GPU_PASS"
+        ACCEL_DETAILS="workload_kind=metal-gemm-gcmp-gtrain payload_bytes=262144 XID_DELTA=0 | $mdev_line | $mgemm_line | $gcmp_line | eval_diff=${loss_diff}u | $gtrain_mt"
       fi
     else
       if [ "$LIVE_GPU" -eq 1 ]; then
@@ -899,6 +973,12 @@ run_linux_aarch64() {
     ACCEL_DETAILS="GB10 live GPU checks skipped (--cpu-only)"
   elif [ -e /dev/nvidia0 ] || [ -e /dev/aien-gpu ]; then
     log_msg "=== Running live DGX Spark GB10 GPU checks ==="
+    xid_before="-1"
+    if dmesg_out=$(sudo -n dmesg 2>/dev/null || dmesg 2>/dev/null); then
+      if [ -n "$dmesg_out" ]; then
+        xid_before=$(printf '%s\n' "$dmesg_out" | grep -c 'NVRM: Xid' || true)
+      fi
+    fi
     run_logged "gb10:gnv4gemm" "$GB10_BIN" gnv4gemm 256 512 256
     if [ "$LAST_RC" -ne 0 ] || ! grep -q 'PASS' "$LAST_OUT_FILE"; then
       fail_exit "gnv4gemm 256 512 256 failed (rc=$LAST_RC)" 1
@@ -942,8 +1022,20 @@ PY
       ck5_note="OLLMCK05_geval_parity=PASS($e_ck5)"
     fi
 
-    ACCEL_STATUS="GB10_STATUS=PASS"
-    ACCEL_DETAILS="$nv4gemm_line | $nv4cmp_line | $ck5_note"
+    xid_note="XID_DELTA=UNREADABLE"
+    if [ "$xid_before" -ge 0 ]; then
+      if dmesg_after=$(sudo -n dmesg 2>/dev/null || dmesg 2>/dev/null); then
+        xid_after=$(printf '%s\n' "$dmesg_after" | grep -c 'NVRM: Xid' || true)
+        xid_delta=$((xid_after - xid_before))
+        if [ "$xid_delta" -ne 0 ]; then
+          fail_exit "NVRM Xid error occurred during GB10 run (XID_DELTA=$xid_delta)" 1
+        fi
+        xid_note="XID_DELTA=0"
+      fi
+    fi
+
+    ACCEL_STATUS="GB10_STATUS=FULL_WORKLOAD_GPU_PASS"
+    ACCEL_DETAILS="workload_kind=nvfp4-gemm-gnv4cmp-ck05-geval payload_bytes=524288 $xid_note | $nv4gemm_line | $nv4cmp_line | $ck5_note"
   else
     if [ "$LIVE_GPU" -eq 1 ]; then
       fail_exit "--live-gpu requested on Linux/aarch64 but neither /dev/nvidia0 nor /dev/aien-gpu exists" 1
