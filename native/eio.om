@@ -1036,3 +1036,7 @@ end
 fn ocsread off ulong n ulong to bool
 ret false
 end
+
+fn ommap_fnv64 h long off ulong nw ulong init_h ulong to ulong
+ret init_h
+end

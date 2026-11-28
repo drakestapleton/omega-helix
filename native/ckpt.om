@@ -71,13 +71,17 @@ hi = ulong get opw add o 1
 ret uint or lo shl hi 8
 end
 
-fn ocfnvw64 h ulong nw ulong to ulong
+fn ocfnvw64_off h ulong off ulong nw ulong to ulong
 x = h
 for i ulong nw
-w = opw8 mul i 8
+w = opw8 add off mul i 8
 x = mul xor x w 1099511628211
 end
 ret x
+end
+
+fn ocfnvw64 h ulong nw ulong to ulong
+ret ocfnvw64_off h 0 nw
 end
 
 fn ock5_align64 n ulong to ulong
@@ -601,8 +605,12 @@ nb = sub tot pos
 if gt nb OPWCAP
 nb = OPWCAP
 end
+if ge mh 0
+h = ommap_fnv64 mh pos div nb 8 h
+else
 ock5_rd_chunk ai mh pos nb
 h = ocfnvw64 h div nb 8
+end
 pos = add pos nb
 end
 if ne h get ock5_st 11

@@ -3032,5 +3032,28 @@ if not grall
 put nverr 0 neg long 7
 ret false
 end
-ret gkopen asz
+if not gkopen_ex asz false
+ret false
+end
+size = mul div add asz 4095 4096 4096
+base = gkbase
+off = ulong 0
+while lt off size bound 999999
+ch = sub size off
+if gt ch 1073741824
+ch = 1073741824
+end
+n4 = div ch 16
+va = add base off
+put gkarg 0 uint n4
+put gkarg 2 uint and va 4294967295
+put gkarg 3 uint shr va 32
+put gkna 0 4
+gx = div add n4 255 256
+if not gklaunch 20 uint gx 1 1
+ret false
+end
+off = add off ch
+end
+ret true
 end

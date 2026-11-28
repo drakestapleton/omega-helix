@@ -604,3 +604,12 @@ exit 70
 end
 ret true
 end
+
+fn ommap_fnv64 h long off ulong nw ulong init_h ulong to ulong
+x = init_h
+for i ulong nw
+w = mapget h add off mul i 8 8
+x = mul xor x w 1099511628211
+end
+ret x
+end
