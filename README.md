@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="assets/twitter-card.jpg" alt="Omega Helix — Pure-Omega Zero-CUDA DNA LLM Training Engine" width="100%">
+  <img src="assets/twitter-v021.jpg" alt="Omega Helix v0.2.1 — Pure-Omega Zero-CUDA 1.31s Cold-Start, 289k tok/s GB10, 4B–8B HF Import" width="100%">
 </p>
 
 <p align="center">
   <a href="https://github.com/drakestapleton/omega-helix/actions/workflows/verify.yml"><img src="https://github.com/drakestapleton/omega-helix/actions/workflows/verify.yml/badge.svg?branch=main" alt="Verify Omega Helix CI"></a>
-  <a href="https://github.com/drakestapleton/omega-helix/releases/tag/v0.1.0"><img src="https://img.shields.io/badge/release-v0.1.0-0ea5e9?style=flat-square" alt="Release v0.1.0"></a>
+  <a href="https://github.com/drakestapleton/omega-helix/releases/tag/v0.2.1"><img src="https://img.shields.io/badge/release-v0.2.1-0ea5e9?style=flat-square" alt="Release v0.2.1"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-10b981?style=flat-square" alt="License Apache-2.0"></a>
   <a href="https://github.com/drakestapleton/omega-helix/issues/5"><img src="https://img.shields.io/badge/reproducers-post%20receipt-8b5cf6?style=flat-square" alt="Independent Reproducers Issue #5"></a>
 </p>
